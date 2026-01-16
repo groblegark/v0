@@ -1,0 +1,9 @@
+{
+  "version": 1,
+  "entries": [
+    {"operation": "feat-completed", "priority": 0, "status": "completed", "enqueued_at": "2026-01-15T10:00:00Z"},
+    {"operation": "feat-pending", "priority": 0, "status": "pending", "enqueued_at": "2026-01-15T10:01:00Z"},
+    {"operation": "feat-processing", "priority": 0, "status": "processing", "enqueued_at": "2026-01-15T10:02:00Z"},
+    {"operation": "feat-failed", "priority": 0, "status": "failed", "enqueued_at": "2026-01-15T10:03:00Z"}
+  ]
+}

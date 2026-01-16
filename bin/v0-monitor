@@ -1,0 +1,225 @@
+#!/bin/bash
+# SPDX-License-Identifier: MIT
+# Copyright (c) 2026 Alfred Jean LLC
+# v0-monitor - Monitor worker queues and auto-shutdown when idle
+set -e
+
+V0_DIR="$(cd "$(dirname "$0")/.." && pwd)"
+source "${V0_DIR}/lib/v0-common.sh"
+v0_load_config
+
+# Source coffee functions
+source "${V0_DIR}/lib/coffee-common.sh"
+
+usage() {
+  cat <<'EOF'
+Usage: v0 monitor [options]
+
+Monitor worker queues and auto-shutdown when all queues are empty.
+
+Options:
+  --start        Start the monitor daemon in background
+  --stop         Stop the monitor daemon
+  --status       Check if monitor is running
+  --foreground   Run in foreground (for debugging)
+  -h, --help     Show this help
+
+Environment:
+  V0_IDLE_THRESHOLD   Seconds to wait with empty queues before shutdown (default: 300)
+  V0_AUTO_SHUTDOWN    Set to "1" to enable auto-shutdown (default: disabled)
+
+Examples:
+  v0 monitor --start           # Start monitor daemon
+  v0 monitor --stop            # Stop monitor daemon
+  v0 monitor --status          # Check if running
+  v0 monitor --foreground      # Run in foreground (Ctrl+C to stop)
+EOF
+  exit 0
+}
+
+MONITOR_PID_FILE="${V0_STATE_DIR}/.monitor.pid"
+MONITOR_LOG_FILE="${V0_STATE_DIR}/monitor.log"
+
+# Check if any workers are running
+any_workers_running() {
+  local fix_session="v0-${PROJECT}-worker-fix"
+  local chore_session="v0-${PROJECT}-worker-chore"
+  local mergeq_pid_file="${BUILD_DIR}/mergeq/.daemon.pid"
+
+  # Check tmux sessions
+  if tmux has-session -t "${fix_session}" 2>/dev/null; then
+    return 0
+  fi
+  if tmux has-session -t "${chore_session}" 2>/dev/null; then
+    return 0
+  fi
+
+  # Check polling daemons
+  if pgrep -f "while true.*v0-${PROJECT}" >/dev/null 2>&1; then
+    return 0
+  fi
+
+  # Check mergeq daemon
+  if [[ -f "${mergeq_pid_file}" ]] && kill -0 "$(cat "${mergeq_pid_file}" 2>/dev/null)" 2>/dev/null; then
+    return 0
+  fi
+
+  return 1
+}
+
+# Check if all work queues are empty
+all_queues_empty() {
+  local fix_queue chore_queue mergeq_queue
+
+  # Count bugs (in_progress or todo)
+  fix_queue=$(wk list --type bug --status in_progress,todo 2>/dev/null | wc -l | tr -d ' ')
+
+  # Count chores (in_progress or todo)
+  chore_queue=$(wk list --type chore --status in_progress,todo 2>/dev/null | wc -l | tr -d ' ')
+
+  # Count merge queue entries (pending or processing)
+  local queue_file="${BUILD_DIR}/mergeq/queue.json"
+  if [[ -f "${queue_file}" ]]; then
+    mergeq_queue=$(jq '[.entries[] | select(.status == "pending" or .status == "processing")] | length' "${queue_file}" 2>/dev/null || echo 0)
+  else
+    mergeq_queue=0
+  fi
+
+  if [[ "${fix_queue}" -eq 0 ]] && [[ "${chore_queue}" -eq 0 ]] && [[ "${mergeq_queue}" -eq 0 ]]; then
+    return 0  # All empty
+  fi
+  return 1
+}
+
+# Monitor daemon main loop
+monitor_loop() {
+  local idle_threshold="${V0_IDLE_THRESHOLD:-300}"  # 5 minutes default
+  local check_interval=30  # Check every 30 seconds
+  local idle_since=0
+
+  echo "[$(date -Iseconds)] Monitor started (idle threshold: ${idle_threshold}s)"
+
+  while true; do
+    # Exit if workers have stopped externally
+    if ! any_workers_running; then
+      echo "[$(date -Iseconds)] No workers running, exiting monitor"
+      break
+    fi
+
+    # Check queue status
+    if all_queues_empty; then
+      if [[ "${idle_since}" -eq 0 ]]; then
+        idle_since=$(date +%s)
+        echo "[$(date -Iseconds)] All queues empty, starting idle timer"
+      else
+        local now elapsed
+        now=$(date +%s)
+        elapsed=$((now - idle_since))
+        if [[ "${elapsed}" -ge "${idle_threshold}" ]]; then
+          echo "[$(date -Iseconds)] Idle for ${elapsed}s (threshold: ${idle_threshold}s)"
+
+          # Only auto-shutdown if explicitly enabled
+          if [[ "${V0_AUTO_SHUTDOWN:-}" = "1" ]]; then
+            echo "[$(date -Iseconds)] Auto-shutdown triggered"
+            "${V0_DIR}/bin/v0-shutdown"
+            break
+          else
+            echo "[$(date -Iseconds)] Auto-shutdown disabled (set V0_AUTO_SHUTDOWN=1 to enable)"
+            # Reset timer and continue monitoring
+            idle_since=0
+          fi
+        fi
+      fi
+    else
+      # Work available, reset idle timer
+      if [[ "${idle_since}" -ne 0 ]]; then
+        echo "[$(date -Iseconds)] Work detected, resetting idle timer"
+        idle_since=0
+      fi
+    fi
+
+    sleep "${check_interval}"
+  done
+}
+
+# Check if monitor is running
+monitor_is_running() {
+  [[ -f "${MONITOR_PID_FILE}" ]] && kill -0 "$(cat "${MONITOR_PID_FILE}")" 2>/dev/null
+}
+
+# Start monitor daemon
+monitor_start() {
+  if monitor_is_running; then
+    local pid
+    pid=$(cat "${MONITOR_PID_FILE}")
+    echo "Monitor already running (PID: ${pid})"
+    return 0
+  fi
+
+  mkdir -p "$(dirname "${MONITOR_PID_FILE}")"
+  mkdir -p "$(dirname "${MONITOR_LOG_FILE}")"
+
+  # Start in background
+  nohup "$0" --foreground >> "${MONITOR_LOG_FILE}" 2>&1 &
+  local pid=$!
+  echo "${pid}" > "${MONITOR_PID_FILE}"
+  echo "Monitor started (PID: ${pid})"
+  echo "Log: ${MONITOR_LOG_FILE}"
+}
+
+# Stop monitor daemon
+monitor_stop() {
+  if [[ -f "${MONITOR_PID_FILE}" ]]; then
+    local pid
+    pid=$(cat "${MONITOR_PID_FILE}")
+    if kill -0 "${pid}" 2>/dev/null; then
+      kill "${pid}"
+      echo "Monitor stopped (PID: ${pid})"
+    else
+      echo "Monitor not running (stale PID file)"
+    fi
+    rm -f "${MONITOR_PID_FILE}"
+  else
+    echo "Monitor is not running"
+  fi
+}
+
+# Show monitor status
+monitor_status() {
+  if monitor_is_running; then
+    local pid
+    pid=$(cat "${MONITOR_PID_FILE}")
+    echo "Monitor is running (PID: ${pid})"
+    echo "Log: ${MONITOR_LOG_FILE}"
+    return 0
+  else
+    echo "Monitor is not running"
+    return 1
+  fi
+}
+
+# Parse arguments
+case "${1:-}" in
+  --start)
+    monitor_start
+    ;;
+  --stop)
+    monitor_stop
+    ;;
+  --status)
+    monitor_status
+    ;;
+  --foreground)
+    monitor_loop
+    ;;
+  -h|--help)
+    usage
+    ;;
+  "")
+    usage
+    ;;
+  *)
+    echo "Unknown option: $1"
+    usage
+    ;;
+esac

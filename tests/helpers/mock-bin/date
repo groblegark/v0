@@ -1,0 +1,26 @@
+#!/usr/bin/env bash
+# Mock date command for testing
+# Behavior controlled by environment variables:
+#   MOCK_DATE=timestamp - frozen timestamp to return
+
+if [ -n "$MOCK_DATE" ]; then
+    case "$*" in
+        *"+%Y-%m-%dT%H:%M:%SZ"*)
+            echo "$MOCK_DATE"
+            ;;
+        *"+%s"*)
+            # Return a fixed epoch
+            echo "1736935200"
+            ;;
+        *"-j -f"*)
+            # macOS date conversion - return fixed epoch
+            echo "1736935200"
+            ;;
+        *)
+            echo "$MOCK_DATE"
+            ;;
+    esac
+else
+    # Fall back to real date
+    exec /bin/date "$@"
+fi

@@ -1,0 +1,131 @@
+#!/bin/bash
+# SPDX-License-Identifier: MIT
+# Copyright (c) 2026 Alfred Jean LLC
+set -e
+
+V0_DIR="$(cd "$(dirname "$0")/.." && pwd)"
+source "${V0_DIR}/lib/v0-common.sh"
+v0_load_config
+
+# Storage locations (in order of preference):
+# 1. XDG state directory: ~/.local/state/v0/{project}/tree/<name>/{repo}/
+# 2. Git directory fallback: .git/v0-worktrees/<name>/{repo}/
+XDG_ROOT="${V0_STATE_DIR}/tree"
+GIT_ROOT="$(git -C "${V0_ROOT}" rev-parse --git-common-dir 2>/dev/null || echo "${V0_ROOT}/.git")/v0-worktrees"
+
+# Normalize git root path (may be relative)
+if [[ "${GIT_ROOT}" != /* ]]; then
+  GIT_ROOT="${V0_ROOT}/${GIT_ROOT}"
+fi
+
+usage() {
+  cat <<EOF
+Usage: v0 tree <name>
+
+Create a worktree and sync settings. Skips creation if worktree already exists.
+Outputs two lines: TREE_DIR path, then WORKTREE path.
+
+Storage locations (in order of preference):
+  1. XDG state directory: ~/.local/state/v0/${PROJECT}/tree/<name>/${REPO_NAME}/
+  2. Git directory fallback: .git/v0-worktrees/<name>/${REPO_NAME}/
+
+The XDG location is preferred because it keeps .git/ clean and survives
+git clean operations. Falls back to .git/ when XDG directory cannot be
+created (permissions, disk space, restricted environment).
+
+Example:
+  read -r TREE_DIR; read -r WORKTREE < <(v0 tree my-feature)
+EOF
+  exit 1
+}
+
+[[ -z "$1" ]] && usage
+[[ "$1" = "-h" ]] || [[ "$1" = "--help" ]] && usage
+
+name="$1"
+
+# Check for old-style worktree and warn
+OLD_TREE="${V0_ROOT}/.tree/${name}"
+if [[ -d "${OLD_TREE}" ]]; then
+  echo "Warning: Old worktree exists at ${OLD_TREE}" >&2
+  echo "Remove with: git worktree remove ${OLD_TREE}/${REPO_NAME}" >&2
+fi
+
+# Find existing worktree in either location
+# This prevents creating duplicates during migration
+find_existing_worktree() {
+  local xdg_worktree="${XDG_ROOT}/${name}/${REPO_NAME}"
+  local git_worktree="${GIT_ROOT}/${name}/${REPO_NAME}"
+
+  # Check XDG location first
+  if [[ -d "${xdg_worktree}" ]] && { [[ -d "${xdg_worktree}/.git" ]] || [[ -f "${xdg_worktree}/.git" ]]; }; then
+    echo "${XDG_ROOT}/${name}"
+    return 0
+  fi
+
+  # Check git fallback location
+  if [[ -d "${git_worktree}" ]] && { [[ -d "${git_worktree}/.git" ]] || [[ -f "${git_worktree}/.git" ]]; }; then
+    echo "${GIT_ROOT}/${name}"
+    return 0
+  fi
+
+  return 1
+}
+
+# Try to create directory, return success if created or already exists
+try_create_tree_dir() {
+  local base="$1"
+  local tree="${base}/${name}"
+
+  if mkdir -p "${base}" 2>/dev/null && mkdir -p "${tree}" 2>/dev/null; then
+    echo "${tree}"
+    return 0
+  fi
+  return 1
+}
+
+# Check for existing worktree first
+if existing=$(find_existing_worktree); then
+  tree_dir="${existing}"
+  worktree="${tree_dir}/${REPO_NAME}"
+else
+  # Try XDG location first, fall back to .git/ if it fails
+  if tree_dir=$(try_create_tree_dir "${XDG_ROOT}"); then
+    : # Success
+  elif tree_dir=$(try_create_tree_dir "${GIT_ROOT}"); then
+    echo "Note: Using .git/v0-worktrees/ (XDG location unavailable)" >&2
+  else
+    echo "Error: Failed to create tree directory in both locations" >&2
+    echo "  Tried: ${XDG_ROOT}/${name}" >&2
+    echo "  Tried: ${GIT_ROOT}/${name}" >&2
+    exit 1
+  fi
+  worktree="${tree_dir}/${REPO_NAME}"
+fi
+
+# If directory exists but is not a valid worktree, remove and recreate
+if [[ -d "${worktree}" ]] && [[ ! -d "${worktree}/.git" ]] && [[ ! -f "${worktree}/.git" ]]; then
+  echo "Note: Removing invalid worktree directory: ${worktree}" >&2
+  rm -rf "${worktree}"
+fi
+
+if [[ ! -d "${worktree}" ]]; then
+  # Try creating with new branch first, fall back to existing branch
+  # Redirect stdout to stderr so git messages don't pollute our output
+  if ! git worktree add "${worktree}" -b "${name}" main >&2 2>&1; then
+    if ! git worktree add "${worktree}" "${name}" >&2 2>&1; then
+      echo "Error: Failed to create worktree at ${worktree}" >&2
+      exit 1
+    fi
+  fi
+fi
+
+# Sync settings to tree_dir (Claude looks up the directory tree)
+if [[ -f "${V0_ROOT}/.claude/settings.json" ]]; then
+  mkdir -p "${tree_dir}/.claude"
+  cp -f "${V0_ROOT}/.claude/settings.json" "${tree_dir}/.claude/settings.local.json"
+fi
+
+# Output paths (one per line: TREE_DIR, WORKTREE)
+echo "${tree_dir}"
+echo "${worktree}"

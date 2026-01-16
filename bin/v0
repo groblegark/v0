@@ -1,0 +1,137 @@
+#!/bin/bash
+# SPDX-License-Identifier: MIT
+# Copyright (c) 2026 Alfred Jean LLC
+# v0 - Autonomous build orchestration toolkit
+# Usage: v0 <command> [args]
+
+set -e
+
+# Resolve symlinks to find real install location
+SOURCE="${0}"
+while [[ -L "${SOURCE}" ]]; do
+  DIR="$(cd -P "$(dirname "${SOURCE}")" && pwd)"
+  SOURCE="$(readlink "${SOURCE}")"
+  [[ ${SOURCE} != /* ]] && SOURCE="${DIR}/${SOURCE}"
+done
+V0_DIR="$(cd -P "$(dirname "${SOURCE}")/.." && pwd)"
+
+# Commands that need config
+CONFIG_COMMANDS="plan tree decompose merge mergeq status feature fix chore attach cancel shutdown startup"
+
+# Commands that work without config
+NO_CONFIG_COMMANDS="init help version coffee"
+
+show_help() {
+  cat <<'EOF'
+v0 - Autonomous build orchestration toolkit
+
+Usage: v0 <command> [args]
+
+Commands:
+  init          Initialize .v0.rc in current directory
+  plan          Create implementation plan from prompt
+  tree          Create worktree for isolated development
+  decomp[ose]   Convert plan to issues
+  merge         Merge worktree branch to main
+  mergeq        Merge queue daemon
+  status        Show operation status
+  watch         Continuously watch status (like 'status --watch')
+  feat[ure]     Full pipeline: plan -> decompose -> execute -> merge
+  fix           Sequential bug fixing worker
+  chore         Sequential chore processing worker
+  attach        Attach to a running tmux session (fix, chore, mergeq, feature)
+  cancel        Cancel a running operation
+  shutdown      Stop all v0 processes for this project
+  startup       Start workers (fix, chore, mergeq)
+  prune         Remove completed/cancelled operation state
+  talk          Open claude with haiku model for quick conversations
+  coffee        Keep computer awake
+  monitor       Monitor worker queues for auto-shutdown
+  issue         Alias for 'wk' issue tracker (see 'wk --help')
+
+Options:
+  --help, -h    Show this help
+  --version     Show version
+
+Examples:
+  v0 init                              # Create .v0.rc in current project
+  v0 feature auth "Add JWT auth"       # Full autonomous pipeline
+  v0 fix "Button not working"          # Report a bug to the fix worker
+  v0 status                            # List all operations
+  v0 plan api "Build REST API"         # Just create a plan
+
+Tmux sessions:
+  Workers run in tmux sessions. Use 'v0 attach <type>' to connect.
+  Ctrl-B D to detach, Ctrl-B [ to scroll (q to exit scroll mode).
+
+Configuration:
+  Each project needs a .v0.rc file at its root. Run 'v0 init' to create one.
+
+For more information, see: https://github.com/alfredjeanlab/v0
+EOF
+}
+
+show_version() {
+  echo "v0 0.1.0"
+}
+
+# Handle special commands first
+case "${1:-}" in
+  init)
+    source "${V0_DIR}/lib/v0-common.sh"
+
+    # Check dependencies first
+    if ! v0_precheck; then
+      echo "" >&2
+      echo "Please install missing dependencies and try again." >&2
+      exit 1
+    fi
+
+    shift
+    v0_init_config "${1:-.}"
+    exit 0
+    ;;
+  help|--help|-h)
+    show_help
+    exit 0
+    ;;
+  version|--version)
+    show_version
+    exit 0
+    ;;
+  "")
+    show_help
+    exit 0
+    ;;
+esac
+
+# Dispatch to subcommand
+CMD="${1}"
+shift
+
+case "${CMD}" in
+  plan|tree|decompose|merge|mergeq|status|watch|feature|fix|chore|attach|cancel|shutdown|startup|talk|coffee|prune|monitor)
+    exec "${V0_DIR}/bin/v0-${CMD}" "$@"
+    ;;
+  # Aliases
+  feat)
+    exec "${V0_DIR}/bin/v0-feature" "$@"
+    ;;
+  decomp)
+    exec "${V0_DIR}/bin/v0-decompose" "$@"
+    ;;
+  bug|bugfix)
+    exec "${V0_DIR}/bin/v0-fix" "$@"
+    ;;
+  chat)
+    exec "${V0_DIR}/bin/v0-talk" "$@"
+    ;;
+  issue)
+    exec wk "$@"
+    ;;
+  *)
+    echo "Unknown command: ${CMD}" >&2
+    echo "Run 'v0 --help' for usage" >&2
+    exit 1
+    ;;
+esac

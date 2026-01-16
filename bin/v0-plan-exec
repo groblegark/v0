@@ -1,0 +1,65 @@
+#!/bin/bash
+# SPDX-License-Identifier: MIT
+# Copyright (c) 2026 Alfred Jean LLC
+# v0-plan-exec - Direct Claude execution for planning
+# This is the internal implementation. Use v0-plan for the tmux-wrapped version.
+set -e
+
+V0_DIR="$(cd "$(dirname "$0")/.." && pwd)"
+source "${V0_DIR}/lib/v0-common.sh"
+v0_load_config
+
+if [[ -z "$1" ]] || [[ -z "$2" ]]; then
+  cat <<EOF
+Usage: v0-plan-exec <name> <instructions>
+
+Internal command for direct plan execution.
+For normal use, run: v0 plan <name> <instructions>
+EOF
+  exit 1
+fi
+
+NAME="$1"
+INSTRUCTIONS="$2"
+
+# Ensure plans directory exists
+mkdir -p "${PLANS_DIR}"
+
+# Build full prompt with context
+TEMPLATE="$(cat "${V0_DIR}/lib/prompts/plan.md")"
+TEMPLATE="${TEMPLATE//\{name\}/${NAME}}"
+
+PROMPT="${TEMPLATE}
+
+Instructions:
+${INSTRUCTIONS}
+
+---
+
+Plan name: ${NAME}. Write to ${V0_PLANS_DIR}/${NAME}.md"
+
+# Default: skip permissions; V0_SAFE=1: require permission prompts
+# (respects .claude/settings.json allow list when in safe mode)
+if [[ "${V0_SAFE:-}" = "1" ]]; then
+  claude --model opus "${PROMPT}"
+else
+  claude --model opus --dangerously-skip-permissions "${PROMPT}"
+fi
+
+# Auto-commit the plan unless --draft or worktree is dirty
+plan_file="${PLANS_DIR}/${NAME}.md"
+if [[ -f "${plan_file}" ]]; then
+  if [[ "${V0_DRAFT:-}" = "1" ]]; then
+    v0_log "plan:commit" "Skipped (draft mode)"
+  elif ! v0_git_worktree_clean "${V0_ROOT}"; then
+    v0_log "plan:commit" "Skipped (worktree has uncommitted changes)"
+  else
+    # Commit the plan file
+    if git -C "${V0_ROOT}" add "${V0_PLANS_DIR}/${NAME}.md" && \
+       git -C "${V0_ROOT}" commit -m "Add plan: ${NAME}" -m "Auto-committed by v0 plan"; then
+      v0_log "plan:commit" "Committed ${V0_PLANS_DIR}/${NAME}.md"
+    else
+      v0_log "plan:commit" "Failed to commit"
+    fi
+  fi
+fi

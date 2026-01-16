@@ -1,0 +1,7 @@
+.v0/
+
+# Downloaded BATS testing libraries (run make test-init to install)
+tests/bats/bats-core/
+tests/bats/bats-support/
+tests/bats/bats-assert/
+.wok/

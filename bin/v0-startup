@@ -1,0 +1,110 @@
+#!/bin/bash
+# SPDX-License-Identifier: MIT
+# Copyright (c) 2026 Alfred Jean LLC
+# v0-startup - Start all v0 workers for the current project
+set -e
+
+V0_DIR="$(cd "$(dirname "$0")/.." && pwd)"
+source "${V0_DIR}/lib/v0-common.sh"
+v0_load_config
+
+# Source coffee functions for automatic wake lock management
+source "${V0_DIR}/lib/coffee-common.sh"
+
+usage() {
+  cat <<'EOF'
+Usage: v0 startup [workers...]
+
+Start v0 workers for the current project.
+
+If no workers are specified, starts all workers: fix, chore, mergeq.
+
+Workers:
+  fix       Start the bug fix worker
+  chore     Start the chore worker
+  mergeq    Start the merge queue daemon
+
+Options:
+  --dry-run      Show what would be started without starting
+  -h, --help     Show this help
+
+Examples:
+  v0 startup              # Start all workers
+  v0 startup fix          # Start only the fix worker
+  v0 startup fix chore    # Start fix and chore workers
+  v0 startup --dry-run    # Preview what would be started
+EOF
+  exit 0
+}
+
+DRY_RUN=""
+WORKERS=()
+
+# Parse args
+while [[ $# -gt 0 ]]; do
+  case "$1" in
+    --dry-run)
+      DRY_RUN=1
+      shift
+      ;;
+    -h|--help)
+      usage
+      ;;
+    fix|chore|mergeq)
+      WORKERS+=("$1")
+      shift
+      ;;
+    *)
+      echo "Unknown option or worker: $1" >&2
+      echo "Run 'v0 startup --help' for usage" >&2
+      exit 1
+      ;;
+  esac
+done
+
+# Default to all workers if none specified
+if [[ ${#WORKERS[@]} -eq 0 ]]; then
+  WORKERS=(fix chore mergeq)
+fi
+
+# Track what we started
+started=0
+already_running=0
+
+for worker in "${WORKERS[@]}"; do
+  if [[ -n "${DRY_RUN}" ]]; then
+    echo "Would start: v0 ${worker} --start"
+  else
+    echo -e "${C_BOLD}Starting ${worker} worker...${C_RESET}"
+    # Capture output to check if already running
+    output=$("${V0_DIR}/bin/v0-${worker}" --start 2>&1) || true
+    echo "${output}"
+    if [[ "${output}" == *"already running"* ]]; then
+      ((already_running++)) || true
+    else
+      ((started++)) || true
+    fi
+    echo ""
+  fi
+done
+
+if [[ -z "${DRY_RUN}" ]]; then
+  # Start coffee to keep system awake
+  coffee_hours="${V0_COFFEE_HOURS:-8}"
+  coffee_opts="${V0_COFFEE_OPTS:-}"
+  if coffee_is_running; then
+    echo -e "Coffee: ${C_DIM}already running${C_RESET}"
+  else
+    coffee_start "${coffee_hours}" "${coffee_opts}"
+    echo -e "Coffee: ${C_GREEN}started${C_RESET} (${coffee_hours}h)"
+  fi
+
+  echo ""
+  echo -e "${C_GREEN}Startup complete${C_RESET}"
+  if [[ ${started} -gt 0 ]]; then
+    echo "  Started: ${started} worker(s)"
+  fi
+  if [[ ${already_running} -gt 0 ]]; then
+    echo "  Already running: ${already_running} worker(s)"
+  fi
+fi

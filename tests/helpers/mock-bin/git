@@ -1,0 +1,87 @@
+#!/usr/bin/env bash
+# Mock git command for testing
+# Behavior controlled by environment variables:
+#   MOCK_GIT_CONFLICT=true - simulate merge conflicts
+#   MOCK_GIT_BRANCH=name - current branch name
+#   MOCK_GIT_WORKTREE_LIST=output - worktree list output
+
+case "$1" in
+    "worktree")
+        case "$2" in
+            "list")
+                if [ -n "$MOCK_GIT_WORKTREE_LIST" ]; then
+                    echo "$MOCK_GIT_WORKTREE_LIST"
+                else
+                    echo "/path/to/worktree  abc1234 [branch-name]"
+                fi
+                ;;
+            "remove")
+                exit 0
+                ;;
+            "add")
+                exit 0
+                ;;
+        esac
+        ;;
+    "merge-tree")
+        if [ "$MOCK_GIT_CONFLICT" = "true" ]; then
+            echo "CONFLICT (content): Merge conflict in file.txt" >&2
+            exit 1
+        fi
+        exit 0
+        ;;
+    "merge")
+        if [ "$MOCK_GIT_CONFLICT" = "true" ]; then
+            echo "CONFLICT (content): Merge conflict in file.txt"
+            echo "Automatic merge failed; fix conflicts and then commit the result."
+            exit 1
+        fi
+        exit 0
+        ;;
+    "status")
+        if [ "$2" = "--porcelain" ]; then
+            echo ""
+        else
+            echo "On branch ${MOCK_GIT_BRANCH:-main}"
+        fi
+        ;;
+    "branch")
+        case "$2" in
+            "-D"|"-d")
+                exit 0
+                ;;
+            *)
+                echo "${MOCK_GIT_BRANCH:-main}"
+                ;;
+        esac
+        ;;
+    "checkout"|"fetch"|"push"|"init"|"add"|"commit")
+        exit 0
+        ;;
+    "rev-parse")
+        case "$2" in
+            "--git-dir")
+                echo ".git"
+                ;;
+            *)
+                echo "abc1234567890"
+                ;;
+        esac
+        ;;
+    "ls-remote")
+        # Check if testing branch doesn't exist
+        if [ "$MOCK_GIT_BRANCH_MISSING" = "true" ]; then
+            exit 0
+        fi
+        echo "abc1234567890	refs/heads/$4"
+        ;;
+    "-C")
+        # Handle git -C <path> <command>
+        shift 2
+        exec "$0" "$@"
+        ;;
+    *)
+        # Passthrough to real git for unhandled cases
+        exec /usr/bin/git "$@"
+        ;;
+esac

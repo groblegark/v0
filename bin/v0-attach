@@ -1,0 +1,150 @@
+#!/bin/bash
+# SPDX-License-Identifier: MIT
+# Copyright (c) 2026 Alfred Jean LLC
+# v0-attach - Attach to running v0 tmux sessions
+set -e
+
+V0_DIR="$(cd "$(dirname "$0")/.." && pwd)"
+source "${V0_DIR}/lib/v0-common.sh"
+v0_load_config
+
+usage() {
+  cat <<EOF
+Usage: v0 attach <type> [name]
+       v0 attach --list
+
+Attach to a running v0 tmux session.
+
+Types:
+  fix              Attach to fix worker session
+  chore            Attach to chore worker session
+  mergeq           Attach to active merge resolution session
+  feature <name>   Attach to feature session (auto-detects phase)
+
+Options:
+  --list, -l       List all running v0 sessions
+
+Examples:
+  v0 attach fix              # Attach to fix worker
+  v0 attach mergeq           # Attach to merge resolution (if active)
+  v0 attach feature auth     # Attach to auth feature session
+  v0 attach --list           # List all v0 sessions
+EOF
+  exit 1
+}
+
+# List all v0 sessions for this project
+list_sessions() {
+  local prefix="v0-${PROJECT}"
+  local sessions
+  sessions=$(tmux list-sessions -F '#{session_name}' 2>/dev/null | grep "^${prefix}" || true)
+
+  if [[ -z "${sessions}" ]]; then
+    echo "No active v0 sessions for project: ${PROJECT}"
+    exit 0
+  fi
+
+  echo "Active v0 sessions for ${PROJECT}:"
+  echo "${sessions}" | while read -r session; do
+    if tmux has-session -t "${session}" 2>/dev/null; then
+      echo "  ${session}"
+    fi
+  done
+}
+
+# Attach to a session, error if not running
+attach_to_session() {
+  local session="$1"
+  local type="$2"
+
+  if ! tmux has-session -t "${session}" 2>/dev/null; then
+    echo "Error: No active ${type} session found"
+    echo "Session name: ${session}"
+    echo ""
+    echo "Start the worker first with: v0 ${type} --start"
+    exit 1
+  fi
+
+  exec tmux attach -t "${session}"
+}
+
+case "${1:-}" in
+  --list|-l)
+    list_sessions
+    ;;
+  fix|bug|bugfix)
+    SESSION=$(v0_session_name "worker" "fix")
+    attach_to_session "${SESSION}" "fix"
+    ;;
+  chore)
+    SESSION=$(v0_session_name "worker" "chore")
+    attach_to_session "${SESSION}" "chore"
+    ;;
+  merge|mergeq)
+    # Look for active merge-resolve sessions (created by v0 merge --resolve)
+    RESOLVE_PREFIX="v0-${PROJECT}"
+    RESOLVE_SESSIONS=$(tmux list-sessions -F '#{session_name}' 2>/dev/null | grep "^${RESOLVE_PREFIX}.*-merge-resolve\|^${RESOLVE_PREFIX}.*-mergeq-resolve" || true)
+
+    if [[ -z "${RESOLVE_SESSIONS}" ]]; then
+      echo "Error: No active merge resolution session found"
+      echo ""
+      echo "Merge resolution sessions are only created when"
+      echo "v0 merge --resolve is running to handle conflicts."
+      echo ""
+      echo "To check merge queue status: v0 mergeq --status"
+      exit 1
+    fi
+
+    # If multiple sessions, list them and attach to the first
+    RESOLVE_COUNT=$(echo "${RESOLVE_SESSIONS}" | wc -l | tr -d ' ')
+    if [[ "${RESOLVE_COUNT}" -gt 1 ]]; then
+      echo "Multiple merge resolution sessions found:"
+      echo "${RESOLVE_SESSIONS}" | while read -r sess; do
+        echo "  ${sess}"
+      done
+      echo ""
+      echo "Attaching to first session..."
+    fi
+
+    SESSION=$(echo "${RESOLVE_SESSIONS}" | head -1)
+    exec tmux attach -t "${SESSION}"
+    ;;
+  feature)
+    NAME="${2:-}"
+    [[ -z "${NAME}" ]] && { echo "Error: feature name required"; usage; }
+
+    STATE_FILE="${BUILD_DIR}/operations/${NAME}/state.json"
+
+    if [[ ! -f "${STATE_FILE}" ]]; then
+      echo "Error: No state found for feature '${NAME}'"
+      echo "Check available features with: v0 status"
+      exit 1
+    fi
+
+    # Get stored session name or derive from phase
+    SESSION=$(jq -r '.tmux_session // empty' "${STATE_FILE}")
+
+    if [[ -z "${SESSION}" ]] || [[ "${SESSION}" = "null" ]]; then
+      # Derive from phase
+      PHASE=$(jq -r '.phase // "init"' "${STATE_FILE}")
+      case "${PHASE}" in
+        init|planned) SESSION=$(v0_session_name "${NAME}" "plan") ;;
+        queued) SESSION=$(v0_session_name "${NAME}" "decompose") ;;
+        executing) SESSION=$(v0_session_name "${NAME}" "feature") ;;
+        *)
+          echo "Feature '${NAME}' is in phase: ${PHASE} (no active session)"
+          exit 0
+          ;;
+      esac
+    fi
+
+    attach_to_session "${SESSION}" "feature ${NAME}"
+    ;;
+  ""|--help|-h)
+    usage
+    ;;
+  *)
+    echo "Unknown type: $1"
+    usage
+    ;;
+esac

@@ -1,0 +1,180 @@
+#!/bin/bash
+# SPDX-License-Identifier: MIT
+# Copyright (c) 2026 Alfred Jean LLC
+set -e
+
+V0_DIR="$(cd "$(dirname "$0")/.." && pwd)"
+source "${V0_DIR}/lib/v0-common.sh"
+
+usage() {
+  cat <<EOF
+v0 prune - Remove operation state
+
+Usage: v0 prune [options] [name...]
+
+Options:
+  -a, --all      Remove ALL operation state (requires confirmation)
+  -f, --force    Skip confirmation prompts
+  -n, --dry-run  Show what would be pruned without removing
+  -h, --help     Show this help message
+
+Without arguments:
+  Prunes completed and cancelled operations (merged, cancelled phases)
+
+With name(s):
+  Prunes the specific named operation(s) (prompts if session is running)
+
+Examples:
+  v0 prune                  # Remove completed/cancelled operations
+  v0 prune auth             # Remove specific operation 'auth'
+  v0 prune auth login       # Remove multiple operations
+  v0 prune --all            # Remove all operation state
+  v0 prune --dry-run        # Preview what would be pruned
+EOF
+  exit 1
+}
+
+v0_load_config
+
+# Argument parsing
+NAMES=()
+ALL=""
+FORCE=""
+DRY_RUN=""
+
+while [[ $# -gt 0 ]]; do
+  case "$1" in
+    -a|--all) ALL=1; shift ;;
+    -f|--force) FORCE=1; shift ;;
+    -n|--dry-run) DRY_RUN=1; shift ;;
+    -h|--help) usage ;;
+    -*) echo "Unknown option: $1" >&2; usage ;;
+    *)
+      NAMES+=("$1"); shift
+      ;;
+  esac
+done
+
+# Prune specific operation by name
+prune_operation() {
+  local name="$1"
+  local op_dir="${BUILD_DIR}/operations/${name}"
+
+  if [[ ! -d "${op_dir}" ]]; then
+    echo "Error: Operation '${name}' not found" >&2
+    exit 1
+  fi
+
+  # Check for running tmux session
+  local state_file="${op_dir}/state.json"
+  if [[ -f "${state_file}" ]]; then
+    local session machine local_machine
+    session=$(jq -r '.tmux_session // empty' "${state_file}")
+    machine=$(jq -r '.machine // empty' "${state_file}")
+    local_machine=$(hostname -s)
+    if [[ -n "${session}" ]] && [[ "${machine}" = "${local_machine}" ]] && tmux has-session -t "${session}" 2>/dev/null; then
+      if [[ -z "${FORCE}" ]]; then
+        echo "Warning: Session '${session}' is still running"
+        printf "Kill session and prune? [y/N] "
+        read -r confirm
+        if [[ "${confirm}" != "y" ]] && [[ "${confirm}" != "Y" ]]; then
+          echo "Aborted"
+          exit 1
+        fi
+      fi
+      tmux kill-session -t "${session}" 2>/dev/null || true
+    fi
+  fi
+
+  if [[ -n "${DRY_RUN}" ]]; then
+    echo "Would prune: ${name}"
+  else
+    rm -rf "${op_dir}"
+    echo "Pruned operation '${name}'"
+  fi
+}
+
+# Prune completed/cancelled operations (default behavior)
+prune_completed() {
+  if [[ ! -d "${BUILD_DIR}/operations" ]]; then
+    echo "No operations to prune"
+    exit 0
+  fi
+
+  local pruned=0
+
+  for state_file in "${BUILD_DIR}"/operations/*/state.json; do
+    [[ -f "${state_file}" ]] || continue
+
+    local op_dir name phase merge_status should_prune
+    op_dir=$(dirname "${state_file}")
+    name=$(basename "${op_dir}")
+    phase=$(jq -r '.phase' "${state_file}")
+    merge_status=$(jq -r '.merge_status // empty' "${state_file}")
+    should_prune=""
+
+    # Determine if operation should be pruned
+    if [[ "${phase}" = "cancelled" ]]; then
+      should_prune=1
+    elif [[ "${phase}" = "merged" ]]; then
+      should_prune=1
+    elif [[ "${phase}" = "completed" ]] || [[ "${phase}" = "pending_merge" ]]; then
+      if [[ "${merge_status}" = "merged" ]]; then
+        should_prune=1
+      fi
+    fi
+
+    if [[ -n "${should_prune}" ]]; then
+      if [[ -n "${DRY_RUN}" ]]; then
+        echo "Would prune: ${name} (${phase})"
+      else
+        rm -rf "${op_dir}"
+        echo "Pruned: ${name} (${phase})"
+      fi
+      pruned=$((pruned + 1))
+    fi
+  done
+
+  if [[ "${pruned}" -eq 0 ]]; then
+    echo "No completed or cancelled operations to prune"
+  elif [[ -z "${DRY_RUN}" ]]; then
+    echo "Pruned ${pruned} operation(s)"
+  fi
+}
+
+# Prune all operations
+prune_all() {
+  if [[ ! -d "${BUILD_DIR}/operations" ]]; then
+    echo "No operations to prune"
+    exit 0
+  fi
+
+  # Skip confirmation for dry-run since nothing is actually deleted
+  if [[ -z "${FORCE}" ]] && [[ -z "${DRY_RUN}" ]]; then
+    echo "This will remove ALL operation state in ${BUILD_DIR}/operations/"
+    printf "Are you sure? [y/N] "
+    read -r confirm
+    if [[ "${confirm}" != "y" ]] && [[ "${confirm}" != "Y" ]]; then
+      echo "Aborted"
+      exit 1
+    fi
+  fi
+
+  if [[ -n "${DRY_RUN}" ]]; then
+    echo "Would remove: ${BUILD_DIR}/operations/"
+  else
+    rm -rf "${BUILD_DIR}/operations"
+    echo "Pruned all operations"
+  fi
+}
+
+# Main dispatch
+if [[ -n "${ALL}" ]]; then
+  prune_all
+elif [[ ${#NAMES[@]} -gt 0 ]]; then
+  for name in "${NAMES[@]}"; do
+    prune_operation "${name}"
+  done
+else
+  prune_completed
+fi

@@ -1,0 +1,6 @@
+# Configuration with custom overrides
+PROJECT="customproj"
+ISSUE_PREFIX="cust"
+V0_BUILD_DIR=".build"
+V0_PLANS_DIR="docs/plans"
+V0_FEATURE_BRANCH="feat/{name}"

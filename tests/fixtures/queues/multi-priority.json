@@ -1,0 +1,8 @@
+{
+  "version": 1,
+  "entries": [
+    {"operation": "feat-low", "priority": 10, "status": "pending", "enqueued_at": "2026-01-15T10:00:00Z"},
+    {"operation": "feat-high", "priority": 0, "status": "pending", "enqueued_at": "2026-01-15T10:01:00Z"},
+    {"operation": "feat-mid", "priority": 5, "status": "pending", "enqueued_at": "2026-01-15T10:02:00Z"}
+  ]
+}

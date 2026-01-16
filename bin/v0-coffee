@@ -1,0 +1,142 @@
+#!/bin/bash
+# SPDX-License-Identifier: MIT
+# Copyright (c) 2026 Alfred Jean LLC
+# v0 coffee - Keep the computer awake (caffeinate wrapper)
+set -e
+
+SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+
+# Try to load project config if available (for V0_STATE_DIR)
+# but don't require it - coffee can work standalone
+if [[ -z "${V0_STATE_DIR:-}" ]]; then
+  source "${SCRIPT_DIR}/../lib/v0-common.sh"
+  v0_load_config false 2>/dev/null || true
+fi
+
+# Source coffee functions
+source "${SCRIPT_DIR}/../lib/coffee-common.sh"
+
+usage() {
+  cat <<'EOF'
+Usage: v0 coffee [command] [hours] [options]
+
+Keep the computer awake (prevents idle sleep).
+
+Commands:
+  start [hours]    Start coffee in background (default)
+  stop             Stop background coffee
+  status           Check if coffee is running
+
+Interactive Mode (foreground, blocks until done):
+  v0 coffee --foreground [hours]    Keep awake for N hours (default: 2)
+  v0 coffee --foreground --display  Keep awake with display on
+
+Options:
+  --display  Also prevent display sleep
+  --system   Prevent system sleep (default: prevent idle sleep only)
+
+Environment:
+  V0_COFFEE_HOURS    Default duration in hours (default: 2)
+  V0_COFFEE_OPTS     Default caffeinate options (e.g., "-d" for display)
+
+Examples:
+  v0 coffee                    # Background: keep awake for 2 hours (default)
+  v0 coffee 4                  # Background: keep awake for 4 hours
+  v0 coffee start 8            # Background: start for 8 hours
+  v0 coffee stop               # Stop background coffee
+  v0 coffee status             # Check if running
+  v0 coffee --foreground       # Interactive: keep awake for 2 hours (blocks)
+  v0 coffee --foreground 4     # Interactive: keep awake for 4 hours (blocks)
+  v0 coffee --foreground --display  # Interactive: with display on (blocks)
+EOF
+  exit 0
+}
+
+# Handle explicit subcommands
+case "${1:-}" in
+  stop)
+    if ! coffee_is_running; then
+      echo "Coffee is not running"
+      exit 0
+    fi
+    pid=$(coffee_pid)
+    coffee_stop
+    echo "Coffee stopped (PID: ${pid})"
+    exit 0
+    ;;
+  status)
+    if coffee_is_running; then
+      pid=$(coffee_pid)
+      echo "Coffee is running (PID: ${pid})"
+      exit 0
+    else
+      echo "Coffee is not running"
+      exit 1
+    fi
+    ;;
+  -h|--help)
+    usage
+    ;;
+  --foreground)
+    # Interactive mode (foreground, blocks)
+    shift
+    HOURS=""
+    DISPLAY_FLAG=""
+    SYSTEM_FLAG=""
+
+    while [[ $# -gt 0 ]]; do
+      case "$1" in
+        --display) DISPLAY_FLAG=1; shift ;;
+        --system) SYSTEM_FLAG=1; shift ;;
+        -h|--help) usage ;;
+        -*) echo "Unknown option: $1"; usage ;;
+        *) HOURS="$1"; shift ;;
+      esac
+    done
+
+    # Default to 2 hours (or V0_COFFEE_HOURS env var)
+    HOURS="${HOURS:-${V0_COFFEE_HOURS:-2}}"
+
+    # Convert hours to seconds using bc for decimal support
+    SECONDS=$(echo "${HOURS} * 3600" | bc | cut -d'.' -f1)
+
+    # Build caffeinate flags
+    # -i: prevent idle sleep (default)
+    # -d: prevent display sleep (optional)
+    # -s: prevent system sleep (optional)
+    FLAGS="-i"
+    [[ -n "${DISPLAY_FLAG}" ]] && FLAGS="${FLAGS} -d"
+    [[ -n "${SYSTEM_FLAG}" ]] && FLAGS="${FLAGS} -s"
+
+    # Apply V0_COFFEE_OPTS if set
+    if [[ -n "${V0_COFFEE_OPTS:-}" ]]; then
+      FLAGS="${FLAGS} ${V0_COFFEE_OPTS}"
+    fi
+
+    echo "Keeping computer awake for ${HOURS} hours (${SECONDS} seconds)"
+    echo "Flags: ${FLAGS}"
+    echo "Press Ctrl+C to stop early"
+    echo ""
+
+    # Run caffeinate with timeout
+    # shellcheck disable=SC2086
+    exec caffeinate ${FLAGS} -t "${SECONDS}"
+    ;;
+esac
+
+# Default behavior: start in background (non-blocking)
+# Handle 'start' explicitly or just hours as argument
+if [[ "${1:-}" == "start" ]]; then
+  shift
+fi
+hours="${1:-${V0_COFFEE_HOURS:-2}}"
+opts="${V0_COFFEE_OPTS:-}"
+if coffee_is_running; then
+  pid=$(coffee_pid)
+  echo "Coffee already running (PID: ${pid})"
+  exit 0
+fi
+coffee_start "${hours}" "${opts}"
+pid=$(coffee_pid)
+echo "Coffee started (PID: ${pid}, duration: ${hours}h)"
+exit 0

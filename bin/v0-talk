@@ -1,0 +1,9 @@
+#!/bin/bash
+# SPDX-License-Identifier: MIT
+# Copyright (c) 2026 Alfred Jean LLC
+# v0-talk - Open claude with the haiku model for quick conversations
+# Usage: v0 talk [args]
+
+set -e
+
+exec claude --model haiku "$@"

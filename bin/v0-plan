@@ -1,0 +1,300 @@
+#!/bin/bash
+# SPDX-License-Identifier: MIT
+# Copyright (c) 2026 Alfred Jean LLC
+set -e
+
+V0_DIR="$(cd "$(dirname "$0")/.." && pwd)"
+source "${V0_DIR}/lib/v0-common.sh"
+v0_load_config
+
+usage() {
+  cat <<EOF
+Usage: v0 plan <name> <instructions> [options]
+
+Create an implementation plan using Claude.
+
+Options:
+  --foreground  Run in foreground (blocking) instead of background
+  --direct      Run v0-plan-exec directly without tmux (for debugging)
+  --draft       Skip auto-commit of the plan file
+  --safe        Require permission prompts (default: skip prompts)
+
+Modes:
+  Default: Queue planning and run in background (exits immediately)
+  --foreground: Run in foreground and wait for completion (blocking)
+  --direct: Run v0-plan-exec directly without tmux (for debugging)
+
+Examples:
+  v0 plan auth "Add user authentication with JWT tokens"
+
+  v0 plan api <<'INSTRUCTIONS'
+  Build a REST API with:
+  - User registration and login
+  - CRUD for posts
+  - Rate limiting
+  - OpenAPI documentation
+  INSTRUCTIONS
+
+  v0 plan refactor "\$(cat requirements.txt)"
+
+  v0 plan test "Add tests" --foreground  # Run in foreground (blocking)
+
+Output:
+  Creates \$V0_PLANS_DIR/<name>.md (default: plans/<name>.md)
+EOF
+  exit 1
+}
+
+NAME=""
+INSTRUCTIONS=""
+DIRECT=""
+FOREGROUND=""
+SAFE=""
+DRAFT=""
+
+# Parse args
+while [[ $# -gt 0 ]]; do
+  case "$1" in
+    --draft) DRAFT=1; shift ;;
+    --direct) DIRECT=1; shift ;;
+    --foreground) FOREGROUND=1; shift ;;
+    --safe) SAFE=1; shift ;;
+    -h|--help) usage ;;
+    -*)
+      echo "Unknown option: $1"
+      usage
+      ;;
+    *)
+      if [[ -z "${NAME}" ]]; then
+        NAME="$1"
+      elif [[ -z "${INSTRUCTIONS}" ]]; then
+        INSTRUCTIONS="$1"
+      else
+        echo "Unexpected argument: $1"
+        usage
+      fi
+      shift
+      ;;
+  esac
+done
+
+[[ -z "${NAME}" ]] && usage
+[[ -z "${INSTRUCTIONS}" ]] && usage
+
+# Ensure plans directory exists
+mkdir -p "${PLANS_DIR}"
+
+# Export V0_SAFE and V0_DRAFT for v0-plan-exec
+[[ -n "${SAFE}" ]] && export V0_SAFE=1
+[[ -n "${DRAFT}" ]] && export V0_DRAFT=1
+
+# Allow override of v0-plan-exec path for testing
+V0_PLAN_EXEC="${V0_PLAN_EXEC:-${V0_DIR}/bin/v0-plan-exec}"
+
+# --direct mode: run v0-plan-exec directly
+if [[ -n "${DIRECT}" ]]; then
+  # Create state directory and operation tracking for direct mode
+  STATE_DIR="${BUILD_DIR}/operations/${NAME}"
+  STATE_FILE="${STATE_DIR}/state.json"
+  mkdir -p "${STATE_DIR}/logs"
+
+  # Create or update operation state if it doesn't exist
+  if [[ ! -f "${STATE_FILE}" ]]; then
+    machine=$(hostname -s)
+    cat > "${STATE_FILE}" <<EOF
+{
+  "name": "${NAME}",
+  "type": "plan",
+  "machine": "${machine}",
+  "prompt": $(printf '%s' "${INSTRUCTIONS}" | jq -Rs .),
+  "phase": "init",
+  "created_at": "$(date -u +%Y-%m-%dT%H:%M:%SZ)",
+  "plan_file": null,
+  "tmux_session": null
+}
+EOF
+  fi
+
+  v0_log "plan:start" "${NAME} (direct mode)"
+  PLAN_FILE="${PLANS_DIR}/${NAME}.md"
+
+  if "${V0_PLAN_EXEC}" "${NAME}" "${INSTRUCTIONS}"; then
+    # Check plan file was actually created
+    if [[ -f "${PLAN_FILE}" ]]; then
+      # Update state to planned
+      tmp=$(mktemp)
+      jq ".phase = \"planned\" | .plan_file = \"${V0_PLANS_DIR}/${NAME}.md\"" "${STATE_FILE}" > "${tmp}" && mv "${tmp}" "${STATE_FILE}"
+      v0_log "plan:complete" "${NAME}"
+      v0_notify "${PROJECT}: plan completed" "${NAME}"
+      exit 0
+    else
+      v0_log "plan:failed" "${NAME}: Plan file not created"
+      v0_notify "${PROJECT}: plan failed" "${NAME}"
+      echo "Error: Plan file was not created at ${V0_PLANS_DIR}/${NAME}.md"
+      exit 1
+    fi
+  else
+    # v0-plan-exec failed, but check if plan file exists (recovery)
+    if [[ -f "${PLAN_FILE}" ]]; then
+      # Update state to planned (recovery)
+      tmp=$(mktemp)
+      jq ".phase = \"planned\" | .plan_file = \"${V0_PLANS_DIR}/${NAME}.md\"" "${STATE_FILE}" > "${tmp}" && mv "${tmp}" "${STATE_FILE}"
+      echo "Note: Process exited with non-zero code but plan file was created successfully"
+      v0_log "plan:complete" "${NAME} (recovered)"
+      v0_notify "${PROJECT}: plan completed" "${NAME}"
+      exit 0
+    else
+      v0_log "plan:failed" "${NAME}: v0-plan-exec failed"
+      v0_notify "${PROJECT}: plan failed" "${NAME}"
+      exit 1
+    fi
+  fi
+fi
+
+# Check tmux dependency
+v0_check_deps tmux script
+
+# Generate session name
+PLAN_SESSION=$(v0_session_name "${NAME}" "plan")
+
+# Create state directory and operation tracking
+STATE_DIR="${BUILD_DIR}/operations/${NAME}"
+STATE_FILE="${STATE_DIR}/state.json"
+mkdir -p "${STATE_DIR}/logs"
+
+# Create or update operation state if it doesn't exist
+if [[ ! -f "${STATE_FILE}" ]]; then
+  machine=$(hostname -s)
+  cat > "${STATE_FILE}" <<EOF
+{
+  "name": "${NAME}",
+  "type": "plan",
+  "machine": "${machine}",
+  "prompt": $(printf '%s' "${INSTRUCTIONS}" | jq -Rs .),
+  "phase": "init",
+  "created_at": "$(date -u +%Y-%m-%dT%H:%M:%SZ)",
+  "plan_file": null,
+  "tmux_session": null
+}
+EOF
+fi
+
+# Log start
+v0_log "plan:start" "${NAME}"
+
+# Check if session already running
+if tmux has-session -t "${PLAN_SESSION}" 2>/dev/null; then
+  echo "Plan session '${PLAN_SESSION}' already running."
+  echo "Attach with: tmux attach -t ${PLAN_SESSION}"
+  exit 1
+fi
+
+echo ""
+echo "=== Starting planning step ==="
+echo "Session: ${PLAN_SESSION}"
+echo ""
+echo "Attach to watch planning:"
+echo "  tmux attach -t ${PLAN_SESSION}"
+echo "  (Ctrl-B D to detach)"
+echo ""
+
+# Save instructions to file (avoids quoting issues in wrapper script)
+printf '%s' "${INSTRUCTIONS}" > "${STATE_DIR}/prompt.txt"
+
+# Build V0_SAFE and V0_DRAFT export lines for wrapper script
+V0_SAFE_EXPORT=""
+V0_DRAFT_EXPORT=""
+[[ -n "${SAFE}" ]] && V0_SAFE_EXPORT="export V0_SAFE=1"
+[[ -n "${DRAFT}" ]] && V0_DRAFT_EXPORT="export V0_DRAFT=1"
+
+# Create wrapper script that runs Claude and captures output
+cat > "${STATE_DIR}/run-plan.sh" <<EOF
+#!/bin/bash
+cd '${V0_ROOT}'
+export V0_ROOT='${V0_ROOT}'
+${V0_SAFE_EXPORT}
+${V0_DRAFT_EXPORT}
+PROMPT="\$(cat '${STATE_DIR}/prompt.txt')"
+script -q '${STATE_DIR}/logs/plan.log' '${V0_PLAN_EXEC}' '${NAME}' "\$PROMPT"
+EXIT_CODE=\$?
+echo \$EXIT_CODE > '${STATE_DIR}/logs/plan.exit'
+EOF
+chmod +x "${STATE_DIR}/run-plan.sh"
+
+# Launch wrapper in detached tmux session
+tmux new-session -d -s "${PLAN_SESSION}" -c "${V0_ROOT}" "${STATE_DIR}/run-plan.sh"
+
+# Update state with tmux session
+tmp=$(mktemp)
+jq ".tmux_session = \"${PLAN_SESSION}\"" "${STATE_FILE}" > "${tmp}" && mv "${tmp}" "${STATE_FILE}"
+
+# Background execution (default)
+# Exit immediately and let the tmux session run in the background.
+# Use --foreground to preserve the old blocking behavior.
+if [[ -z "${FOREGROUND}" ]]; then
+  echo ""
+  echo "Check status: v0 status ${NAME}"
+  echo "View logs:    tail -f ${STATE_DIR}/logs/plan.log"
+  echo ""
+  exit 0
+fi
+
+# Foreground execution: Wait for completion by polling tmux session status
+while tmux has-session -t "${PLAN_SESSION}" 2>/dev/null; do
+  if [[ -f "${STATE_DIR}/logs/plan.exit" ]]; then
+    # Session wrote exit file, give it a moment to clean up
+    sleep 1
+    tmux kill-session -t "${PLAN_SESSION}" 2>/dev/null || true
+    break
+  fi
+  sleep 2
+done
+
+# Read exit code
+if [[ -f "${STATE_DIR}/logs/plan.exit" ]]; then
+  PLAN_EXIT=$(cat "${STATE_DIR}/logs/plan.exit")
+else
+  PLAN_EXIT=1
+fi
+
+# Check for plan file
+PLAN_FILE="${PLANS_DIR}/${NAME}.md"
+PLAN_FOUND=""
+if [[ -f "${PLAN_FILE}" ]]; then
+  PLAN_FOUND="${PLAN_FILE}"
+fi
+
+# Handle results
+if [[ ${PLAN_EXIT} -ne 0 ]]; then
+  if [[ -n "${PLAN_FOUND}" ]]; then
+    # Plan file exists despite non-zero exit - treat as success
+    # Update state to planned (recovery)
+    tmp=$(mktemp)
+    jq ".phase = \"planned\" | .plan_file = \"${V0_PLANS_DIR}/${NAME}.md\"" "${STATE_FILE}" > "${tmp}" && mv "${tmp}" "${STATE_FILE}"
+    echo "Note: Process exited with code ${PLAN_EXIT} but plan file was created successfully"
+    v0_log "plan:complete" "${NAME} (recovered from exit ${PLAN_EXIT})"
+    v0_notify "${PROJECT}: plan completed" "${NAME}"
+    exit 0
+  else
+    v0_log "plan:failed" "${NAME}: Exit code ${PLAN_EXIT}"
+    v0_notify "${PROJECT}: plan failed" "${NAME}"
+    echo "Error: Plan creation failed. Check ${STATE_DIR}/logs/plan.log for details."
+    exit 1
+  fi
+fi
+
+if [[ -z "${PLAN_FOUND}" ]]; then
+  v0_log "plan:failed" "${NAME}: Plan file not created"
+  v0_notify "${PROJECT}: plan failed" "${NAME}"
+  echo "Error: Plan file was not created at ${V0_PLANS_DIR}/${NAME}.md"
+  exit 1
+fi
+
+# Update state to planned
+tmp=$(mktemp)
+jq ".phase = \"planned\" | .plan_file = \"${V0_PLANS_DIR}/${NAME}.md\"" "${STATE_FILE}" > "${tmp}" && mv "${tmp}" "${STATE_FILE}"
+
+# Success
+v0_log "plan:complete" "${NAME}"
+v0_notify "${PROJECT}: plan completed" "${NAME}"
+echo "Plan created: ${PLAN_FILE}"

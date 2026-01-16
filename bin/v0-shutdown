@@ -1,0 +1,328 @@
+#!/bin/bash
+# SPDX-License-Identifier: MIT
+# Copyright (c) 2026 Alfred Jean LLC
+# v0-shutdown - Stop all v0 processes for the current project
+set -e
+
+V0_DIR="$(cd "$(dirname "$0")/.." && pwd)"
+source "${V0_DIR}/lib/v0-common.sh"
+v0_load_config
+
+# Source coffee functions for automatic wake lock management
+source "${V0_DIR}/lib/coffee-common.sh"
+
+usage() {
+  cat <<'EOF'
+Usage: v0 shutdown [options]
+
+Stop all v0 workers, daemons, and sessions for the current project.
+
+This is a complete shutdown that:
+- Terminates all tmux sessions for this project
+- Kills polling daemons
+- Removes worker worktrees (v0-*-worker)
+- Deletes local v0/worker/* branches
+- Deletes remote v0/worker/* branches
+
+Note: v0/worker/chore and v0/worker/fix branches are checked before deletion.
+If they contain commits not in ${V0_MAIN_BRANCH:-main}, a warning is shown
+and the branch is preserved. Use --force to delete them anyway.
+
+Options:
+  --force        Force kill and delete branches with unmerged commits
+  --dry-run      Show what would be stopped without stopping
+  -h, --help     Show this help
+
+Examples:
+  v0 shutdown              # Stop all v0 processes and clean up
+  v0 shutdown --dry-run    # Preview what would be stopped
+  v0 shutdown --force      # Force kill and delete all branches
+EOF
+  exit 0
+}
+
+FORCE=""
+DRY_RUN=""
+
+# Parse args
+while [[ $# -gt 0 ]]; do
+  case "$1" in
+    --force)
+      FORCE=1
+      shift
+      ;;
+    --dry-run)
+      DRY_RUN=1
+      shift
+      ;;
+    -h|--help)
+      usage
+      ;;
+    *)
+      echo "Unknown option: $1" >&2
+      echo "Run 'v0 shutdown --help' for usage" >&2
+      exit 1
+      ;;
+  esac
+done
+
+# Find all tmux sessions for this project
+# Pattern: v0-{project}-*
+SESSION_PREFIX="v0-${PROJECT}-"
+
+# Get all matching sessions
+all_sessions=$(tmux list-sessions -F '#{session_name}' 2>/dev/null | grep "^${SESSION_PREFIX}" || true)
+
+# Track if we found anything to clean up
+found_anything=""
+
+if [[ -n "${all_sessions}" ]]; then
+  found_anything=1
+  session_count=$(echo "${all_sessions}" | wc -l | tr -d ' ')
+  echo "Found ${session_count} v0 session(s) for project: ${PROJECT}"
+  echo ""
+
+  # List sessions
+  while IFS= read -r session; do
+    [[ -z "${session}" ]] && continue
+
+    if [[ -n "${DRY_RUN}" ]]; then
+      echo "Would stop: ${session}"
+    else
+      echo "Stopping: ${session}"
+      if [[ -n "${FORCE}" ]]; then
+        tmux kill-session -t "${session}" 2>/dev/null || true
+      else
+        # Send SIGTERM to allow graceful shutdown
+        tmux send-keys -t "${session}" C-c 2>/dev/null || true
+        sleep 0.5
+        tmux kill-session -t "${session}" 2>/dev/null || true
+      fi
+    fi
+  done <<< "${all_sessions}"
+fi
+
+# Also kill polling daemons
+polling_pids=$(pgrep -f "while true.*v0-${PROJECT}" 2>/dev/null || true)
+if [[ -n "${polling_pids}" ]]; then
+  found_anything=1
+  if [[ -n "${DRY_RUN}" ]]; then
+    echo ""
+    echo "Would kill polling daemons: ${polling_pids}"
+  else
+    echo ""
+    echo "Stopping polling daemons..."
+    pkill -f "while true.*v0-${PROJECT}" 2>/dev/null || true
+  fi
+fi
+
+# Stop mergeq daemon if running
+mergeq_pid_file="${BUILD_DIR}/mergeq/.daemon.pid"
+if [[ -f "${mergeq_pid_file}" ]]; then
+  found_anything=1
+  if [[ -n "${DRY_RUN}" ]]; then
+    echo ""
+    echo "Would stop mergeq daemon"
+  else
+    echo ""
+    echo "Stopping mergeq daemon..."
+    "${V0_DIR}/bin/v0-mergeq" --stop 2>/dev/null || true
+  fi
+fi
+
+# Reopen in-progress issues owned by workers being shut down
+echo ""
+echo "Checking for in-progress issues to reopen..."
+
+# Define workers to check
+WORKERS=("worker:fix" "worker:chore")
+
+for worker in "${WORKERS[@]}"; do
+  # Find in-progress issues assigned to this worker
+  issues=$(wk list --status in_progress --assignee "${worker}" -f json 2>/dev/null | jq -r '.issues[].id' || true)
+
+  if [[ -n "${issues}" ]]; then
+    while IFS= read -r issue_id; do
+      [[ -z "${issue_id}" ]] && continue
+
+      if [[ -n "${DRY_RUN}" ]]; then
+        echo "Would reopen: ${issue_id} (was assigned to ${worker})"
+      else
+        echo "Reopening: ${issue_id} (was assigned to ${worker})"
+        wk stop "${issue_id}" 2>/dev/null || true
+        wk edit "${issue_id}" assignee none 2>/dev/null || true
+      fi
+    done <<< "${issues}"
+  fi
+done
+
+# Clean up worker worktrees
+# Storage locations:
+# 1. XDG state directory: ~/.local/state/v0/{project}/tree/v0-*-worker/
+# 2. Git directory fallback: .git/v0-worktrees/v0-*-worker/
+XDG_TREE_ROOT="${V0_STATE_DIR}/tree"
+GIT_TREE_ROOT="$(git -C "${V0_ROOT}" rev-parse --git-common-dir 2>/dev/null || echo "${V0_ROOT}/.git")/v0-worktrees"
+
+# Normalize git root path (may be relative)
+if [[ "${GIT_TREE_ROOT}" != /* ]]; then
+  GIT_TREE_ROOT="${V0_ROOT}/${GIT_TREE_ROOT}"
+fi
+
+# Find all worker worktrees in XDG location
+xdg_worktrees=""
+if [[ -d "${XDG_TREE_ROOT}" ]]; then
+  for dir in "${XDG_TREE_ROOT}"/v0-*-worker; do
+    if [[ -d "${dir}" ]]; then
+      xdg_worktrees="${xdg_worktrees}${dir}"$'\n'
+    fi
+  done
+  xdg_worktrees="${xdg_worktrees%$'\n'}"  # Remove trailing newline
+fi
+
+# Find all worker worktrees in git fallback location
+git_worktrees=""
+if [[ -d "${GIT_TREE_ROOT}" ]]; then
+  for dir in "${GIT_TREE_ROOT}"/v0-*-worker; do
+    if [[ -d "${dir}" ]]; then
+      git_worktrees="${git_worktrees}${dir}"$'\n'
+    fi
+  done
+  git_worktrees="${git_worktrees%$'\n'}"  # Remove trailing newline
+fi
+
+# Combine worktrees
+all_worktrees="${xdg_worktrees}"
+if [[ -n "${git_worktrees}" ]]; then
+  if [[ -n "${all_worktrees}" ]]; then
+    all_worktrees="${all_worktrees}"$'\n'"${git_worktrees}"
+  else
+    all_worktrees="${git_worktrees}"
+  fi
+fi
+
+if [[ -n "${all_worktrees}" ]]; then
+  found_anything=1
+  echo ""
+  echo "Cleaning up worker worktrees..."
+  while IFS= read -r tree_dir; do
+    [[ -z "${tree_dir}" ]] && continue
+    [[ ! -d "${tree_dir}" ]] && continue
+
+    # Find the actual worktree (repo subdirectory)
+    for subdir in "${tree_dir}"/*; do
+      if [[ -d "${subdir}" ]] && { [[ -d "${subdir}/.git" ]] || [[ -f "${subdir}/.git" ]]; }; then
+        if [[ -n "${DRY_RUN}" ]]; then
+          echo "Would remove worktree: ${subdir}"
+        else
+          echo "Removing worktree: ${subdir}"
+          git -C "${V0_ROOT}" worktree remove --force "${subdir}" 2>/dev/null || rm -rf "${subdir}" 2>/dev/null || true
+        fi
+      fi
+    done
+
+    # Remove the tree directory itself
+    if [[ -n "${DRY_RUN}" ]]; then
+      echo "Would remove tree dir: ${tree_dir}"
+    else
+      rm -rf "${tree_dir}" 2>/dev/null || true
+    fi
+  done <<< "${all_worktrees}"
+fi
+
+# Clean up v0/worker/* branches (local and remote)
+local_branches=$(git -C "${V0_ROOT}" branch --list 'v0/worker/*' 2>/dev/null | sed 's/^[* ]*//' || true)
+remote_branches=$(git -C "${V0_ROOT}" branch -r --list 'origin/v0/worker/*' 2>/dev/null | sed 's/^[* ]*//' || true)
+
+# Track branches skipped due to unmerged commits
+skipped_branches=""
+
+if [[ -n "${local_branches}" ]]; then
+  found_anything=1
+  echo ""
+  echo "Cleaning up local v0/worker/* branches..."
+  while IFS= read -r branch; do
+    [[ -z "${branch}" ]] && continue
+
+    # Check if this is a chore or fix branch that needs merge verification
+    if [[ "${branch}" == "v0/worker/chore" || "${branch}" == "v0/worker/fix" ]]; then
+      # Check if branch is merged (is an ancestor of main)
+      if ! git -C "${V0_ROOT}" merge-base --is-ancestor "${branch}" "${V0_MAIN_BRANCH}" 2>/dev/null; then
+        if [[ -z "${FORCE}" ]]; then
+          echo "Warning: ${branch} has commits not in ${V0_MAIN_BRANCH}, skipping (use --force to delete)"
+          skipped_branches="${skipped_branches}${branch}"$'\n'
+          continue
+        else
+          echo "Warning: ${branch} has commits not in ${V0_MAIN_BRANCH}, deleting anyway (--force)"
+        fi
+      fi
+    fi
+
+    if [[ -n "${DRY_RUN}" ]]; then
+      echo "Would delete local branch: ${branch}"
+    else
+      echo "Deleting local branch: ${branch}"
+      git -C "${V0_ROOT}" branch -D "${branch}" 2>/dev/null || true
+    fi
+  done <<< "${local_branches}"
+fi
+
+if [[ -n "${remote_branches}" ]]; then
+  found_anything=1
+  echo ""
+  echo "Cleaning up remote v0/worker/* branches..."
+  while IFS= read -r branch; do
+    [[ -z "${branch}" ]] && continue
+    # Remove "origin/" prefix to get the branch name for deletion
+    branch_name="${branch#origin/}"
+
+    # Check if this is a chore or fix branch that needs merge verification
+    if [[ "${branch_name}" == "v0/worker/chore" || "${branch_name}" == "v0/worker/fix" ]]; then
+      # Check if the remote branch is merged (fetch first to ensure we have the ref)
+      if ! git -C "${V0_ROOT}" merge-base --is-ancestor "${branch}" "${V0_MAIN_BRANCH}" 2>/dev/null; then
+        if [[ -z "${FORCE}" ]]; then
+          echo "Warning: ${branch_name} (remote) has commits not in ${V0_MAIN_BRANCH}, skipping (use --force to delete)"
+          skipped_branches="${skipped_branches}${branch_name} (remote)"$'\n'
+          continue
+        else
+          echo "Warning: ${branch_name} (remote) has commits not in ${V0_MAIN_BRANCH}, deleting anyway (--force)"
+        fi
+      fi
+    fi
+
+    if [[ -n "${DRY_RUN}" ]]; then
+      echo "Would delete remote branch: ${branch_name}"
+    else
+      echo "Deleting remote branch: ${branch_name}"
+      git -C "${V0_ROOT}" push origin --delete "${branch_name}" 2>/dev/null || true
+    fi
+  done <<< "${remote_branches}"
+fi
+
+if [[ -z "${found_anything}" ]]; then
+  echo "No v0 sessions running for project: ${PROJECT}"
+  exit 0
+fi
+
+if [[ -z "${DRY_RUN}" ]]; then
+  # Stop coffee (system wake lock)
+  if coffee_is_running; then
+    coffee_stop
+    echo ""
+    echo "Stopped coffee (system can sleep)"
+  fi
+
+  echo ""
+  if [[ -n "${skipped_branches}" ]]; then
+    echo "Shutdown complete (some branches preserved)"
+    echo ""
+    echo "The following branches have unmerged commits and were not deleted:"
+    while IFS= read -r skipped; do
+      [[ -z "${skipped}" ]] && continue
+      echo "  - ${skipped}"
+    done <<< "${skipped_branches}"
+    echo ""
+    echo "Use 'v0 shutdown --force' to delete them anyway."
+  else
+    echo "Shutdown complete"
+  fi
+fi

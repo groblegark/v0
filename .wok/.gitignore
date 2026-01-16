@@ -1,0 +1,5 @@
+# User-specific runtime state
+current/
+
+# Database (synced via remote)
+issues.db

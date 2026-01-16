@@ -1,0 +1,26 @@
+# ShellCheck configuration for v0
+# https://www.shellcheck.net/wiki/
+
+# Default shell for scripts without shebang
+shell=bash
+
+# Enable all optional checks
+enable=all
+
+# Disable checks that are commonly false positives in this codebase:
+# SC2034: Unused variables (often intentional in library exports)
+# SC2154: Variable referenced but not assigned (often sourced from other files)
+# SC2310: set -e disabled in if condition (informational, by design)
+# SC2311: set -e disabled in subshell (informational, by design)
+# SC2312: Masked return value ($(date), $(basename) are safe)
+# SC2129: Consider using { } >> file (style preference)
+# SC2001: Use ${var//pattern/replace} instead of sed (not possible for multiline)
+# SC2249: Consider adding default *) case (style, not required)
+disable=SC2034,SC2154,SC2310,SC2311,SC2312,SC2129,SC2001,SC2249
+
+# Source path for sourced files (relative to script location)
+source-path=lib
+
+# External sources - files that are sourced but defined elsewhere
+# (prevents "file not found" errors for sourced files)
+external-sources=true

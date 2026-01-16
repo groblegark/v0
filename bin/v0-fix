@@ -1,0 +1,661 @@
+#!/bin/bash
+# SPDX-License-Identifier: MIT
+# Copyright (c) 2026 Alfred Jean LLC
+set -e
+
+SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+V0_DIR="$(dirname "${SCRIPT_DIR}")"
+ROOT_DIR="$(pwd)"  # Current directory where command was invoked
+WORKER_BRANCH="v0/worker/fix"
+
+# Source shared utilities
+source "${V0_DIR}/lib/v0-common.sh"
+source "${V0_DIR}/lib/worker-common.sh"
+
+# Load project config (exits if not found)
+v0_load_config
+
+# Initialize namespaced session names (must be after v0_load_config)
+WORKER_SESSION=$(v0_session_name "worker" "fix")
+POLLING_SESSION=$(v0_session_name "polling" "fix")
+POLLING_LOG="/tmp/v0-${PROJECT}-fix-polling.log"
+
+usage() {
+  cat <<'EOF'
+Usage: v0 fix <bug description>
+       v0 fix --start
+       v0 fix --stop
+       v0 fix --status
+       v0 fix --history
+
+Simple sequential bug fixing.
+
+Commands:
+  <description>   Report a bug and ensure worker is running
+  --start         Start worker to process existing bugs
+  --stop          Stop the worker
+  --status        Show worker state and pending bugs
+  --logs          Show worker stdout/stderr logs
+  --err           Show worker error logs
+  --history       Show completed bugs and their fix details
+
+Options:
+  --history       Show last 10 completed bugs
+  --history=N     Show last N completed bugs
+  --history=all   Show all completed bugs
+
+Examples:
+  v0 fix "Login button doesn't work on mobile"
+  v0 fix --start
+  v0 fix --status
+  v0 fix --logs
+  v0 fix --err
+  v0 fix --history
+EOF
+  exit 1
+}
+
+# Check dependencies
+check_dep() {
+  if ! command -v "$1" &> /dev/null; then
+    echo "Error: $1 is required but not installed"
+    exit 1
+  fi
+}
+
+check_dep tmux
+check_dep claude
+
+# Ensure worker is running, start if not
+ensure_worker_running() {
+  if worker_running; then
+    echo "Worker already running"
+    return 0
+  fi
+  start_worker
+}
+
+# Start the worker
+start_worker() {
+  if worker_running || polling_running; then
+    echo "Worker already running"
+    return 0
+  fi
+
+  # Create worktree
+  local name="v0-fix-worker"
+  local tree_output
+  if ! tree_output=$("${SCRIPT_DIR}/v0-tree" "${name}"); then
+    echo "Error: Failed to create worktree for ${name}"
+    exit 1
+  fi
+  WORKER_TREE_DIR=$(echo "${tree_output}" | head -1)
+  WORKER_GIT_DIR=$(echo "${tree_output}" | tail -1)
+  local tree_dir="${WORKER_TREE_DIR}"  # Alias for readability in this function
+
+  # Save git dir, branch name, and current directory for later cleanup and reset
+  # This allows stopping the worker from any directory and resetting between runs
+  echo "${WORKER_GIT_DIR}" > "${WORKER_TREE_DIR}/.worker-git-dir"
+  echo "${WORKER_BRANCH}" > "${WORKER_TREE_DIR}/.worker-branch"
+  pwd > "${WORKER_TREE_DIR}/.worker-project-root"
+
+  # Fast-forward worktree to latest main
+  git -C "${WORKER_GIT_DIR}" fetch origin main
+  git -C "${WORKER_GIT_DIR}" reset --hard origin/main
+
+  # Rename branch from temporary name to proper branch name (if not already renamed)
+  current_branch=$(git -C "${WORKER_GIT_DIR}" rev-parse --abbrev-ref HEAD)
+  if [[ "${current_branch}" != "${WORKER_BRANCH}" ]]; then
+    git -C "${WORKER_GIT_DIR}" branch -m "${current_branch}" "${WORKER_BRANCH}" 2>/dev/null || true
+  fi
+
+  # Link worktree to main repo's shared workspace
+  # Remove any local .wok database first (if it exists)
+  rm -rf "${tree_dir}/.wok"
+  # Now initialize with the shared workspace
+  wk init --workspace "${ROOT_DIR}/.wok" --path "${tree_dir}"
+
+  # Write worker assignee role for this worktree
+  mkdir -p "${tree_dir}/.wok/current"
+  echo "worker:fix" > "${tree_dir}/.wok/current/assignee"
+
+  # Copy worker instructions template
+  cp "${V0_DIR}/lib/templates/claude.fix.md" "${tree_dir}/CLAUDE.md"
+
+  # Create settings.local.json with Stop hook AND progress notification hook
+  HOOK_SCRIPT="${V0_DIR}/lib/hooks/stop-fix.sh"
+  NOTIFY_HOOK="${V0_DIR}/lib/hooks/notify-progress.sh"
+  mkdir -p "${tree_dir}/.claude"
+  cat > "${tree_dir}/.claude/settings.local.json" <<SETTINGS_EOF
+{
+  "hooks": {
+    "Stop": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "${HOOK_SCRIPT}"
+          }
+        ]
+      }
+    ],
+    "PostToolUse": [
+      {
+        "matcher": "Bash",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "V0_BUILD_DIR='${BUILD_DIR}' ${NOTIFY_HOOK}"
+          }
+        ]
+      }
+    ],
+    "PreCompact": [
+      {
+        "matcher": "",
+        "hooks": [{"type": "command", "command": "wk prime"}]
+      }
+    ],
+    "SessionStart": [
+      {
+        "matcher": "",
+        "hooks": [{"type": "command", "command": "wk prime"}]
+      }
+    ]
+  }
+}
+SETTINGS_EOF
+
+  # Create new-branch script (resets worktree to latest main)
+  cat > "${tree_dir}/new-branch" <<NEW_BRANCH_SCRIPT
+#!/bin/bash
+set -e
+
+BUG_ID="\$1"
+if [[ -z "\$BUG_ID" ]]; then
+  echo "Usage: ./new-branch <bug-id>"
+  exit 1
+fi
+
+BRANCH="fix/\$BUG_ID"
+STATE_DIR="${BUILD_DIR}/fix/\$BUG_ID"
+WORKTREE_ROOT="\$(pwd)"
+
+cd ${REPO_NAME}
+
+# Check if we're on a fix branch that needs to be completed first
+CURRENT_BRANCH=\$(git rev-parse --abbrev-ref HEAD 2>/dev/null || echo "")
+if [[ "\$CURRENT_BRANCH" == fix/* ]]; then
+  PREV_BUG_ID="\${CURRENT_BRANCH#fix/}"
+
+  # Check if there are commits beyond origin/main
+  COMMITS_AHEAD=\$(git rev-list --count origin/main..HEAD 2>/dev/null || echo "0")
+
+  if [[ "\$COMMITS_AHEAD" -gt 0 ]]; then
+    echo "Found uncommitted fix on branch \$CURRENT_BRANCH"
+    echo "Completing \$PREV_BUG_ID first..."
+
+    PREV_BRANCH="\$CURRENT_BRANCH"
+    PREV_STATE_DIR="${BUILD_DIR}/fix/\$PREV_BUG_ID"
+
+    # Get commit info before pushing
+    COMMIT_SHA=\$(git rev-parse HEAD)
+    COMMIT_MSG=\$(git log -1 --format=%s)
+
+    # Push current commits as fix/<id> branch
+    echo "Pushing \$PREV_BRANCH..."
+    git push -u origin "HEAD:refs/heads/\$PREV_BRANCH"
+
+    # Update state file
+    mkdir -p "\$PREV_STATE_DIR"
+    cat > "\$PREV_STATE_DIR/state.json" <<STATE_EOF
+{
+  "issue_id": "\$PREV_BUG_ID",
+  "branch": "\$PREV_BRANCH",
+  "commit": "\$COMMIT_SHA",
+  "commit_message": "\$(echo "\$COMMIT_MSG" | sed 's/"/\\\\"/g')",
+  "pushed_at": "\$(date -u +%Y-%m-%dT%H:%M:%SZ)",
+  "status": "pushed"
+}
+STATE_EOF
+
+    # Queue for merge
+    echo "Queueing for merge..."
+    "${V0_DIR}/bin/v0-mergeq" --enqueue "\$PREV_BRANCH" --issue-id "\$PREV_BUG_ID"
+
+    # Transfer ownership to merge queue
+    wk edit "\$PREV_BUG_ID" assignee "worker:mergeq"
+
+    # Close the bug (run from worktree root where .wok/config.toml has workspace setting)
+    echo "Closing \$PREV_BUG_ID..."
+    (cd "\$WORKTREE_ROOT" && wk done "\$PREV_BUG_ID")
+
+    echo "Completed \$PREV_BUG_ID"
+    echo ""
+  fi
+fi
+
+# Reset worktree to latest main
+git fetch origin main
+git reset --hard origin/main
+
+# Record branch state for recovery
+mkdir -p "\$STATE_DIR"
+cat > "\$STATE_DIR/state.json" <<STATE_EOF
+{
+  "issue_id": "\$BUG_ID",
+  "branch": "\$BRANCH",
+  "started_at": "\$(date -u +%Y-%m-%dT%H:%M:%SZ)",
+  "status": "started"
+}
+STATE_EOF
+
+# Set assignee to this worker
+wk edit "\$BUG_ID" assignee "worker:fix"
+
+echo "Reset to latest main"
+echo "Ready to fix \$BUG_ID"
+NEW_BRANCH_SCRIPT
+  chmod +x "${tree_dir}/new-branch"
+
+  # Create fixed script (push to fix/<id>, queue merge, close bug, reset to main)
+  cat > "${tree_dir}/fixed" <<FIXED_SCRIPT
+#!/bin/bash
+set -e
+
+BUG_ID="\$1"
+if [[ -z "\$BUG_ID" ]]; then
+  echo "Usage: ./fixed <bug-id>"
+  exit 1
+fi
+
+BRANCH="fix/\$BUG_ID"
+STATE_DIR="${BUILD_DIR}/fix/\$BUG_ID"
+WORKTREE_ROOT="\$(pwd)"
+
+cd ${REPO_NAME}
+
+# Get commit info before pushing
+COMMIT_SHA=\$(git rev-parse HEAD)
+COMMIT_MSG=\$(git log -1 --format=%s)
+
+# Push current commits as fix/<id> branch
+echo "Pushing \$BRANCH..."
+git push -u origin "HEAD:refs/heads/\$BRANCH"
+
+# Update state file
+mkdir -p "\$STATE_DIR"
+cat > "\$STATE_DIR/state.json" <<STATE_EOF
+{
+  "issue_id": "\$BUG_ID",
+  "branch": "\$BRANCH",
+  "commit": "\$COMMIT_SHA",
+  "commit_message": "\$(echo "\$COMMIT_MSG" | sed 's/"/\\\\"/g')",
+  "pushed_at": "\$(date -u +%Y-%m-%dT%H:%M:%SZ)",
+  "status": "pushed"
+}
+STATE_EOF
+
+# Queue for merge with issue ID tracking (for logging/debugging)
+echo "Queueing for merge..."
+"${V0_DIR}/bin/v0-mergeq" --enqueue "\$BRANCH" --issue-id "\$BUG_ID"
+
+# Transfer ownership to merge queue
+wk edit "\$BUG_ID" assignee "worker:mergeq"
+
+# Close the bug (run from worktree root where .wok/config.toml has workspace setting)
+echo "Closing \$BUG_ID..."
+(cd "\$WORKTREE_ROOT" && wk done "\$BUG_ID")
+
+# Reset worktree to latest main
+echo "Resetting to latest main..."
+git fetch origin main
+git reset --hard origin/main
+
+echo ""
+echo "Completed \$BUG_ID"
+echo "Branch \$BRANCH queued for merge"
+
+# Exit Claude session to keep context window small
+echo "Exiting session..."
+
+# Mark clean exit
+touch "${tree_dir}/.done-exit"
+
+# Find and kill claude process
+find_claude() {
+  local pid=\$1
+  while [[ -n "\$pid" ]] && [[ "\$pid" != "1" ]]; do
+    local cmd
+    cmd=\$(ps -o comm= -p "\$pid" 2>/dev/null)
+    if [[ "\$cmd" == *"claude"* ]]; then
+      echo "\$pid"
+      return
+    fi
+    pid=\$(ps -o ppid= -p "\$pid" 2>/dev/null | tr -d ' ')
+  done
+}
+
+CLAUDE_PID=\$(find_claude \$\$)
+if [[ -n "\$CLAUDE_PID" ]]; then
+  kill -TERM "\$CLAUDE_PID" 2>/dev/null || true
+fi
+exit 0
+FIXED_SCRIPT
+  chmod +x "${tree_dir}/fixed"
+
+  # Create done script for worker
+  # Create helper scripts using shared functions
+  create_done_script "${tree_dir}" "fix"
+
+  # Read CLAUDE.md and pass as instruction
+  local claude_instruction
+  claude_instruction="$(cat "${tree_dir}/CLAUDE.md")"
+  create_wrapper_script "${tree_dir}" "claude-worker.log" "Claude Fix Worker" "v0 fix --err" "${V0_DIR}" claude --model opus --dangerously-skip-permissions "${claude_instruction}"
+
+  echo -e "Starting fix worker in tmux session: ${C_CYAN}${WORKER_SESSION}${C_RESET}"
+  echo -e "Worktree: ${C_CYAN}${tree_dir}${C_RESET}"
+
+  local wrapper_script="${tree_dir}/claude-worker.sh"
+
+  # Start the polling loop
+  create_polling_loop "${tree_dir}" bug "${POLLING_LOG}"
+
+  # Launch Claude for the first time
+  tmux new-session -d -s "${WORKER_SESSION}" -c "${tree_dir}" "${wrapper_script}"
+
+  # Verify the session started
+  if tmux has-session -t "${WORKER_SESSION}" 2>/dev/null; then
+    echo -e "${C_GREEN}Worker started.${C_RESET} Use '${C_BOLD}v0 fix --status${C_RESET}' to check progress."
+  else
+    echo "Error: Failed to start worker tmux session" >&2
+    return 1
+  fi
+}
+
+# Stop the worker
+stop_worker() {
+  generic_stop_worker "${WORKER_SESSION}" "${WORKER_BRANCH}"
+}
+
+# Show status
+show_status() {
+  local in_progress open
+  in_progress=$(wk list --type bug --status in_progress 2>/dev/null || true)
+  open=$(wk list --type bug --status todo 2>/dev/null || true)
+
+  # Count queued bugs for status message
+  local open_count=0
+  if [[ -n "${open}" ]]; then
+    open_count=$(echo "${open}" | wc -l | tr -d ' ')
+  fi
+
+  if worker_running; then
+    echo "Worker: Active (processing bugs)"
+    echo ""
+    echo "Attach with: v0 attach fix"
+  elif polling_running; then
+    if [[ "${open_count}" -gt 0 ]]; then
+      echo "Worker: Polling (${open_count} bugs queued)"
+    else
+      echo "Worker: Polling (waiting for bugs)"
+    fi
+  else
+    echo "Worker: Stopped"
+  fi
+
+  if [[ -z "${in_progress}" ]] && [[ -z "${open}" ]]; then
+    echo ""
+    echo "No bugs available"
+    return 0
+  fi
+
+  local shown=5
+
+  if [[ -n "${in_progress}" ]]; then
+    echo ""
+    echo "In Progress:"
+    local count
+    count=$(echo "${in_progress}" | wc -l | tr -d ' ')
+    if [[ "${count}" -le "${shown}" ]]; then
+      # shellcheck disable=SC2001
+      echo "${in_progress}" | sed 's/^/  /'
+    else
+      # shellcheck disable=SC2001
+      echo "${in_progress}" | head -n "${shown}" | sed 's/^/  /'
+      local remaining=$((count - shown))
+      echo "  ... and ${remaining} more"
+    fi
+  fi
+
+  if [[ -n "${open}" ]]; then
+    echo ""
+    echo "Queued:"
+    local count
+    count=$(echo "${open}" | wc -l | tr -d ' ')
+    if [[ "${count}" -le "${shown}" ]]; then
+      # shellcheck disable=SC2001
+      echo "${open}" | sed 's/^/  /'
+    else
+      # shellcheck disable=SC2001
+      echo "${open}" | head -n "${shown}" | sed 's/^/  /'
+      local remaining=$((count - shown))
+      echo "  ... and ${remaining} more"
+    fi
+  fi
+}
+
+# View worker logs
+
+# Report a bug
+report_bug() {
+  local input="$*"
+
+  if [[ -z "${input}" ]]; then
+    echo "Error: Bug description required"
+    usage
+  fi
+
+  # Split at first double newline (paragraph break)
+  local title description
+  if [[ "${input}" == *$'\n\n'* ]]; then
+    # Extract title (before double newline) and description (after)
+    title="${input%%$'\n\n'*}"
+    description="${input#*$'\n\n'}"
+  else
+    title="${input}"
+    description=""
+  fi
+
+  # Normalize whitespace in title: replace newlines and consecutive whitespace with single space
+  title=$(echo "${title}" | tr '\n' ' ' | sed 's/  */ /g' | sed 's/^ //;s/ $//')
+
+  # If title still exceeds 120 chars, truncate and put full input in description
+  if [[ ${#title} -gt 120 ]]; then
+    description="${input}"
+    title="${title:0:120}"
+  fi
+
+  # Create the bug (allow failure so we can show the error)
+  local output id exit_code
+  if [[ -n "${description}" ]]; then
+    output=$(wk new bug "${title}" --description "${description}" 2>&1) && exit_code=0 || exit_code=$?
+  else
+    output=$(wk new bug "${title}" 2>&1) && exit_code=0 || exit_code=$?
+  fi
+
+  if [[ "${exit_code}" -ne 0 ]]; then
+    echo "Error: Failed to create bug"
+    echo "${output}"
+    exit 1
+  fi
+
+  id=$(echo "${output}" | grep -oE "$(v0_issue_pattern)" | head -1)
+
+  if [[ -z "${id}" ]]; then
+    echo "Error: Failed to create bug (no ID returned)"
+    echo "${output}"
+    exit 1
+  fi
+
+  echo "Created bug: ${id}"
+  echo "  Title:"
+  echo "${title}" | fmt -w 76 | sed 's/^/    /'
+
+  # Ensure worker is running
+  ensure_worker_running
+}
+
+# Format timestamp - relative for today, date for older
+format_timestamp() {
+  local iso_timestamp="$1"
+  local today now_epoch ts_epoch diff_secs
+
+  # Get today's date
+  today=$(date +%Y-%m-%d)
+
+  # Extract date portion from timestamp
+  local ts_date
+  ts_date=$(echo "${iso_timestamp}" | cut -dT -f1)
+
+  if [[ "${ts_date}" = "${today}" ]]; then
+    # Today - show relative time
+    now_epoch=$(date +%s)
+    # Parse ISO timestamp to epoch (handle both with and without Z suffix)
+    local clean_ts
+    clean_ts="${iso_timestamp%Z}"
+    ts_epoch=$(date -j -f "%Y-%m-%dT%H:%M:%S" "${clean_ts}" +%s 2>/dev/null || date -d "${iso_timestamp}" +%s 2>/dev/null)
+
+    if [[ -z "${ts_epoch}" ]]; then
+      echo "${ts_date}"
+      return
+    fi
+
+    diff_secs=$((now_epoch - ts_epoch))
+
+    if [[ "${diff_secs}" -lt 60 ]]; then
+      echo "just now"
+    elif [[ "${diff_secs}" -lt 3600 ]]; then
+      local mins=$((diff_secs / 60))
+      if [[ "${mins}" -eq 1 ]]; then
+        echo "1 min ago"
+      else
+        echo "${mins} mins ago"
+      fi
+    else
+      local hrs=$((diff_secs / 3600))
+      if [[ "${hrs}" -eq 1 ]]; then
+        echo "1 hr ago"
+      else
+        echo "${hrs} hrs ago"
+      fi
+    fi
+  else
+    # Not today - show date
+    echo "${ts_date}"
+  fi
+}
+
+# Show bug history
+show_history() {
+  local limit="${1:-10}"
+  local bugs
+  bugs=$(wk list --type bug --status "done" 2>/dev/null || true)
+
+  if [[ -z "${bugs}" ]]; then
+    echo "No completed bugs"
+    return 0
+  fi
+
+  echo "Completed Bugs:"
+  echo ""
+
+  local count=0
+  while IFS= read -r line; do
+    [[ "${count}" -ge "${limit}" ]] && break
+
+    local id
+    id=$(echo "${line}" | grep -oE "$(v0_issue_pattern)" | head -1)
+    [[ -z "${id}" ]] && continue
+
+    local state_file="${BUILD_DIR}/fix/${id}/state.json"
+    if [[ -f "${state_file}" ]]; then
+      local pushed_at commit_msg
+      pushed_at=$(grep -o '"pushed_at": "[^"]*"' "${state_file}" | cut -d'"' -f4)
+      commit_msg=$(grep -o '"commit_message": "[^"]*"' "${state_file}" | cut -d'"' -f4)
+
+      # Format date - relative for today, date for older
+      local date_str
+      date_str=$(format_timestamp "${pushed_at}")
+
+      printf "%-12s (%s) %s\n" "${id}" "${date_str}" "${commit_msg}"
+    else
+      # No state file - show from wk list
+      local title
+      # shellcheck disable=SC2001
+      title=$(echo "${line}" | sed 's/^[^-]*-[^ ]* \[P[0-4]\] \[bug\] closed - //')
+      printf "%-12s (no state) %s\n" "${id}" "${title}"
+    fi
+
+    count=$((count + 1))
+  done <<< "${bugs}"
+}
+
+# Main
+case "${1:-}" in
+  --start)
+    start_worker
+    ;;
+  --stop)
+    stop_worker
+    ;;
+  --status)
+    show_status
+    ;;
+  --logs)
+    show_logs
+    ;;
+  --err)
+    show_errors
+    ;;
+  --history)
+    show_history 10
+    ;;
+  --history=*)
+    arg="${1#--history=}"
+    if [[ "${arg}" = "all" ]]; then
+      show_history 999999
+    else
+      show_history "${arg}"
+    fi
+    ;;
+  -h|--help)
+    usage
+    ;;
+  "")
+    show_status
+    echo ""
+    echo "Run with --help for more options"
+    ;;
+  --)
+    echo "Error: Invalid argument '--'. Did you mean '--status'?"
+    usage
+    ;;
+  --*)
+    echo "Error: Unknown flag '$1'"
+    echo "Run 'v0 fix --help' for usage"
+    exit 1
+    ;;
+  -*)
+    echo "Error: Unknown flag '$1'"
+    echo "Run 'v0 fix --help' for usage"
+    exit 1
+    ;;
+  attach)
+    # Handle 'v0 fix attach' as alias for 'v0 attach fix'
+    exec "${SCRIPT_DIR}/v0-attach" fix
+    ;;
+  *)
+    report_bug "$@"
+    ;;
+esac

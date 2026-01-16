@@ -1,0 +1,136 @@
+#!/bin/bash
+# SPDX-License-Identifier: MIT
+# Copyright (c) 2026 Alfred Jean LLC
+# v0-cancel - Cancel a running operation
+set -e
+
+V0_DIR="$(cd "$(dirname "$0")/.." && pwd)"
+source "${V0_DIR}/lib/v0-common.sh"
+v0_load_config
+
+usage() {
+  cat <<'EOF'
+Usage: v0 cancel <operation>...
+
+Cancel one or more running operations (feature, plan, decompose, or build).
+
+This stops any running sessions or workers associated with the operations
+and marks them as cancelled. Operations can be cleaned up with 'v0 prune'.
+
+Options:
+  -h, --help     Show this help
+
+Examples:
+  v0 cancel auth           # Cancel the 'auth' operation
+  v0 cancel auth users     # Cancel multiple operations
+EOF
+  exit 0
+}
+
+NAMES=()
+
+# Parse args
+while [[ $# -gt 0 ]]; do
+  case "$1" in
+    -h|--help)
+      usage
+      ;;
+    -*)
+      echo "Unknown option: $1" >&2
+      echo "Run 'v0 cancel --help' for usage" >&2
+      exit 1
+      ;;
+    *)
+      NAMES+=("$1")
+      shift
+      ;;
+  esac
+done
+
+if [[ ${#NAMES[@]} -eq 0 ]]; then
+  echo "Error: Operation name required" >&2
+  echo "Run 'v0 cancel --help' for usage" >&2
+  exit 1
+fi
+
+local_machine=$(hostname -s)
+cancelled_count=0
+failed_count=0
+
+for NAME in "${NAMES[@]}"; do
+  # Check if operation exists
+  STATE_DIR="${BUILD_DIR}/operations/${NAME}"
+  STATE_FILE="${STATE_DIR}/state.json"
+
+  if [[ ! -f "${STATE_FILE}" ]]; then
+    echo "Error: No operation found for '${NAME}'" >&2
+    ((failed_count++)) || true
+    continue
+  fi
+
+  # Read current state
+  phase=$(jq -r '.phase' "${STATE_FILE}")
+  machine=$(jq -r '.machine // "unknown"' "${STATE_FILE}")
+  session=$(jq -r '.tmux_session // empty' "${STATE_FILE}")
+  worker_pid=$(jq -r '.worker_pid // empty' "${STATE_FILE}")
+
+  # Check if already cancelled or completed
+  case "${phase}" in
+    cancelled)
+      echo "Operation '${NAME}' is already cancelled"
+      continue
+      ;;
+    merged)
+      echo "Error: Operation '${NAME}' has already merged" >&2
+      echo "Use 'v0 prune' to remove it" >&2
+      ((failed_count++)) || true
+      continue
+      ;;
+    *)
+      ;;
+  esac
+
+  # Show info
+  echo "Cancelling operation: ${NAME}"
+  echo "Phase: ${phase}"
+  echo "Machine: ${machine}"
+
+  # Stop tmux session if running
+  if [[ "${machine}" = "${local_machine}" ]] && [[ -n "${session}" ]] && tmux has-session -t "${session}" 2>/dev/null; then
+    echo "Stopping session: ${session}"
+    tmux kill-session -t "${session}" 2>/dev/null || true
+  fi
+
+  # Stop background worker if running
+  if [[ "${machine}" = "${local_machine}" ]] && [[ -n "${worker_pid}" ]] && [[ "${worker_pid}" != "null" ]] && kill -0 "${worker_pid}" 2>/dev/null; then
+    echo "Stopping worker: PID ${worker_pid}"
+    kill "${worker_pid}" 2>/dev/null || true
+    # Wait briefly for graceful shutdown
+    sleep 1
+    # Force kill if still running
+    kill -9 "${worker_pid}" 2>/dev/null || true
+  fi
+
+  # Update state to cancelled
+  tmp=$(mktemp)
+  jq '.phase = "cancelled" | .cancelled_at = "'"$(date -u +%Y-%m-%dT%H:%M:%SZ)"'"' "${STATE_FILE}" > "${tmp}" && mv "${tmp}" "${STATE_FILE}"
+
+  # Log the event
+  mkdir -p "${STATE_DIR}/logs"
+  echo "[$(date -u +%Y-%m-%dT%H:%M:%SZ)] cancelled: Operation cancelled by user" >> "${STATE_DIR}/logs/events.log"
+
+  echo "Cancelled operation '${NAME}'"
+  echo ""
+  ((cancelled_count++)) || true
+done
+
+if [[ ${cancelled_count} -gt 0 ]]; then
+  echo "Clean up with: v0 prune"
+fi
+
+# Exit with failure if any operations failed
+if [[ ${failed_count} -gt 0 ]]; then
+  echo "" >&2
+  echo "List operations with: v0 status" >&2
+  exit 1
+fi

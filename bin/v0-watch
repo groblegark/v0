@@ -1,0 +1,94 @@
+#!/usr/bin/env bash
+# SPDX-License-Identifier: MIT
+# Copyright (c) 2026 Alfred Jean LLC
+set -euo pipefail
+
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+source "${SCRIPT_DIR}/../lib/v0-common.sh"
+
+# Default configuration
+REFRESH_INTERVAL=6
+FILTER_ARGS=()
+OPERATION_NAME=""
+
+usage() {
+  cat <<EOF
+Usage: v0 watch [OPTIONS] [OPERATION]
+
+Continuously watch v0 status output.
+
+Arguments:
+  OPERATION             Watch a specific operation by name
+
+Options:
+  -n, --interval SECS   Refresh interval in seconds (default: 6)
+  -o, --operation NAME  Watch a specific operation by name
+  --fix                 Watch fix worker status only
+  --chore               Watch chore worker status only
+  --merge               Watch merge queue status only
+  -h, --help            Show this help message
+
+Press Ctrl+C to exit.
+EOF
+}
+
+# Parse arguments
+while [[ $# -gt 0 ]]; do
+  case "$1" in
+    -n|--interval)
+      REFRESH_INTERVAL="$2"
+      shift 2
+      ;;
+    -o|--operation)
+      OPERATION_NAME="$2"
+      shift 2
+      ;;
+    --fix|--chore|--merge)
+      FILTER_ARGS+=("$1")
+      shift
+      ;;
+    -h|--help)
+      usage
+      exit 0
+      ;;
+    *)
+      # Treat bare argument as operation name
+      if [[ -z "${OPERATION_NAME}" ]] && [[ ! "$1" =~ ^- ]]; then
+        OPERATION_NAME="$1"
+        shift
+      else
+        echo "Unknown option: $1" >&2
+        usage
+        exit 1
+      fi
+      ;;
+  esac
+done
+
+# Validate interval is a positive number
+if ! [[ "${REFRESH_INTERVAL}" =~ ^[0-9]+$ ]] || [[ "${REFRESH_INTERVAL}" -lt 1 ]]; then
+  echo "Error: Interval must be a positive integer" >&2
+  exit 1
+fi
+
+# Show header with timestamp
+show_header() {
+  local now
+  now=$(date '+%Y-%m-%d %H:%M:%S')
+  echo "v0 watch | Last refresh: ${now} | Interval: ${REFRESH_INTERVAL}s | Ctrl+C to exit"
+  echo "─────────────────────────────────────────────────────────────────────"
+}
+
+# Main watch loop
+trap 'echo; exit 0' INT TERM
+
+while true; do
+  clear
+  show_header
+  if [[ -n "${OPERATION_NAME}" ]]; then
+    "${SCRIPT_DIR}/v0-status" "${OPERATION_NAME}" ${FILTER_ARGS[@]+"${FILTER_ARGS[@]}"} 2>&1 || true
+  else
+    "${SCRIPT_DIR}/v0-status" ${FILTER_ARGS[@]+"${FILTER_ARGS[@]}"} 2>&1 || true
+  fi
+  sleep "${REFRESH_INTERVAL}"
+done
