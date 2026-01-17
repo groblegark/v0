@@ -10,9 +10,14 @@ PROJECT_ROOT="$(cd "$TESTS_DIR/.." && pwd)"
 # Track the original working directory to ensure test isolation
 export ORIGINAL_PWD="${PWD}"
 
-# Determine BATS library path
+# Determine BATS library path (always use absolute paths to avoid issues in worktrees)
 if [[ -n "${BATS_LIB_PATH:-}" ]]; then
-    _BATS_LIB="${BATS_LIB_PATH}"
+    # Convert to absolute path if relative
+    if [[ "${BATS_LIB_PATH}" == /* ]]; then
+        _BATS_LIB="${BATS_LIB_PATH}"
+    else
+        _BATS_LIB="$(cd "${BATS_LIB_PATH}" && pwd)"
+    fi
 elif [[ -d "${TESTS_DIR}/bats/bats-support" ]]; then
     _BATS_LIB="${TESTS_DIR}/bats"
 else

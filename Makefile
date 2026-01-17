@@ -1,8 +1,11 @@
 # v0 Makefile - Test targets
 
+# Get the directory where this Makefile is located (works even if make is run from elsewhere)
+MAKEFILE_DIR := $(dir $(abspath $(firstword $(MAKEFILE_LIST))))
+
 # BATS detection - prefer system install, fall back to local
 SYSTEM_BATS := $(shell command -v bats 2>/dev/null)
-LOCAL_BATS := tests/bats/bats-core/bin/bats
+LOCAL_BATS := $(MAKEFILE_DIR)tests/bats/bats-core/bin/bats
 
 ifdef SYSTEM_BATS
     BATS := $(SYSTEM_BATS)
@@ -11,11 +14,11 @@ ifdef SYSTEM_BATS
     ifneq ($(wildcard $(SYSTEM_LIB_PATH)/bats-support/load.bash),)
         BATS_LIB_PATH := $(SYSTEM_LIB_PATH)
     else
-        BATS_LIB_PATH := $(shell pwd)/tests/bats
+        BATS_LIB_PATH := $(MAKEFILE_DIR)tests/bats
     endif
 else
     BATS := $(LOCAL_BATS)
-    BATS_LIB_PATH := $(shell pwd)/tests/bats
+    BATS_LIB_PATH := $(MAKEFILE_DIR)tests/bats
 endif
 
 # Parallel test execution - requires GNU parallel

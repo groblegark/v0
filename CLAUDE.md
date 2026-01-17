@@ -17,6 +17,16 @@ docs/debug/     # Troubleshooting guides (workflows, hooks, lost work recovery)
 tests/          # Bats unit tests
 ```
 
+## Common Commands
+
+- `make test` - Run all unit tests (parallel if GNU parallel installed)
+- `make test JOBS=1` - Run tests sequentially
+- `make test-verbose` - Run tests with verbose output and print failures
+- `make test-file FILE=tests/unit/v0-common.bats` - Run a specific test file
+- `make lint` - Run ShellCheck on scripts
+- `make lint-tests` - Run ShellCheck on test files
+- `make check` - Run linter and all tests
+
 ## Landing the plane
 
 Before committing changes:
