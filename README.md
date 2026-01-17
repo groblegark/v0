@@ -1,5 +1,7 @@
 # v0
 
+![CI](https://github.com/alfredjeanlab/v0/workflows/CI/badge.svg)
+
 A first step into multi-agent coding.
 
 Start vibe coding with a team of agents, without a learning curve.
