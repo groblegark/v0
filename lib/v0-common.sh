@@ -80,17 +80,24 @@ v0_find_main_repo() {
 v0_load_config() {
   local require_config="${1:-true}"
 
-  # Always search for project root from current directory
-  # This ensures we use the correct project even if V0_ROOT is inherited
-  # from a different project's environment
-  V0_ROOT=$(v0_find_project_root) || {
-    if [[ "${require_config}" = "true" ]]; then
-      echo "Error: No .v0.rc found in current directory or parents." >&2
-      echo "Run 'v0 init' to create one, or cd to a project with .v0.rc" >&2
-      exit 1
-    fi
+  # First try to find project root by walking up from current directory
+  # This ensures commands run from within a project use that project's config
+  local found_root
+  if found_root=$(v0_find_project_root 2>/dev/null); then
+    V0_ROOT="${found_root}"
+  # Fall back to pre-set V0_ROOT if it has a valid .v0.rc
+  # This handles worktrees and other scenarios where cwd doesn't contain .v0.rc
+  # but V0_ROOT was explicitly set by the parent process
+  elif [[ -n "${V0_ROOT:-}" ]] && [[ -f "${V0_ROOT}/.v0.rc" ]]; then
+    # V0_ROOT is already set and valid, keep it
+    :
+  elif [[ "${require_config}" = "true" ]]; then
+    echo "Error: No .v0.rc found in current directory or parents." >&2
+    echo "Run 'v0 init' to create one, or cd to a project with .v0.rc" >&2
+    exit 1
+  else
     return 1
-  }
+  fi
 
   # Defaults (can be overridden in .v0.rc)
   V0_BUILD_DIR=".v0/build"
