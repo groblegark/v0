@@ -7,6 +7,9 @@ V0_DIR="$(cd "$(dirname "$0")/.." && pwd)"
 source "${V0_DIR}/lib/v0-common.sh"
 v0_load_config
 
+# Source nudge functions for idle session monitoring
+source "${V0_DIR}/lib/nudge-common.sh"
+
 usage() {
   cat <<EOF
 Usage: v0 plan <name> <instructions> [options]
@@ -98,6 +101,11 @@ if [[ -n "${DIRECT}" ]]; then
   STATE_FILE="${STATE_DIR}/state.json"
   mkdir -p "${STATE_DIR}/logs"
 
+  # Check if operation is held
+  if [[ -f "${STATE_FILE}" ]]; then
+    v0_exit_if_held "${NAME}" "plan"
+  fi
+
   # Create or update operation state if it doesn't exist
   if [[ ! -f "${STATE_FILE}" ]]; then
     machine=$(hostname -s)
@@ -163,6 +171,11 @@ STATE_DIR="${BUILD_DIR}/operations/${NAME}"
 STATE_FILE="${STATE_DIR}/state.json"
 mkdir -p "${STATE_DIR}/logs"
 
+# Check if operation is held
+if [[ -f "${STATE_FILE}" ]]; then
+  v0_exit_if_held "${NAME}" "plan"
+fi
+
 # Create or update operation state if it doesn't exist
 if [[ ! -f "${STATE_FILE}" ]]; then
   machine=$(hostname -s)
@@ -222,6 +235,9 @@ EXIT_CODE=\$?
 echo \$EXIT_CODE > '${STATE_DIR}/logs/plan.exit'
 EOF
 chmod +x "${STATE_DIR}/run-plan.sh"
+
+# Ensure nudge worker is running to monitor the session
+ensure_nudge_running
 
 # Launch wrapper in detached tmux session
 tmux new-session -d -s "${PLAN_SESSION}" -c "${V0_ROOT}" "${STATE_DIR}/run-plan.sh"

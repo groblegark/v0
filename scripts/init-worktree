@@ -1,0 +1,32 @@
+#!/usr/bin/env bash
+# SPDX-License-Identifier: MIT
+# Copyright (c) 2026 Alfred Jean LLC
+# scripts/init-worktree - Initialize a v0 worktree with cached dependencies
+#
+# Called by V0_WORKTREE_INIT hook in .v0.rc after worktree creation.
+# Environment variables (set by v0-tree):
+#   V0_CHECKOUT_DIR - Path to the main project checkout
+#   V0_WORKTREE_DIR - Path to the new worktree directory
+
+set -euo pipefail
+
+checkout="${V0_CHECKOUT_DIR:?V0_CHECKOUT_DIR not set}"
+worktree="${V0_WORKTREE_DIR:?V0_WORKTREE_DIR not set}"
+
+BATS_SRC="${checkout}/tests/bats"
+BATS_DST="${worktree}/tests/bats"
+
+# Ensure bats is installed in the main checkout
+if [[ ! -d "${BATS_SRC}/bats-core" ]]; then
+    echo "Installing bats in main checkout..."
+    "${BATS_SRC}/install.sh"
+fi
+
+# Copy bats to worktree if not present
+if [[ ! -d "${BATS_DST}/bats-core" ]]; then
+    echo "Copying bats to worktree..."
+    mkdir -p "${BATS_DST}"
+    cp -r "${BATS_SRC}/bats-core" "${BATS_DST}/"
+    cp -r "${BATS_SRC}/bats-support" "${BATS_DST}/"
+    cp -r "${BATS_SRC}/bats-assert" "${BATS_DST}/"
+fi

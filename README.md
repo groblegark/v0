@@ -2,7 +2,7 @@
 
 ![CI](https://github.com/alfredjeanlab/v0/workflows/CI/badge.svg)
 
-A first step into multi-agent coding.
+A tool to ease you in to multi-agent vibe coding.
 
 Start vibe coding with a team of agents, without a learning curve.  
 Ask for features, fixes, and chores and watch them be implemented and merged automatically.
@@ -30,7 +30,7 @@ v0 init
 
 - [wk](https://github.com/alfredjeanlab/wok) - Issue tracking
 - [claude](https://claude.ai/claude-code) - Claude Code CLI
-- git, tmux, jq
+- git, tmux, jq, [flock](https://github.com/discoteq/flock) (macOS: `brew install flock tmux jq`)
 
 > ⚠️ _**Run at your own risk**_ ⚠️
 >
@@ -99,13 +99,13 @@ Completed plans are archived to `plans/archive/`.
 ### Other Commands
 
 ```bash
-v0 talk                     # Interactive Haiku for quick questions
-v0 status                   # Show all operations
-v0 watch                    # Continuously refresh status
-v0 attach fix               # Attach to a worker (fix, chore, mergeq)
-v0 coffee                   # Keep computer awake
-v0 prune                    # Clean up completed state
-v0 shutdown                 # Stop all workers and daemons
+v0 talk          # Interactive Haiku for quick questions
+v0 status        # Show all operations
+v0 watch         # Continuously refresh status
+v0 attach fix    # Attach to a worker (fix, chore, mergeq)
+v0 coffee        # Keep computer awake
+v0 prune         # Clean up completed state
+v0 shutdown      # Stop all workers and daemons
 ```
 
 While attached to tmux: scroll with `Ctrl-b [`, exit scroll with `q`, detach with `Ctrl-b d`.
@@ -124,15 +124,31 @@ V0_BUGFIX_BRANCH="fix/{id}"
 V0_CHORE_BRANCH="chore/{id}"
 ```
 
+### Worktree Initialization Hook
+
+The `V0_WORKTREE_INIT` setting lets you run a custom command after each worktree
+is created. This is useful for copying cached dependencies or setting up
+worktree-specific resources.
+
+The command runs in the new worktree directory with these environment variables:
+- `V0_CHECKOUT_DIR` - Path to the main project checkout
+- `V0_WORKTREE_DIR` - Path to the new worktree
+
+Example in `.v0.rc`:
+```bash
+# Copy bats test framework to avoid reinstalling per-worktree
+V0_WORKTREE_INIT='cp -r "${V0_CHECKOUT_DIR}/lib/bats" "${V0_WORKTREE_DIR}/lib/"'
+```
+
 ## Development
 
 ```bash
-# Install from git (for contributors)
-curl -fsSL https://raw.githubusercontent.com/alfredjeanlab/v0/main/install-remote.sh | bash
+git clone https://github.com/alfredjeanlab/v0.git
+cd v0
+make install   # Build and install
 
 make test      # Run tests (parallel if GNU parallel installed)
 make lint      # Lint scripts (requires shellcheck)
-make install   # Build and install
 ```
 
 ## License

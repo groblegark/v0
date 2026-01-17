@@ -1,0 +1,170 @@
+#!/bin/bash
+# SPDX-License-Identifier: MIT
+# Copyright (c) 2026 Alfred Jean LLC
+# v0-hold - Put an operation on hold
+set -e
+
+V0_DIR="$(cd "$(dirname "$0")/.." && pwd)"
+source "${V0_DIR}/lib/v0-common.sh"
+v0_load_config
+
+usage() {
+  cat <<'EOF'
+Usage: v0 hold <operation>
+       v0 hold --status [operation]
+
+Put an operation on hold or check hold status.
+
+When an operation is held:
+- Any currently executing work completes normally
+- New phases won't start (plan, decompose, build)
+- Blocked operations won't auto-start when dependencies merge
+
+Options:
+  --status    Show hold status for operation(s)
+  -h, --help  Show this help
+
+Release hold with:
+  v0 resume <operation>   # Continue the operation
+  v0 cancel <operation>   # Cancel the operation
+
+Examples:
+  v0 hold auth            # Put 'auth' on hold
+  v0 hold --status        # Show all held operations
+  v0 hold --status auth   # Check if 'auth' is held
+EOF
+  exit 0
+}
+
+emit_event() {
+  local name="$1"
+  local event="$2"
+  local details="$3"
+  local state_dir="${BUILD_DIR}/operations/${name}"
+  mkdir -p "${state_dir}/logs"
+  echo "[$(date -u +%Y-%m-%dT%H:%M:%SZ)] ${event}: ${details}" >> "${state_dir}/logs/events.log"
+}
+
+# Set hold on an operation
+set_hold() {
+  local name="$1"
+  local state_file="${BUILD_DIR}/operations/${name}/state.json"
+
+  if [[ ! -f "${state_file}" ]]; then
+    echo "Error: No operation found for '${name}'" >&2
+    exit 1
+  fi
+
+  # Check if already held
+  if v0_is_held "${name}"; then
+    local held_at
+    held_at=$(jq -r '.held_at // "unknown"' "${state_file}")
+    echo "Operation '${name}' is already on hold (since ${held_at})"
+    exit 0
+  fi
+
+  # Set hold
+  local tmp
+  tmp=$(mktemp)
+  jq '.held = true | .held_at = "'"$(date -u +%Y-%m-%dT%H:%M:%SZ)"'"' "${state_file}" > "${tmp}" && mv "${tmp}" "${state_file}"
+
+  emit_event "${name}" "hold:set" "Operation put on hold"
+
+  echo "Operation '${name}' is now on hold."
+  echo ""
+  echo "The operation will not proceed until the hold is released."
+  echo ""
+  echo "Release hold with:"
+  echo "  v0 resume ${name}"
+  echo ""
+  echo "Or cancel the operation:"
+  echo "  v0 cancel ${name}"
+}
+
+# Show hold status for one or all operations
+show_status() {
+  local name="$1"
+
+  if [[ -n "${name}" ]]; then
+    # Show status for specific operation
+    local state_file="${BUILD_DIR}/operations/${name}/state.json"
+
+    if [[ ! -f "${state_file}" ]]; then
+      echo "Error: No operation found for '${name}'" >&2
+      exit 1
+    fi
+
+    if v0_is_held "${name}"; then
+      local held_at
+      held_at=$(jq -r '.held_at // "unknown"' "${state_file}")
+      echo "Operation '${name}' is on hold (since ${held_at})"
+    else
+      echo "Operation '${name}' is not on hold"
+    fi
+  else
+    # Show all held operations
+    if [[ ! -d "${BUILD_DIR}/operations" ]]; then
+      echo "No operations found"
+      exit 0
+    fi
+
+    local found_any=""
+    echo "Held Operations:"
+    echo ""
+
+    for state_file in "${BUILD_DIR}"/operations/*/state.json; do
+      [[ -f "${state_file}" ]] || continue
+
+      local op_name
+      op_name=$(jq -r '.name' "${state_file}")
+
+      if v0_is_held "${op_name}"; then
+        local held_at phase
+        held_at=$(jq -r '.held_at // "unknown"' "${state_file}")
+        phase=$(jq -r '.phase' "${state_file}")
+        printf "  %-20s %s (phase: %s)\n" "${op_name}" "${held_at}" "${phase}"
+        found_any=1
+      fi
+    done
+
+    if [[ -z "${found_any}" ]]; then
+      echo "  (no operations on hold)"
+    fi
+  fi
+}
+
+STATUS=""
+NAME=""
+
+# Parse args
+while [[ $# -gt 0 ]]; do
+  case "$1" in
+    --status)
+      STATUS=1
+      shift
+      ;;
+    -h|--help)
+      usage
+      ;;
+    -*)
+      echo "Unknown option: $1" >&2
+      echo "Run 'v0 hold --help' for usage" >&2
+      exit 1
+      ;;
+    *)
+      NAME="$1"
+      shift
+      ;;
+  esac
+done
+
+if [[ -n "${STATUS}" ]]; then
+  show_status "${NAME}"
+else
+  if [[ -z "${NAME}" ]]; then
+    echo "Error: Operation name required" >&2
+    echo "Run 'v0 hold --help' for usage" >&2
+    exit 1
+  fi
+  set_hold "${NAME}"
+fi

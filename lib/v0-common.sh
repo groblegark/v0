@@ -106,6 +106,7 @@ v0_load_config() {
   V0_FEATURE_BRANCH="feature/{name}"
   V0_BUGFIX_BRANCH="fix/{id}"
   V0_CHORE_BRANCH="chore/{id}"
+  V0_WORKTREE_INIT="${V0_WORKTREE_INIT:-}"  # Optional worktree init hook
 
   # Load project config (overrides defaults)
   source "${V0_ROOT}/.v0.rc"
@@ -137,6 +138,8 @@ v0_load_config() {
   # Export for subprocesses
   export V0_ROOT PROJECT ISSUE_PREFIX REPO_NAME V0_STATE_DIR BUILD_DIR PLANS_DIR
   export V0_BUILD_DIR V0_PLANS_DIR V0_MAIN_BRANCH V0_FEATURE_BRANCH V0_BUGFIX_BRANCH V0_CHORE_BRANCH
+  # shellcheck disable=SC2090  # V0_WORKTREE_INIT is a shell command used with eval
+  export V0_WORKTREE_INIT
 }
 
 # Generate a namespaced tmux session name
@@ -376,7 +379,7 @@ archive_plan() {
 }
 
 # Required dependencies for v0
-V0_REQUIRED_DEPS=(git tmux jq wk claude)
+V0_REQUIRED_DEPS=(git tmux jq wk claude flock)
 
 # Get installation instructions for a missing dependency
 # Usage: v0_install_instructions <command>
@@ -416,6 +419,14 @@ v0_install_instructions() {
     claude)
       echo "  https://claude.ai/claude-code"
       echo "  npm install -g @anthropic-ai/claude-code"
+      ;;
+    flock)
+      case "${os}" in
+        Darwin) echo "  brew install flock" ;;
+        Linux)  echo "  sudo apt install util-linux  # Debian/Ubuntu (usually pre-installed)"
+                echo "  sudo dnf install util-linux  # Fedora (usually pre-installed)" ;;
+        *)      echo "  https://github.com/discoteq/flock" ;;
+      esac
       ;;
     *)
       echo "  (no installation instructions available)"
@@ -515,7 +526,44 @@ v0_trigger_dependent_operations() {
 
     echo "Unblocking dependent operation: ${dep_op} (resuming from phase: ${blocked_phase})"
 
-    # Resume the operation in background
-    "${V0_DIR}/bin/v0-feature" "${dep_op}" --resume &
+    # Only resume if not held - respect existing holds
+    if v0_is_held "${dep_op}"; then
+      echo "Operation '${dep_op}' remains on hold (use 'v0 resume ${dep_op}' to start)"
+    else
+      # Resume the operation in background
+      "${V0_DIR}/bin/v0-feature" "${dep_op}" --resume &
+    fi
   done
+}
+
+# v0_is_held <name>
+# Check if operation is held
+# Returns 0 if held, 1 if not held
+v0_is_held() {
+  local name="$1"
+  local state_file="${BUILD_DIR}/operations/${name}/state.json"
+  [[ ! -f "${state_file}" ]] && return 1
+  local held
+  held=$(jq -r '.held // false' "${state_file}")
+  [[ "${held}" = "true" ]]
+}
+
+# v0_exit_if_held <name> <command>
+# Print hold notice and exit if operation is held
+# Usage: v0_exit_if_held <name> <command>
+v0_exit_if_held() {
+  local name="$1"
+  local command="$2"
+  if v0_is_held "${name}"; then
+    echo "Operation '${name}' is on hold."
+    echo ""
+    echo "The operation will not proceed until the hold is released."
+    echo ""
+    echo "Release hold with:"
+    echo "  v0 resume ${name}"
+    echo ""
+    echo "Or cancel the operation:"
+    echo "  v0 cancel ${name}"
+    exit 0
+  fi
 }

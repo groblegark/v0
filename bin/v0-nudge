@@ -21,7 +21,6 @@ fi
 
 # Ensure V0_STATE_DIR has a fallback
 V0_STATE_DIR="${V0_STATE_DIR:-${HOME}/.local/state/v0}"
-NUDGE_PID_FILE="${V0_STATE_DIR}/.nudge.pid"
 NUDGE_LOG_FILE="${V0_STATE_DIR}/.nudge.log"
 
 usage() {
@@ -142,7 +141,7 @@ nudge_check_cycle() {
 
     # Get latest session file
     local session_file
-    session_file=$(get_latest_session_file "${project_dir}")
+    session_file=$(get_latest_session_file "${project_dir}") || session_file=""
     [[ -z "${session_file}" ]] && continue
 
     # Quick check: is file recently modified?
@@ -191,7 +190,7 @@ nudge_daemon() {
 # Signal handler for graceful shutdown
 nudge_stop_handler() {
   nudge_log "Nudge daemon stopping (signal received)"
-  rm -f "${NUDGE_PID_FILE}"
+  rm -f "$(nudge_pid_file)"
   exit 0
 }
 
@@ -200,7 +199,9 @@ nudge_stop_handler() {
 # ============================================================================
 
 cmd_start() {
-  mkdir -p "$(dirname "${NUDGE_PID_FILE}")"
+  local pid_file
+  pid_file=$(nudge_pid_file)
+  mkdir -p "$(dirname "${pid_file}")"
 
   if nudge_running; then
     echo "Nudge worker already running"
@@ -210,21 +211,24 @@ cmd_start() {
   # Start daemon in background
   nohup "$0" daemon >> "${NUDGE_LOG_FILE}" 2>&1 &
   local pid=$!
-  echo "${pid}" > "${NUDGE_PID_FILE}"
+  echo "${pid}" > "${pid_file}"
 
   echo "Nudge worker started (PID: ${pid})"
   nudge_log "Nudge daemon started by user (PID: ${pid})"
 }
 
 cmd_stop() {
-  if [[ -f "${NUDGE_PID_FILE}" ]]; then
+  local pid_file
+  pid_file=$(nudge_pid_file)
+
+  if [[ -f "${pid_file}" ]]; then
     local pid
-    pid=$(cat "${NUDGE_PID_FILE}")
+    pid=$(cat "${pid_file}")
     if [[ -n "${pid}" ]] && kill -0 "${pid}" 2>/dev/null; then
       kill "${pid}" 2>/dev/null || true
       nudge_log "Nudge daemon stopped by user (PID: ${pid})"
     fi
-    rm -f "${NUDGE_PID_FILE}"
+    rm -f "${pid_file}"
   fi
 
   # Also kill any orphaned processes
@@ -234,10 +238,13 @@ cmd_stop() {
 }
 
 cmd_status() {
+  local pid_file
+  pid_file=$(nudge_pid_file)
+
   if nudge_running; then
-    if [[ -f "${NUDGE_PID_FILE}" ]]; then
+    if [[ -f "${pid_file}" ]]; then
       local pid
-      pid=$(cat "${NUDGE_PID_FILE}")
+      pid=$(cat "${pid_file}")
       echo "Nudge worker running (PID: ${pid})"
     else
       echo "Nudge worker running"
@@ -260,7 +267,7 @@ cmd_check() {
 cmd_daemon() {
   # Internal command - runs the actual daemon loop
   # This is called via nohup from cmd_start
-  echo "$$" > "${NUDGE_PID_FILE}"
+  echo "$$" > "$(nudge_pid_file)"
   nudge_daemon
 }
 

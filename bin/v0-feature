@@ -366,6 +366,14 @@ if [[ -n "${RESUME}" ]]; then
     emit_event "state:upgraded" "Added missing merge_queued field"
   fi
 
+  # Clear hold on resume
+  if v0_is_held "${NAME}"; then
+    echo "Clearing hold on '${NAME}'..."
+    tmp=$(mktemp)
+    jq '.held = false | .held_at = null' "${STATE_FILE}" > "${tmp}" && mv "${tmp}" "${STATE_FILE}"
+    emit_event "hold:cleared" "Hold cleared by resume"
+  fi
+
   echo "Resuming '${NAME}' from phase: ${PHASE}"
 
   # Handle --attach flag for resume mode
@@ -545,6 +553,11 @@ if [[ -n "${RESUME}" ]]; then
 else
   init_state
   PHASE="init"
+
+  # Check if operation is held (for new operations with existing state)
+  if [[ -f "${STATE_FILE}" ]]; then
+    v0_exit_if_held "${NAME}" "feature"
+  fi
 
   if [[ -z "${EAGER}" ]] && [[ -n "${AFTER}" ]] && [[ "${AFTER}" != "null" ]]; then
     if ! is_after_op_merged "${AFTER}"; then
@@ -748,6 +761,19 @@ EOF
     if [[ "${PLAN_FOUND}" != "${PLANS_DIR}/${NAME}.md" ]]; then
       /bin/cp "${PLAN_FOUND}" "${PLANS_DIR}/${NAME}.md"
       emit_event "plan:copied" "Copied from ${PLAN_FOUND} to main repo"
+    fi
+
+    # Auto-commit the plan file (unless already committed or worktree is dirty with other changes)
+    if git -C "${V0_ROOT}" diff --quiet -- "${V0_PLANS_DIR}/${NAME}.md" 2>/dev/null && \
+       git -C "${V0_ROOT}" ls-files --error-unmatch "${V0_PLANS_DIR}/${NAME}.md" &>/dev/null; then
+      emit_event "plan:commit" "Already committed"
+    elif git -C "${V0_ROOT}" check-ignore -q "${V0_PLANS_DIR}/${NAME}.md" 2>/dev/null; then
+      emit_event "plan:commit" "Skipped (gitignored)"
+    elif git -C "${V0_ROOT}" add "${V0_PLANS_DIR}/${NAME}.md" && \
+         git -C "${V0_ROOT}" commit -m "Add plan: ${NAME}" -m "Auto-committed by v0 feature"; then
+      emit_event "plan:commit" "Committed ${V0_PLANS_DIR}/${NAME}.md"
+    else
+      emit_event "plan:commit" "Failed to commit (worktree may have other changes)"
     fi
   fi
 

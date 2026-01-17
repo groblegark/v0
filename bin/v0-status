@@ -560,6 +560,14 @@ if [[ -n "${LIST}" ]] || [[ -n "${BLOCKED}" ]]; then
       after_icon=" ${C_YELLOW}[after ${after}]${C_RESET}"
     fi
 
+    # Add hold indicator
+    hold_icon=""
+    held=$(jq -r '.held // false' "${state_file}")
+    if [[ "${held}" = "true" ]]; then
+      held_at=$(jq -r '.held_at // ""' "${state_file}")
+      hold_icon=" ${C_YELLOW}[HELD]${C_RESET}"
+    fi
+
     # Determine display phase and merge indicator
     display_phase="${phase}"
     merge_icon=""
@@ -651,7 +659,7 @@ if [[ -n "${LIST}" ]] || [[ -n "${BLOCKED}" ]]; then
         ;;
     esac
 
-    printf "  %-20s %b%b%b%b ${C_DIM}(created: %s)${C_RESET}\n" "${name}:" "${display_phase}" "${status_icon}" "${after_icon}" "${merge_icon}" "${created}"
+    printf "  %-20s %b%b%b%b%b ${C_DIM}(created: %s)${C_RESET}\n" "${name}:" "${display_phase}" "${status_icon}" "${after_icon}" "${hold_icon}" "${merge_icon}" "${created}"
   done
 
   if [[ -z "${found_any}" ]]; then
@@ -735,7 +743,7 @@ if [[ -n "${LIST}" ]] || [[ -n "${BLOCKED}" ]]; then
     echo ""
     echo "Nudge Worker:"
     if nudge_running; then
-      nudge_pid_val=$(cat "${NUDGE_PID_FILE}" 2>/dev/null)
+      nudge_pid_val=$(cat "$(nudge_pid_file)" 2>/dev/null)
       echo -e "  Status: ${C_GREEN}Running${C_RESET} ${C_DIM}[pid: ${nudge_pid_val}]${C_RESET}"
     else
       echo -e "  Status: ${C_DIM}Stopped${C_RESET}"
@@ -793,6 +801,10 @@ show_status() {
   worker_started_at=$(echo "${state}" | jq -r '.worker_started_at // empty')
   local error_msg
   error_msg=$(echo "${state}" | jq -r '.error // empty')
+  local held
+  held=$(echo "${state}" | jq -r '.held // false')
+  local held_at
+  held_at=$(echo "${state}" | jq -r '.held_at // empty')
   local local_machine
   local_machine=$(hostname -s)
 
@@ -875,6 +887,14 @@ show_status() {
 
   echo "Machine: ${machine}"
   echo "Feature: ${feature_id:-N/A}"
+
+  # Show hold status if held
+  if [[ "${held}" = "true" ]]; then
+    echo ""
+    echo "Hold:"
+    echo "  Status: HELD (since ${held_at})"
+    echo "  Release: v0 resume ${NAME}"
+  fi
 
   # Show after info if applicable
   if [[ -n "${after}" ]] && [[ "${after}" != "null" ]]; then

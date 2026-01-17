@@ -28,11 +28,11 @@ setup() {
     cd "$TEST_TEMP_DIR/project"
     export ORIGINAL_PATH="$PATH"
 
-    # Create mock bin directory
-    MOCK_BIN="$TEST_TEMP_DIR/mock-bin"
-    mkdir -p "$MOCK_BIN"
+    # Create mock binaries for CI environment (claude/tmux not installed)
+    setup_mock_binaries claude tmux
 
-    # Set V0_PLAN_EXEC to use our mock
+    # Set V0_PLAN_EXEC to use our mock (created per-test as needed)
+    MOCK_BIN="$TEST_TEMP_DIR/mock-bin"
     export V0_PLAN_EXEC="$MOCK_BIN/v0-plan-exec"
 
     # Set V0_ROOT to prevent walking up to parent .v0.rc
@@ -45,8 +45,13 @@ teardown() {
     unset V0_PLAN_EXEC
     unset V0_ROOT
 
-    # Kill any test tmux sessions (with timeout to prevent hangs)
-    # Use timeout command and avoid pipeline that can hang on while read
+    if [ -n "$TEST_TEMP_DIR" ] && [ -d "$TEST_TEMP_DIR" ]; then
+        rm -rf "$TEST_TEMP_DIR"
+    fi
+}
+
+# Clean up tmux sessions once at end of file (not per-test)
+teardown_file() {
     local sessions
     if sessions=$(timeout 2 tmux list-sessions -F '#{session_name}' 2>/dev/null); then
         for session in $sessions; do
@@ -54,10 +59,6 @@ teardown() {
                 timeout 1 tmux kill-session -t "$session" 2>/dev/null || true
             fi
         done
-    fi
-
-    if [ -n "$TEST_TEMP_DIR" ] && [ -d "$TEST_TEMP_DIR" ]; then
-        rm -rf "$TEST_TEMP_DIR"
     fi
 }
 

@@ -34,32 +34,8 @@ load "${_BATS_LIB}/bats-assert/load.bash"
 # ============================================================================
 # Set a default timeout for all tests to prevent hangs
 # Individual tests can override by setting BATS_TEST_TIMEOUT in setup_file() or the test
-# Typical test files complete in <8s total, so 10s per test is generous headroom
-: "${BATS_TEST_TIMEOUT:=10}"
+: "${BATS_TEST_TIMEOUT:=5}"
 export BATS_TEST_TIMEOUT
-
-# ============================================================================
-# Test Timing Support
-# ============================================================================
-# Enable per-test timing by setting BATS_TEST_TIMING=1
-# This outputs timing info for each test to help identify slow tests
-
-_test_start_time=""
-
-_timing_start() {
-    if [[ -n "${BATS_TEST_TIMING:-}" ]]; then
-        _test_start_time=$(gdate +%s%N 2>/dev/null || date +%s%N)
-    fi
-}
-
-_timing_end() {
-    if [[ -n "${BATS_TEST_TIMING:-}" && -n "$_test_start_time" ]]; then
-        local end_time
-        end_time=$(gdate +%s%N 2>/dev/null || date +%s%N)
-        local ms=$(( (end_time - _test_start_time) / 1000000 ))
-        echo "# TIME: ${ms}ms - ${BATS_TEST_NAME}" >&3
-    fi
-}
 
 # ============================================================================
 # Directory Template Caching
@@ -99,7 +75,6 @@ _cleanup_deferred() {
 
 # Create isolated test environment
 setup() {
-    _timing_start
     _create_cached_template
 
     # Create unique temp directory for each test
@@ -151,8 +126,6 @@ teardown() {
             rm -rf "$TEST_TEMP_DIR"
         fi
     fi
-
-    _timing_end
 }
 
 # ============================================================================
@@ -447,4 +420,28 @@ assert_test_env() {
     fi
 
     return $errors
+}
+
+# ============================================================================
+# Mock Binary Helpers
+# ============================================================================
+
+# Create mock binaries for commands not available in CI
+# Usage: setup_mock_binaries [commands...]
+# Example: setup_mock_binaries claude tmux
+# This creates simple mock scripts and adds them to PATH
+setup_mock_binaries() {
+    local mock_dir="${TEST_TEMP_DIR}/mock-bin"
+    mkdir -p "$mock_dir"
+
+    for cmd in "$@"; do
+        cat > "$mock_dir/$cmd" <<EOF
+#!/bin/bash
+echo "mock $cmd \$*"
+exit 0
+EOF
+        chmod +x "$mock_dir/$cmd"
+    done
+
+    export PATH="$mock_dir:$PATH"
 }

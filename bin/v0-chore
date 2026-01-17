@@ -173,6 +173,7 @@ fi
 
 BRANCH="chore/\${CHORE_ID}"
 STATE_DIR="${BUILD_DIR}/chore/\${CHORE_ID}"
+WORKTREE_ROOT="\$(pwd)"
 
 cd ${REPO_NAME}
 
@@ -192,7 +193,7 @@ cat > "\${STATE_DIR}/state.json" <<STATE_EOF
 STATE_EOF
 
 # Set assignee to this worker
-wk edit "\${CHORE_ID}" assignee "worker:chore"
+(cd "\${WORKTREE_ROOT}" && wk edit "\${CHORE_ID}" assignee "worker:chore")
 
 echo "Reset to latest main"
 echo "Ready to work on \${CHORE_ID}"
@@ -212,6 +213,7 @@ fi
 
 BRANCH="chore/\${CHORE_ID}"
 STATE_DIR="${BUILD_DIR}/chore/\${CHORE_ID}"
+WORKTREE_ROOT="\$(pwd)"
 
 cd ${REPO_NAME}
 
@@ -241,11 +243,11 @@ echo "Queueing for merge..."
 "${V0_DIR}/bin/v0-mergeq" --enqueue "\${BRANCH}" --issue-id "\${CHORE_ID}"
 
 # Transfer ownership to merge queue
-wk edit "\${CHORE_ID}" assignee "worker:mergeq"
+(cd "\${WORKTREE_ROOT}" && wk edit "\${CHORE_ID}" assignee "worker:mergeq")
 
-# Close the chore
+# Close the chore (run from worktree root where .wok/config.toml has workspace setting)
 echo "Closing \${CHORE_ID}..."
-wk done "\${CHORE_ID}"
+(cd "\${WORKTREE_ROOT}" && wk done "\${CHORE_ID}")
 
 # Reset worktree to latest main
 echo "Resetting to latest main..."

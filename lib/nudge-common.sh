@@ -10,8 +10,11 @@
 # Ensure V0_DIR is set
 V0_DIR="${V0_DIR:-$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)}"
 
-# PID file location for nudge daemon
-NUDGE_PID_FILE="${V0_STATE_DIR:-.}/.nudge.pid"
+# nudge_pid_file - Get the PID file path
+# Uses V0_STATE_DIR if available, falls back to current directory
+nudge_pid_file() {
+  echo "${V0_STATE_DIR:-.}/.nudge.pid"
+}
 
 # ============================================================================
 # Core Nudge Worker Functions
@@ -20,10 +23,13 @@ NUDGE_PID_FILE="${V0_STATE_DIR:-.}/.nudge.pid"
 # Check if nudge worker is running
 # Returns: 0 if running, 1 if not
 nudge_running() {
+  local pid_file
+  pid_file=$(nudge_pid_file)
+
   # Check by PID file first (more reliable)
-  if [[ -f "${NUDGE_PID_FILE}" ]]; then
+  if [[ -f "${pid_file}" ]]; then
     local pid
-    pid=$(cat "${NUDGE_PID_FILE}" 2>/dev/null)
+    pid=$(cat "${pid_file}" 2>/dev/null)
     if [[ -n "${pid}" ]] && kill -0 "${pid}" 2>/dev/null; then
       return 0
     fi
@@ -158,7 +164,7 @@ is_session_done() {
 
   local state stop_reason has_tool_use
 
-  state=$(get_session_state "${session_file}")
+  state=$(get_session_state "${session_file}") || state=""
   [[ -z "${state}" ]] && return 1  # No state found, assume still active
 
   stop_reason=$(echo "${state}" | jq -r '.stop_reason // empty')

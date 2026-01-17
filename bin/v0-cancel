@@ -111,9 +111,9 @@ for NAME in "${NAMES[@]}"; do
     kill -9 "${worker_pid}" 2>/dev/null || true
   fi
 
-  # Update state to cancelled
+  # Update state to cancelled (and clear hold if set)
   tmp=$(mktemp)
-  jq '.phase = "cancelled" | .cancelled_at = "'"$(date -u +%Y-%m-%dT%H:%M:%SZ)"'"' "${STATE_FILE}" > "${tmp}" && mv "${tmp}" "${STATE_FILE}"
+  jq '.phase = "cancelled" | .cancelled_at = "'"$(date -u +%Y-%m-%dT%H:%M:%SZ)"'" | .held = false | .held_at = null' "${STATE_FILE}" > "${tmp}" && mv "${tmp}" "${STATE_FILE}"
 
   # Log the event
   mkdir -p "${STATE_DIR}/logs"
