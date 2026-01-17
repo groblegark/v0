@@ -2,6 +2,35 @@
 # Tests for v0-coffee - Keep computer awake (caffeinate wrapper)
 load '../helpers/test_helper'
 
+# Track PIDs of caffeinate processes we start
+_COFFEE_PIDS=()
+
+# Custom teardown to ensure caffeinate processes are cleaned up
+teardown() {
+    # Kill any caffeinate processes we started
+    for pid in "${_COFFEE_PIDS[@]}"; do
+        kill "$pid" 2>/dev/null || true
+    done
+    _COFFEE_PIDS=()
+
+    # Also clean up via the normal coffee stop mechanism
+    if [[ -n "${V0_STATE_DIR:-}" ]] && [[ -f "${V0_STATE_DIR}/.coffee.pid" ]]; then
+        local pid
+        pid=$(cat "${V0_STATE_DIR}/.coffee.pid" 2>/dev/null || true)
+        if [[ -n "$pid" ]]; then
+            kill "$pid" 2>/dev/null || true
+        fi
+        rm -f "${V0_STATE_DIR}/.coffee.pid"
+    fi
+
+    # Call parent teardown
+    export HOME="$REAL_HOME"
+    export PATH="$ORIGINAL_PATH"
+    if [ -n "$TEST_TEMP_DIR" ] && [ -d "$TEST_TEMP_DIR" ]; then
+        rm -rf "$TEST_TEMP_DIR"
+    fi
+}
+
 # Helper to create an isolated project directory
 setup_isolated_project() {
     local isolated_dir="${TEST_TEMP_DIR}/isolated"

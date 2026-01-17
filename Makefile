@@ -62,7 +62,7 @@ test-unit: test-init
 		echo "Error: BATS not found. Run 'make test-init' or install bats-core."; \
 		exit 1; \
 	fi
-	BATS_LIB_PATH="$(BATS_LIB_PATH)" $(BATS) tests/unit/
+	BATS_LIB_PATH="$(BATS_LIB_PATH)" $(BATS) --print-output-on-failure tests/unit/
 
 # Run tests with verbose output
 test-verbose: test-init

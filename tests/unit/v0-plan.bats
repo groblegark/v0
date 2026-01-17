@@ -46,10 +46,16 @@ teardown() {
     unset V0_PLAN_EXEC
     unset V0_ROOT
 
-    # Kill any test tmux sessions
-    tmux list-sessions 2>/dev/null | grep "^v0-testproj-" | cut -d: -f1 | while read -r session; do
-        tmux kill-session -t "${session}" 2>/dev/null || true
-    done
+    # Kill any test tmux sessions (with timeout to prevent hangs)
+    # Use timeout command and avoid pipeline that can hang on while read
+    local sessions
+    if sessions=$(timeout 2 tmux list-sessions -F '#{session_name}' 2>/dev/null); then
+        for session in $sessions; do
+            if [[ "$session" == v0-testproj-* ]]; then
+                timeout 1 tmux kill-session -t "$session" 2>/dev/null || true
+            fi
+        done
+    fi
 
     if [ -n "${TEST_TEMP_DIR}" ] && [ -d "${TEST_TEMP_DIR}" ]; then
         rm -rf "${TEST_TEMP_DIR}"
@@ -449,8 +455,8 @@ EOF
 # ============================================================================
 
 @test "v0-plan-exec commits plan in clean git repo" {
-    create_v0rc "testproj" "tp"
     init_mock_git_repo "${TEST_TEMP_DIR}/project"
+    create_v0rc "testproj" "tp"
     source_lib "v0-common.sh"
     v0_load_config
 
@@ -474,8 +480,8 @@ EOF
 }
 
 @test "v0-plan-exec skips commit with V0_DRAFT=1" {
-    create_v0rc "testproj" "tp"
     init_mock_git_repo "${TEST_TEMP_DIR}/project"
+    create_v0rc "testproj" "tp"
     source_lib "v0-common.sh"
     v0_load_config
 
@@ -496,8 +502,8 @@ EOF
 }
 
 @test "v0-plan-exec skips commit in dirty worktree" {
-    create_v0rc "testproj" "tp"
     init_mock_git_repo "${TEST_TEMP_DIR}/project"
+    create_v0rc "testproj" "tp"
     source_lib "v0-common.sh"
     v0_load_config
 
@@ -515,8 +521,8 @@ EOF
 }
 
 @test "v0-plan-exec logs commit status" {
-    create_v0rc "testproj" "tp"
     init_mock_git_repo "${TEST_TEMP_DIR}/project"
+    create_v0rc "testproj" "tp"
     source_lib "v0-common.sh"
     v0_load_config
 

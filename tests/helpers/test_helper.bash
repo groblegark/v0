@@ -30,6 +30,15 @@ load "${_BATS_LIB}/bats-support/load.bash"
 load "${_BATS_LIB}/bats-assert/load.bash"
 
 # ============================================================================
+# Test Timeout
+# ============================================================================
+# Set a default timeout for all tests to prevent hangs
+# Individual tests can override by setting BATS_TEST_TIMEOUT in setup_file() or the test
+# Typical test files complete in <8s total, so 10s per test is generous headroom
+: "${BATS_TEST_TIMEOUT:=10}"
+export BATS_TEST_TIMEOUT
+
+# ============================================================================
 # Test Timing Support
 # ============================================================================
 # Enable per-test timing by setting BATS_TEST_TIMING=1
@@ -150,8 +159,9 @@ teardown() {
 # Source Caching
 # ============================================================================
 # Track sourced libraries to avoid re-sourcing (parsing overhead)
+# Note: Uses simple string matching since macOS bash 3.2 doesn't support associative arrays
 
-declare -A _SOURCED_LIBS 2>/dev/null || _SOURCED_LIBS=""
+_SOURCED_LIBS=""
 
 # Source a library file from lib/
 # Usage: source_lib "v0-common.sh"
@@ -160,14 +170,14 @@ source_lib() {
     local lib="$1"
     local lib_path="$PROJECT_ROOT/lib/$lib"
 
-    # Skip if already sourced in this test run (bash 4+ with associative arrays)
-    if [[ -n "${_SOURCED_LIBS[$lib]:-}" ]]; then
+    # Skip if already sourced in this test run (use string matching for bash 3.2 compat)
+    if [[ ":${_SOURCED_LIBS}:" == *":${lib}:"* ]]; then
         return 0
     fi
 
     if [[ -f "$lib_path" ]]; then
         source "$lib_path"
-        _SOURCED_LIBS[$lib]=1
+        _SOURCED_LIBS="${_SOURCED_LIBS}:${lib}"
     else
         echo "Library not found: $lib" >&2
         return 1
@@ -183,7 +193,7 @@ source_lib_with_mocks() {
     export PATH="$TESTS_DIR/helpers/mock-bin:$PATH"
     source "$PROJECT_ROOT/lib/$lib"
     # Mark as sourced (with mocks) to prevent non-mock source_lib from re-sourcing
-    _SOURCED_LIBS["${lib}_mocked"]=1
+    _SOURCED_LIBS="${_SOURCED_LIBS}:${lib}_mocked"
 }
 
 # Create a minimal .v0.rc configuration file

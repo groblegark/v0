@@ -45,10 +45,16 @@ teardown() {
     unset V0_PLAN_EXEC
     unset V0_ROOT
 
-    # Kill any test tmux sessions
-    tmux list-sessions 2>/dev/null | grep "^v0-testproj-" | cut -d: -f1 | while read session; do
-        tmux kill-session -t "$session" 2>/dev/null || true
-    done
+    # Kill any test tmux sessions (with timeout to prevent hangs)
+    # Use timeout command and avoid pipeline that can hang on while read
+    local sessions
+    if sessions=$(timeout 2 tmux list-sessions -F '#{session_name}' 2>/dev/null); then
+        for session in $sessions; do
+            if [[ "$session" == v0-testproj-* ]]; then
+                timeout 1 tmux kill-session -t "$session" 2>/dev/null || true
+            fi
+        done
+    fi
 
     if [ -n "$TEST_TEMP_DIR" ] && [ -d "$TEST_TEMP_DIR" ]; then
         rm -rf "$TEST_TEMP_DIR"
