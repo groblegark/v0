@@ -16,7 +16,7 @@ done
 V0_DIR="$(cd -P "$(dirname "${SOURCE}")/.." && pwd)"
 
 # Commands that need config
-CONFIG_COMMANDS="plan tree decompose merge mergeq status feature resume fix chore attach cancel shutdown startup"
+CONFIG_COMMANDS="plan tree decompose merge mergeq status feature resume fix chore attach cancel shutdown startup hold"
 
 # Commands that work without config
 NO_CONFIG_COMMANDS="init help version coffee"
@@ -42,6 +42,7 @@ Commands:
   chore         Sequential chore processing worker
   attach        Attach to a running tmux session (fix, chore, mergeq, feature)
   cancel        Cancel a running operation
+  hold          Put an operation on hold (pause phase transitions)
   shutdown      Stop all v0 processes for this project
   startup       Start workers (fix, chore, mergeq)
   prune         Remove completed/cancelled operation state
@@ -111,7 +112,7 @@ CMD="${1}"
 shift
 
 case "${CMD}" in
-  plan|tree|decompose|merge|mergeq|status|watch|feature|fix|chore|attach|cancel|shutdown|startup|talk|coffee|prune|monitor)
+  plan|tree|decompose|merge|mergeq|status|watch|feature|fix|chore|attach|cancel|shutdown|startup|talk|coffee|prune|monitor|hold)
     exec "${V0_DIR}/bin/v0-${CMD}" "$@"
     ;;
   # Aliases

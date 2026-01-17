@@ -530,3 +530,35 @@ v0_trigger_dependent_operations() {
     "${V0_DIR}/bin/v0-feature" "${dep_op}" --resume &
   done
 }
+
+# v0_is_held <name>
+# Check if operation is held
+# Returns 0 if held, 1 if not held
+v0_is_held() {
+  local name="$1"
+  local state_file="${BUILD_DIR}/operations/${name}/state.json"
+  [[ ! -f "${state_file}" ]] && return 1
+  local held
+  held=$(jq -r '.held // false' "${state_file}")
+  [[ "${held}" = "true" ]]
+}
+
+# v0_exit_if_held <name> <command>
+# Print hold notice and exit if operation is held
+# Usage: v0_exit_if_held <name> <command>
+v0_exit_if_held() {
+  local name="$1"
+  local command="$2"
+  if v0_is_held "${name}"; then
+    echo "Operation '${name}' is on hold."
+    echo ""
+    echo "The operation will not proceed until the hold is released."
+    echo ""
+    echo "Release hold with:"
+    echo "  v0 resume ${name}"
+    echo ""
+    echo "Or cancel the operation:"
+    echo "  v0 cancel ${name}"
+    exit 0
+  fi
+}

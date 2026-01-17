@@ -366,6 +366,14 @@ if [[ -n "${RESUME}" ]]; then
     emit_event "state:upgraded" "Added missing merge_queued field"
   fi
 
+  # Clear hold on resume
+  if v0_is_held "${NAME}"; then
+    echo "Clearing hold on '${NAME}'..."
+    tmp=$(mktemp)
+    jq '.held = false | .held_at = null' "${STATE_FILE}" > "${tmp}" && mv "${tmp}" "${STATE_FILE}"
+    emit_event "hold:cleared" "Hold cleared by resume"
+  fi
+
   echo "Resuming '${NAME}' from phase: ${PHASE}"
 
   # Handle --attach flag for resume mode
@@ -545,6 +553,11 @@ if [[ -n "${RESUME}" ]]; then
 else
   init_state
   PHASE="init"
+
+  # Check if operation is held (for new operations with existing state)
+  if [[ -f "${STATE_FILE}" ]]; then
+    v0_exit_if_held "${NAME}" "feature"
+  fi
 
   if [[ -z "${EAGER}" ]] && [[ -n "${AFTER}" ]] && [[ "${AFTER}" != "null" ]]; then
     if ! is_after_op_merged "${AFTER}"; then

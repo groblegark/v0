@@ -163,6 +163,17 @@ cleanup() {
 }
 trap cleanup EXIT
 
+# Check hold before starting new phases
+# Returns 0 if can proceed, 1 if held
+check_hold_before_phase() {
+  if v0_is_held "${NAME}"; then
+    log "Operation is held, pausing worker"
+    emit_event "hold:paused" "Worker paused due to hold"
+    return 1
+  fi
+  return 0
+}
+
 run_plan_phase() {
   log "Starting plan phase"
 
@@ -577,15 +588,21 @@ main() {
 
   case "${PHASE}" in
     init)
+      check_hold_before_phase || exit 0
       run_plan_phase || exit 1
+      check_hold_before_phase || exit 0
       run_decompose_phase || exit 1
+      check_hold_before_phase || exit 0
       run_build_phase || exit 1
       ;;
     planned)
+      check_hold_before_phase || exit 0
       run_decompose_phase || exit 1
+      check_hold_before_phase || exit 0
       run_build_phase || exit 1
       ;;
     queued)
+      check_hold_before_phase || exit 0
       run_build_phase || exit 1
       ;;
     blocked)

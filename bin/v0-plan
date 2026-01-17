@@ -101,6 +101,11 @@ if [[ -n "${DIRECT}" ]]; then
   STATE_FILE="${STATE_DIR}/state.json"
   mkdir -p "${STATE_DIR}/logs"
 
+  # Check if operation is held
+  if [[ -f "${STATE_FILE}" ]]; then
+    v0_exit_if_held "${NAME}" "plan"
+  fi
+
   # Create or update operation state if it doesn't exist
   if [[ ! -f "${STATE_FILE}" ]]; then
     machine=$(hostname -s)
@@ -165,6 +170,11 @@ PLAN_SESSION=$(v0_session_name "${NAME}" "plan")
 STATE_DIR="${BUILD_DIR}/operations/${NAME}"
 STATE_FILE="${STATE_DIR}/state.json"
 mkdir -p "${STATE_DIR}/logs"
+
+# Check if operation is held
+if [[ -f "${STATE_FILE}" ]]; then
+  v0_exit_if_held "${NAME}" "plan"
+fi
 
 # Create or update operation state if it doesn't exist
 if [[ ! -f "${STATE_FILE}" ]]; then
