@@ -20,10 +20,13 @@ fi
 
 usage() {
   cat <<EOF
-Usage: v0 tree <name>
+Usage: v0 tree <name> [--branch <branch-name>]
 
 Create a worktree and sync settings. Skips creation if worktree already exists.
 Outputs two lines: TREE_DIR path, then WORKTREE path.
+
+Options:
+  --branch, -b <name>  Git branch name to use (defaults to <name>)
 
 Storage locations (in order of preference):
   1. XDG state directory: ~/.local/state/v0/${PROJECT}/tree/<name>/${REPO_NAME}/
@@ -35,14 +38,43 @@ created (permissions, disk space, restricted environment).
 
 Example:
   read -r TREE_DIR; read -r WORKTREE < <(v0 tree my-feature)
+  read -r TREE_DIR; read -r WORKTREE < <(v0 tree v0-fix-worker --branch v0/worker/fix)
 EOF
   exit 1
 }
 
-[[ -z "$1" ]] && usage
-[[ "$1" = "-h" ]] || [[ "$1" = "--help" ]] && usage
+# Parse arguments
+name=""
+branch=""
+while [[ $# -gt 0 ]]; do
+  case "$1" in
+    -h|--help)
+      usage
+      ;;
+    -b|--branch)
+      branch="$2"
+      shift 2
+      ;;
+    -*)
+      echo "Error: Unknown option: $1" >&2
+      usage
+      ;;
+    *)
+      if [[ -z "${name}" ]]; then
+        name="$1"
+      else
+        echo "Error: Unexpected argument: $1" >&2
+        usage
+      fi
+      shift
+      ;;
+  esac
+done
 
-name="$1"
+[[ -z "${name}" ]] && usage
+
+# Default branch name to the tree name if not specified
+[[ -z "${branch}" ]] && branch="${name}"
 
 # Check for old-style worktree and warn
 OLD_TREE="${V0_ROOT}/.tree/${name}"
@@ -112,8 +144,8 @@ fi
 if [[ ! -d "${worktree}" ]]; then
   # Try creating with new branch first, fall back to existing branch
   # Redirect stdout to stderr so git messages don't pollute our output
-  if ! git worktree add "${worktree}" -b "${name}" main >&2 2>&1; then
-    if ! git worktree add "${worktree}" "${name}" >&2 2>&1; then
+  if ! git worktree add "${worktree}" -b "${branch}" main >&2 2>&1; then
+    if ! git worktree add "${worktree}" "${branch}" >&2 2>&1; then
       echo "Error: Failed to create worktree at ${worktree}" >&2
       exit 1
     fi

@@ -26,6 +26,7 @@ This is a complete shutdown that:
 - Removes worker worktrees (v0-*-worker)
 - Deletes local v0/worker/* branches
 - Deletes remote v0/worker/* branches
+- Deletes legacy v0-*-worker branches (old naming convention)
 
 Note: v0/worker/chore and v0/worker/fix branches are checked before deletion.
 If they contain commits not in ${V0_MAIN_BRANCH:-main}, a warning is shown
@@ -299,6 +300,24 @@ if [[ -n "${remote_branches}" ]]; then
       git -C "${V0_ROOT}" push origin --delete "${branch_name}" 2>/dev/null || true
     fi
   done <<< "${remote_branches}"
+fi
+
+# Clean up old-style v0-*-worker branches (legacy naming convention)
+old_style_branches=$(git -C "${V0_ROOT}" branch --list 'v0-*-worker' 2>/dev/null | sed 's/^[* ]*//' || true)
+if [[ -n "${old_style_branches}" ]]; then
+  found_anything=1
+  echo ""
+  echo "Cleaning up old-style v0-*-worker branches..."
+  while IFS= read -r branch; do
+    [[ -z "${branch}" ]] && continue
+
+    if [[ -n "${DRY_RUN}" ]]; then
+      echo "Would delete local branch: ${branch}"
+    else
+      echo "Deleting local branch: ${branch}"
+      git -C "${V0_ROOT}" branch -D "${branch}" 2>/dev/null || true
+    fi
+  done <<< "${old_style_branches}"
 fi
 
 # Check if coffee is running (so we don't exit early if only coffee needs stopping)

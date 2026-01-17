@@ -82,10 +82,10 @@ start_worker() {
     return 0
   fi
 
-  # Create worktree
+  # Create worktree with proper branch name
   local name="v0-chore-worker"
   local tree_output
-  if ! tree_output=$("${SCRIPT_DIR}/v0-tree" "${name}"); then
+  if ! tree_output=$("${SCRIPT_DIR}/v0-tree" "${name}" --branch "${WORKER_BRANCH}"); then
     echo "Error: Failed to create worktree for ${name}"
     exit 1
   fi
@@ -102,12 +102,6 @@ start_worker() {
   # Fast-forward worktree to latest main
   git -C "${WORKER_GIT_DIR}" fetch origin main
   git -C "${WORKER_GIT_DIR}" reset --hard origin/main
-
-  # Rename branch from temporary name to proper branch name (if not already renamed)
-  current_branch=$(git -C "${WORKER_GIT_DIR}" rev-parse --abbrev-ref HEAD)
-  if [[ "${current_branch}" != "${WORKER_BRANCH}" ]]; then
-    git -C "${WORKER_GIT_DIR}" branch -m "${current_branch}" "${WORKER_BRANCH}" 2>/dev/null || true
-  fi
 
   # Link worktree to main repo's shared workspace
   # Remove any local .wok database first (if it exists)
