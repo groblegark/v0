@@ -21,5 +21,5 @@ ISSUE_PREFIX="v0"    # Issue IDs: v0-abc123
 # Example: Copy cached test framework to avoid reinstalling per-worktree
 # V0_WORKTREE_INIT='cp -r "${V0_CHECKOUT_DIR}/lib/bats" "${V0_WORKTREE_DIR}/lib/"'
 
-# Copy bats installation to worktrees (avoids reinstall per-worktree)
-V0_WORKTREE_INIT='[[ -d "${V0_CHECKOUT_DIR}/lib/bats" ]] && cp -r "${V0_CHECKOUT_DIR}/lib/bats" "${V0_WORKTREE_DIR}/lib/" || true'
+# Initialize worktrees with cached dependencies (runs scripts/init-worktree)
+V0_WORKTREE_INIT='"${V0_CHECKOUT_DIR}/scripts/init-worktree"'
