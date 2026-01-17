@@ -8,7 +8,7 @@ Before creating any issues, check if the plan has already been converted:
 2. If found, run `wk list --label plan:{basename}` to see existing issues
 3. If the root feature exists AND issues with the plan label exist, the plan is already converted
 
-**If already converted:** Call `./done` to exit immediately. Do not create duplicate issues.
+**If already converted:** Call `./done` (or `../done` from worktree dir) to exit immediately. Do not create duplicate issues.
 
 ## Structure
 

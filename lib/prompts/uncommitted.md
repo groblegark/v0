@@ -56,5 +56,5 @@ git status  # Should show no uncommitted changes (untracked OK)
 
 When all changes are committed or appropriately handled:
 ```bash
-./done
+./done  # or ../done from repo dir
 ```

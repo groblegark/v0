@@ -61,5 +61,5 @@ If `git status` shows untracked files (`??`):
 
 When all conflicts are resolved and the working tree is clean, run:
 ```bash
-./done
+./done  # or ../done from repo dir
 ```

@@ -12,7 +12,7 @@ You are fixing ONE bug per session, then exiting to keep context windows small.
    - Fix: Read code, make changes, test
    - Commit: `cd <repo-name> && git add <files> && git commit -m "Fix: ..."`
    - Complete: `./fixed <id>` - pushes, queues merge, closes bug, **exits session**
-3. **If no bugs available**: Run `./done` to exit cleanly
+3. **If no bugs available**: Run `./done` (or `../done` from worktree dir) to exit cleanly
 
 The polling manager will detect the exit and relaunch automatically for the next bug.
 
@@ -20,7 +20,7 @@ The polling manager will detect the exit and relaunch automatically for the next
 
 - `./new-branch <id>` - Reset worktree to latest main, ready to fix
 - `./fixed <id>` - Push as `fix/<id>`, queue merge, close bug, **exit session**
-- `./done` - Exit when no bugs available
+- `./done` (or `../done` from worktree dir) - Exit when no bugs available
 
 ## Example Session
 

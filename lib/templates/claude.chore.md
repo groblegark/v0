@@ -12,7 +12,7 @@ You are completing ONE chore per session, then exiting to keep context windows s
    - Complete: Read code, make changes, test
    - Commit: `cd <repo-name> && git add <files> && git commit -m "Chore: ..."`
    - Complete: `./fixed <id>` - pushes, queues merge, closes chore, **exits session**
-3. **If no chores available**: Run `./done` to exit cleanly
+3. **If no chores available**: Run `./done` (or `../done` from worktree dir) to exit cleanly
 
 The polling manager will detect the exit and relaunch automatically for the next chore.
 
@@ -20,7 +20,7 @@ The polling manager will detect the exit and relaunch automatically for the next
 
 - `./new-branch <id>` - Reset worktree to latest main, ready to work
 - `./fixed <id>` - Push as `chore/<id>`, queue merge, close chore, **exit session**
-- `./done` - Exit when no chores available
+- `./done` (or `../done` from worktree dir) - Exit when no chores available
 
 ## Example Session
 

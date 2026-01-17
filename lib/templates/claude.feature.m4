@@ -69,7 +69,7 @@ git commit -m "..."
 git push
 
 # 2. Exit the session
-./done
+./done  # or ../done from repo dir
 ```
 
-**IMPORTANT**: Call `./done` to signal completion. Do not just say "done" - actually run the script.
+**IMPORTANT**: Call `./done` (or `../done` from repo dir) to signal completion. Do not just say "done" - actually run the script.
