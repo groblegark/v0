@@ -9,20 +9,20 @@ load '../helpers/test_helper'
 @test "v0 shows help with --help" {
     run "${PROJECT_ROOT}/bin/v0" --help
     assert_success
-    assert_output --partial "v0 - Autonomous build orchestration toolkit"
+    assert_output --partial "v0 - A tool to ease you in to multi-agent vibe coding."
     assert_output --partial "Usage: v0 <command>"
 }
 
 @test "v0 shows help with -h" {
     run "${PROJECT_ROOT}/bin/v0" -h
     assert_success
-    assert_output --partial "v0 - Autonomous build orchestration toolkit"
+    assert_output --partial "v0 - A tool to ease you in to multi-agent vibe coding."
 }
 
 @test "v0 shows help with no arguments" {
     run "${PROJECT_ROOT}/bin/v0"
     assert_success
-    assert_output --partial "v0 - Autonomous build orchestration toolkit"
+    assert_output --partial "v0 - A tool to ease you in to multi-agent vibe coding."
 }
 
 @test "v0 shows version with --version" {

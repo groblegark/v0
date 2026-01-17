@@ -379,7 +379,7 @@ archive_plan() {
 }
 
 # Required dependencies for v0
-V0_REQUIRED_DEPS=(git tmux jq wk claude)
+V0_REQUIRED_DEPS=(git tmux jq wk claude flock)
 
 # Get installation instructions for a missing dependency
 # Usage: v0_install_instructions <command>
@@ -419,6 +419,14 @@ v0_install_instructions() {
     claude)
       echo "  https://claude.ai/claude-code"
       echo "  npm install -g @anthropic-ai/claude-code"
+      ;;
+    flock)
+      case "${os}" in
+        Darwin) echo "  brew install flock" ;;
+        Linux)  echo "  sudo apt install util-linux  # Debian/Ubuntu (usually pre-installed)"
+                echo "  sudo dnf install util-linux  # Fedora (usually pre-installed)" ;;
+        *)      echo "  https://github.com/discoteq/flock" ;;
+      esac
       ;;
     *)
       echo "  (no installation instructions available)"

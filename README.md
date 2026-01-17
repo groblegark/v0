@@ -30,7 +30,7 @@ v0 init
 
 - [wk](https://github.com/alfredjeanlab/wok) - Issue tracking
 - [claude](https://claude.ai/claude-code) - Claude Code CLI
-- git, tmux, jq
+- git, tmux, jq, [flock](https://github.com/discoteq/flock) (macOS: `brew install flock tmux jq`)
 
 > ⚠️ _**Run at your own risk**_ ⚠️
 >

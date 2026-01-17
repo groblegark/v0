@@ -169,4 +169,5 @@ load '../helpers/test_helper'
     [[ " ${V0_REQUIRED_DEPS[*]} " == *" jq "* ]]
     [[ " ${V0_REQUIRED_DEPS[*]} " == *" wk "* ]]
     [[ " ${V0_REQUIRED_DEPS[*]} " == *" claude "* ]]
+    [[ " ${V0_REQUIRED_DEPS[*]} " == *" flock "* ]]
 }
