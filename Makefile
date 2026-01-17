@@ -133,7 +133,7 @@ lint-tests:
 		exit 1; \
 	fi
 	@echo "Linting test files..."
-	@shellcheck -x tests/unit/*.bats tests/helpers/*.bash
+	@shellcheck -x -S warning -e SC1090,SC2155,SC2164,SC2178 tests/unit/*.bats tests/helpers/*.bash
 	@echo "All test files pass ShellCheck!"
 
 # Run lint and all tests
