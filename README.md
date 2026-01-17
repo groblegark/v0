@@ -99,13 +99,13 @@ Completed plans are archived to `plans/archive/`.
 ### Other Commands
 
 ```bash
-v0 talk                     # Interactive Haiku for quick questions
-v0 status                   # Show all operations
-v0 watch                    # Continuously refresh status
-v0 attach fix               # Attach to a worker (fix, chore, mergeq)
-v0 coffee                   # Keep computer awake
-v0 prune                    # Clean up completed state
-v0 shutdown                 # Stop all workers and daemons
+v0 talk          # Interactive Haiku for quick questions
+v0 status        # Show all operations
+v0 watch         # Continuously refresh status
+v0 attach fix    # Attach to a worker (fix, chore, mergeq)
+v0 coffee        # Keep computer awake
+v0 prune         # Clean up completed state
+v0 shutdown      # Stop all workers and daemons
 ```
 
 While attached to tmux: scroll with `Ctrl-b [`, exit scroll with `q`, detach with `Ctrl-b d`.
@@ -143,12 +143,12 @@ V0_WORKTREE_INIT='cp -r "${V0_CHECKOUT_DIR}/lib/bats" "${V0_WORKTREE_DIR}/lib/"'
 ## Development
 
 ```bash
-# Install from git (for contributors)
-curl -fsSL https://raw.githubusercontent.com/alfredjeanlab/v0/main/install-remote.sh | bash
+git clone https://github.com/alfredjeanlab/v0.git
+cd v0
+make install   # Build and install
 
 make test      # Run tests (parallel if GNU parallel installed)
 make lint      # Lint scripts (requires shellcheck)
-make install   # Build and install
 ```
 
 ## License
