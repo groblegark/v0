@@ -10,6 +10,9 @@ v0_load_config
 # Source coffee functions for status display
 source "${V0_DIR}/lib/coffee-common.sh"
 
+# Source nudge functions for status display
+source "${V0_DIR}/lib/nudge-common.sh"
+
 usage() {
   cat <<EOF
 Usage: v0 status [name] [options]
@@ -724,6 +727,16 @@ if [[ -n "${LIST}" ]] || [[ -n "${BLOCKED}" ]]; then
     if coffee_is_running; then
       coffee_pid_val=$(coffee_pid)
       echo -e "  Status: ${C_GREEN}Running${C_RESET} ${C_DIM}[pid: ${coffee_pid_val}]${C_RESET}"
+    else
+      echo -e "  Status: ${C_DIM}Stopped${C_RESET}"
+    fi
+
+    # Show nudge worker status
+    echo ""
+    echo "Nudge Worker:"
+    if nudge_running; then
+      nudge_pid_val=$(cat "${NUDGE_PID_FILE}" 2>/dev/null)
+      echo -e "  Status: ${C_GREEN}Running${C_RESET} ${C_DIM}[pid: ${nudge_pid_val}]${C_RESET}"
     else
       echo -e "  Status: ${C_DIM}Stopped${C_RESET}"
     fi
