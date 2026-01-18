@@ -723,3 +723,72 @@ v0_prune_logs() {
     [[ -n "${dry_run}" ]] && echo "No log entries older than 6 hours to prune"
   fi
 }
+
+# v0_prune_mergeq [--dry-run]
+# Prune completed mergeq entries older than 6 hours
+# Removes entries with terminal status (completed, failed, conflict) whose
+# updated_at (or enqueued_at) timestamp is older than 6 hours
+# Usage: v0_prune_mergeq [--dry-run]
+v0_prune_mergeq() {
+  local dry_run=""
+  [[ "$1" = "--dry-run" ]] && dry_run=1
+
+  [[ -z "${BUILD_DIR:-}" ]] && return 0
+
+  local queue_file="${BUILD_DIR}/mergeq/queue.json"
+  [[ ! -f "${queue_file}" ]] && return 0
+
+  # Calculate cutoff time (6 hours ago) in epoch seconds
+  local cutoff_epoch
+  cutoff_epoch=$(date -u -v-6H +%s 2>/dev/null || date -u -d '6 hours ago' +%s 2>/dev/null || echo "")
+  [[ -z "${cutoff_epoch}" ]] && return 0
+
+  # Count entries before pruning
+  local entries_before
+  entries_before=$(jq '.entries | length' "${queue_file}" 2>/dev/null || echo 0)
+  [[ "${entries_before}" -eq 0 ]] && return 0
+
+  # Build jq filter to keep entries that are:
+  # 1. Not in terminal state (pending, processing, resumed), OR
+  # 2. In terminal state but updated/enqueued within the last 6 hours
+  #
+  # Terminal states: completed, failed, conflict
+  # We use updated_at if present, otherwise fall back to enqueued_at
+  local tmp_file
+  tmp_file=$(mktemp)
+
+  # Use jq with epoch comparison
+  # Pass cutoff as argument to avoid shell injection
+  if ! jq --arg cutoff "${cutoff_epoch}" '
+    def is_terminal: . == "completed" or . == "failed" or . == "conflict";
+    def parse_ts: if . == null then 0 else fromdateiso8601 end;
+    def get_age: (.updated_at // .enqueued_at) | parse_ts;
+    .entries |= [.[] | select(
+      (.status | is_terminal | not) or
+      (get_age >= ($cutoff | tonumber))
+    )]
+  ' "${queue_file}" > "${tmp_file}" 2>/dev/null; then
+    rm -f "${tmp_file}"
+    return 0
+  fi
+
+  # Count entries after pruning
+  local entries_after
+  entries_after=$(jq '.entries | length' "${tmp_file}" 2>/dev/null || echo "${entries_before}")
+  local removed=$((entries_before - entries_after))
+
+  if [[ "${removed}" -gt 0 ]]; then
+    if [[ -n "${dry_run}" ]]; then
+      echo "Would prune ${removed} mergeq entries older than 6 hours"
+      rm -f "${tmp_file}"
+    else
+      mv "${tmp_file}" "${queue_file}"
+      echo "Pruned ${removed} mergeq entries older than 6 hours"
+    fi
+  else
+    rm -f "${tmp_file}"
+    if [[ -n "${dry_run}" ]]; then
+      echo "No mergeq entries older than 6 hours to prune"
+    fi
+  fi
+}
