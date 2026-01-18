@@ -1090,7 +1090,8 @@ WRAPPER
     echo -e "  ${C_BOLD}v0 status ${NAME}${C_RESET}"
     echo ""
     echo "Stop:"
-    echo -e "  ${C_BOLD}v0 shutdown${C_RESET}"
+    echo -e "  ${C_BOLD}v0 cancel ${NAME}${C_RESET}${C_DIM}   # stop and cancel operation${C_RESET}"
+    echo -e "  ${C_BOLD}v0 hold ${NAME}${C_RESET}${C_DIM}     # pause after current work completes${C_RESET}"
   fi
 elif [[ "${PHASE}" = "queued" ]]; then
   echo ""
