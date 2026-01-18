@@ -482,3 +482,45 @@ Another normal line"
     [[ "${filtered}" != *"v0-debug-report:"* ]]
     [[ "${filtered}" != *"operation: test"* ]]
 }
+
+@test "v0-self-debug: filters ANSI escape sequences from logs" {
+    create_mock_operation "test-op" "feature" "building" "running"
+    local logs_dir="${TEST_TEMP_DIR}/project/.v0/build/operations/test-op/logs"
+
+    # Create a log that contains ANSI escape sequences (simulating tmux capture)
+    # Using printf to insert actual escape characters
+    printf 'Normal log line 1\n' > "${logs_dir}/feature.log"
+    printf '\x1b[38;2;255;107;128m⏵⏵ bypass permissions on\x1b[39m\n' >> "${logs_dir}/feature.log"
+    printf '\x1b[?2026l\x1b[?2026h\x1b[2K\x1b[1A\x1b[G\n' >> "${logs_dir}/feature.log"
+    printf 'Normal log line 2\n' >> "${logs_dir}/feature.log"
+
+    run "${V0_SELF_DEBUG}" test-op --stdout
+    assert_success
+    # Should contain normal log lines
+    assert_output --partial "Normal log line 1"
+    assert_output --partial "Normal log line 2"
+    # Should contain the text content without escape codes
+    assert_output --partial "bypass permissions on"
+    # Should NOT contain raw escape sequences
+    refute_output --regexp $'\x1b\\[38;2'
+    refute_output --regexp $'\x1b\\[\\?2026'
+}
+
+@test "v0-self-debug: filter_ansi_sequences removes escape codes" {
+    source "${PROJECT_ROOT}/lib/v0-common.sh"
+    source "${PROJECT_ROOT}/lib/debug-common.sh"
+
+    # Input with ANSI escape codes
+    local input
+    input=$(printf 'Normal line\n\x1b[31mRed text\x1b[0m\n\x1b[?2026hCursor control\x1b[G\nAnother normal line')
+
+    local filtered
+    filtered=$(echo "${input}" | filter_ansi_sequences)
+
+    [[ "${filtered}" == *"Normal line"* ]]
+    [[ "${filtered}" == *"Red text"* ]]
+    [[ "${filtered}" == *"Cursor control"* ]]
+    [[ "${filtered}" == *"Another normal line"* ]]
+    # Should not contain escape sequences
+    [[ "${filtered}" != *$'\x1b['* ]]
+}

@@ -76,7 +76,7 @@ generate_operation_state() {
 }
 
 # Include a log file safely (with truncation for large files)
-# Filters out debug report frontmatter to avoid recursive inclusion of tmux captures
+# Filters out debug report frontmatter and ANSI escape sequences from tmux captures
 # Usage: include_log_file <log_file> [max_lines] [label]
 include_log_file() {
     local log_file="$1"
@@ -94,9 +94,9 @@ include_log_file() {
     echo '```'
     if (( line_count > max_lines )); then
         echo "# [Truncated: showing last ${max_lines} of ${line_count} lines]"
-        tail -n "${max_lines}" "${log_file}" | filter_debug_frontmatter
+        tail -n "${max_lines}" "${log_file}" | filter_ansi_sequences | filter_debug_frontmatter
     else
-        filter_debug_frontmatter < "${log_file}"
+        filter_ansi_sequences < "${log_file}" | filter_debug_frontmatter
     fi
     echo '```'
 }
@@ -105,6 +105,14 @@ include_log_file() {
 # This prevents tmux captures containing debug output from being included in logs
 filter_debug_frontmatter() {
     grep -v -E '^(---|v0-debug-report:|operation:|type:|phase:|status:|machine:|generated_at:)' 2>/dev/null || cat
+}
+
+# Filter out ANSI escape sequences from log content
+# This removes terminal color codes and cursor controls from tmux captures
+filter_ansi_sequences() {
+    # Remove ANSI escape sequences: ESC[ followed by parameters and a letter
+    # Also handles ESC[?... sequences used by terminal capabilities
+    sed $'s/\x1b\\[[0-9;?]*[A-Za-z]//g' 2>/dev/null || cat
 }
 
 # Generate operation logs section
