@@ -636,3 +636,90 @@ v0_capture_error_context() {
     echo ""
   } >> "${context_file}" 2>/dev/null || true
 }
+
+# ============================================================================
+# Log Pruning
+# ============================================================================
+
+# v0_prune_logs [--dry-run]
+# Prune log entries older than 6 hours from logs with ISO 8601 timestamps
+# Only processes logs with [YYYY-MM-DDTHH:MM:SSZ] format at line start
+# Usage: v0_prune_logs [--dry-run]
+v0_prune_logs() {
+  local dry_run=""
+  [[ "$1" = "--dry-run" ]] && dry_run=1
+
+  [[ -z "${BUILD_DIR:-}" ]] && return 0
+  [[ ! -d "${BUILD_DIR}" ]] && return 0
+
+  # Calculate cutoff time (6 hours ago) in epoch seconds
+  local cutoff_epoch
+  cutoff_epoch=$(date -u -v-6H +%s 2>/dev/null || date -u -d '6 hours ago' +%s 2>/dev/null || echo "")
+  [[ -z "${cutoff_epoch}" ]] && return 0
+
+  local pruned_count=0
+  local log_files
+  log_files=$(find "${BUILD_DIR}" -name "*.log" -type f 2>/dev/null || true)
+
+  # No log files found
+  [[ -z "${log_files}" ]] && return 0
+
+  while IFS= read -r log_file; do
+    [[ -z "${log_file}" ]] && continue
+    [[ ! -f "${log_file}" ]] && continue
+
+    # Check if file has ISO 8601 timestamps by looking at first line with a timestamp
+    local first_ts_line
+    first_ts_line=$(grep -m1 '^\[20[0-9][0-9]-[0-9][0-9]-[0-9][0-9]T[0-9][0-9]:[0-9][0-9]:[0-9][0-9]Z\]' "${log_file}" 2>/dev/null || true)
+    [[ -z "${first_ts_line}" ]] && continue
+
+    # Process the file: keep lines with recent timestamps or no timestamp
+    local tmp_file
+    tmp_file=$(mktemp)
+    local lines_before lines_after
+
+    lines_before=$(wc -l < "${log_file}" | tr -d ' ')
+
+    while IFS= read -r line; do
+      # Extract timestamp if line starts with [YYYY-MM-DDTHH:MM:SSZ]
+      local ts
+      ts=$(echo "${line}" | grep -oE '^\[20[0-9][0-9]-[0-9][0-9]-[0-9][0-9]T[0-9][0-9]:[0-9][0-9]:[0-9][0-9]Z\]' 2>/dev/null || true)
+
+      if [[ -z "${ts}" ]]; then
+        # Line doesn't start with timestamp - keep it (could be continuation)
+        echo "${line}" >> "${tmp_file}"
+      else
+        # Parse timestamp and compare with cutoff
+        local ts_clean line_epoch
+        ts_clean="${ts:1:19}"  # Extract YYYY-MM-DDTHH:MM:SS from [YYYY-MM-DDTHH:MM:SSZ]
+
+        # Convert to epoch (macOS vs GNU date)
+        line_epoch=$(date -j -u -f "%Y-%m-%dT%H:%M:%S" "${ts_clean}" +%s 2>/dev/null || \
+                     date -u -d "${ts_clean}" +%s 2>/dev/null || echo 0)
+
+        if [[ "${line_epoch}" -ge "${cutoff_epoch}" ]]; then
+          echo "${line}" >> "${tmp_file}"
+        fi
+      fi
+    done < "${log_file}"
+
+    lines_after=$(wc -l < "${tmp_file}" | tr -d ' ')
+    local removed=$((lines_before - lines_after))
+
+    if [[ "${removed}" -gt 0 ]]; then
+      if [[ -n "${dry_run}" ]]; then
+        echo "Would prune ${removed} lines from: ${log_file#"${BUILD_DIR}/"}"
+      else
+        mv "${tmp_file}" "${log_file}"
+        echo "Pruned ${removed} lines from: ${log_file#"${BUILD_DIR}/"}"
+      fi
+      pruned_count=$((pruned_count + 1))
+    else
+      rm -f "${tmp_file}"
+    fi
+  done <<< "${log_files}"
+
+  if [[ "${pruned_count}" -eq 0 ]]; then
+    [[ -n "${dry_run}" ]] && echo "No log entries older than 6 hours to prune"
+  fi
+}
