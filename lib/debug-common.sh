@@ -125,19 +125,20 @@ filter_ansi_sequences() {
 
 # Filter TUI noise from Claude Code log output
 # Deduplicates spinner lines, horizontal rules, mode indicators, etc.
+# Also filters streaming fragments and collapses excessive blank lines.
 filter_tui_noise() {
     awk '
     # Normalize line for comparison (strip spinner chars and timestamps)
     function normalize(line) {
         # Replace spinner characters with placeholder
-        gsub(/[✽✻✶✳✢·]/, "X", line)
+        gsub(/[✽✻✶✳✢·⏺⏵⏸]/, "X", line)
         # Remove all timing/status info in parentheses
         gsub(/\(ctrl\+c to interrupt[^)]*\)/, "(status)", line)
         gsub(/\([0-9]+s[^)]*\)/, "(status)", line)
         gsub(/\(thinking\)/, "(status)", line)
         gsub(/\(thought for [^)]*\)/, "(status)", line)
         # Remove token counts
-        gsub(/↓ *[0-9.]+k? *tokens?/, "", line)
+        gsub(/[↓↑] *[0-9.]+k? *tokens?/, "", line)
         # Normalize whitespace
         gsub(/[[:space:]]+/, " ", line)
         gsub(/^ +| +$/, "", line)
@@ -151,10 +152,37 @@ filter_tui_noise() {
         return length(temp) > 20
     }
 
-    # Check if line is a spinner/status line
-    function is_spinner_line(line) {
-        return line ~ /^[[:space:]]*[✽✻✶✳✢·][[:space:]]/ && \
+    # Check if line is a spinner/status line (with status info)
+    function is_spinner_status_line(line) {
+        return line ~ /^[[:space:]]*[✽✻✶✳✢·⏺][[:space:]]/ && \
                (line ~ /ctrl\+c/ || line ~ /thinking/ || line ~ /thought/ || line ~ /tokens/)
+    }
+
+    # Check if line is a standalone spinner or spinner with minimal content
+    # These are streaming fragments that should be filtered
+    function is_spinner_fragment(line) {
+        # Strip whitespace
+        gsub(/^[[:space:]]+|[[:space:]]+$/, "", line)
+        # Line is just spinner chars and/or very short text fragments
+        if (line ~ /^[✽✻✶✳✢·⏺⏵⏸]+$/) return 1
+        # Spinner followed by 1-3 chars including arrows (streaming fragment)
+        if (line ~ /^[✽✻✶✳✢·⏺][[:alnum:][:punct:]↓↑←→]{0,3}$/) return 1
+        # Just a few chars that look like streaming fragments (include arrows)
+        if (length(line) <= 3 && line !~ /^[0-9]+\.?$/ && line !~ /^[-*>]$/) return 1
+        return 0
+    }
+
+    # Check if line is a streaming text fragment (partial word/text)
+    function is_streaming_fragment(line) {
+        # Strip whitespace
+        gsub(/^[[:space:]]+|[[:space:]]+$/, "", line)
+        # Very short lines that are likely streaming fragments
+        if (length(line) <= 2) return 1
+        # Lines that are just ellipsis or partial text with ellipsis
+        if (line ~ /^[a-z]…$/ || line ~ /^…[a-z]?$/) return 1
+        # Single letters or digits (streaming output)
+        if (line ~ /^[a-zA-Z]$/) return 1
+        return 0
     }
 
     # Check if line is a mode indicator
@@ -175,15 +203,42 @@ filter_tui_noise() {
         return line ~ /▐▛███▜▌/ || line ~ /▝▜█████▛▘/ || line ~ /▘▘ ▝▝/
     }
 
+    # Check if line is just "Processing..." or similar status
+    function is_processing_line(line) {
+        gsub(/^[[:space:]]+|[[:space:]]+$/, "", line)
+        return line ~ /^Processing…?$/ || line ~ /^Running…?$/
+    }
+
     {
+        # Track blank lines to collapse multiples
+        if ($0 ~ /^[[:space:]]*$/) {
+            blank_count++
+            # Only emit first blank line in a sequence
+            if (blank_count == 1) print
+            next
+        }
+        blank_count = 0
+
         norm = normalize($0)
 
-        # Handle spinner lines - only emit when normalized content changes
-        if (is_spinner_line($0)) {
+        # Skip spinner fragments and streaming fragments
+        if (is_spinner_fragment($0)) next
+        if (is_streaming_fragment($0)) next
+
+        # Handle spinner status lines - only emit when normalized content changes
+        if (is_spinner_status_line($0)) {
             if (norm != last_spinner_norm) {
                 print
                 last_spinner_norm = norm
             }
+            next
+        }
+
+        # Skip repeated Processing lines
+        if (is_processing_line($0)) {
+            if (seen_processing) next
+            seen_processing = 1
+            print
             next
         }
 
