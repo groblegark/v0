@@ -76,7 +76,7 @@ generate_operation_state() {
 }
 
 # Include a log file safely (with truncation for large files)
-# Filters out debug report frontmatter and ANSI escape sequences from tmux captures
+# Filters out debug report frontmatter, ANSI escape sequences, and TUI noise from tmux captures
 # Usage: include_log_file <log_file> [max_lines] [label]
 include_log_file() {
     local log_file="$1"
@@ -94,9 +94,9 @@ include_log_file() {
     echo '```'
     if (( line_count > max_lines )); then
         echo "# [Truncated: showing last ${max_lines} of ${line_count} lines]"
-        tail -n "${max_lines}" "${log_file}" | filter_ansi_sequences | filter_debug_frontmatter
+        tail -n "${max_lines}" "${log_file}" | filter_ansi_sequences | filter_tui_noise | filter_debug_frontmatter
     else
-        filter_ansi_sequences < "${log_file}" | filter_debug_frontmatter
+        filter_ansi_sequences < "${log_file}" | filter_tui_noise | filter_debug_frontmatter
     fi
     echo '```'
 }
@@ -110,9 +110,116 @@ filter_debug_frontmatter() {
 # Filter out ANSI escape sequences from log content
 # This removes terminal color codes and cursor controls from tmux captures
 filter_ansi_sequences() {
-    # Remove ANSI escape sequences: ESC[ followed by parameters and a letter
-    # Also handles ESC[?... sequences used by terminal capabilities
-    sed $'s/\x1b\\[[0-9;?]*[A-Za-z]//g' 2>/dev/null || cat
+    # Use perl for comprehensive ANSI/terminal escape sequence removal:
+    # - CSI sequences: ESC[ followed by parameters and command
+    # - OSC sequences: ESC] ... (terminated by BEL or ST)
+    # - Other escape sequences
+    perl -pe '
+        s/\e\[[0-9;?]*[A-Za-z]//g;           # CSI sequences (colors, cursor, etc)
+        s/\e\][^\a\e]*(?:\a|\e\\)//g;        # OSC sequences (title, etc)
+        s/\e\[[\x20-\x3f]*[\x40-\x7e]//g;    # Other CSI
+        s/\e[PX^_].*?\e\\//g;                # DCS, SOS, PM, APC sequences
+        s/\e.//g;                            # Any remaining ESC+char
+    ' 2>/dev/null || cat
+}
+
+# Filter TUI noise from Claude Code log output
+# Deduplicates spinner lines, horizontal rules, mode indicators, etc.
+filter_tui_noise() {
+    awk '
+    # Normalize line for comparison (strip spinner chars and timestamps)
+    function normalize(line) {
+        # Replace spinner characters with placeholder
+        gsub(/[✽✻✶✳✢·]/, "X", line)
+        # Remove all timing/status info in parentheses
+        gsub(/\(ctrl\+c to interrupt[^)]*\)/, "(status)", line)
+        gsub(/\([0-9]+s[^)]*\)/, "(status)", line)
+        gsub(/\(thinking\)/, "(status)", line)
+        gsub(/\(thought for [^)]*\)/, "(status)", line)
+        # Remove token counts
+        gsub(/↓ *[0-9.]+k? *tokens?/, "", line)
+        # Normalize whitespace
+        gsub(/[[:space:]]+/, " ", line)
+        gsub(/^ +| +$/, "", line)
+        return line
+    }
+
+    # Check if line is a horizontal rule (mostly ─ chars)
+    function is_hrule(line) {
+        temp = line
+        gsub(/[^─]/, "", temp)
+        return length(temp) > 20
+    }
+
+    # Check if line is a spinner/status line
+    function is_spinner_line(line) {
+        return line ~ /^[[:space:]]*[✽✻✶✳✢·][[:space:]]/ && \
+               (line ~ /ctrl\+c/ || line ~ /thinking/ || line ~ /thought/ || line ~ /tokens/)
+    }
+
+    # Check if line is a mode indicator
+    function is_mode_indicator(line) {
+        return line ~ /⏵⏵.*\(shift\+tab/ || \
+               line ~ /⏸.*\(shift\+tab/ || \
+               line ~ /^\s*\? for shortcuts/ || \
+               line ~ /Use meta\+[a-z] to/
+    }
+
+    # Check if line is a prompt placeholder
+    function is_prompt_placeholder(line) {
+        return line ~ /^❯[[:space:]]*Try "/
+    }
+
+    # Check if line is part of Claude Code logo
+    function is_logo_line(line) {
+        return line ~ /▐▛███▜▌/ || line ~ /▝▜█████▛▘/ || line ~ /▘▘ ▝▝/
+    }
+
+    {
+        norm = normalize($0)
+
+        # Handle spinner lines - only emit when normalized content changes
+        if (is_spinner_line($0)) {
+            if (norm != last_spinner_norm) {
+                print
+                last_spinner_norm = norm
+            }
+            next
+        }
+
+        # Skip consecutive duplicate normalized lines
+        if (norm == prev_norm && norm != "") next
+
+        # Skip consecutive horizontal rules
+        if (is_hrule($0)) {
+            if (was_hrule) next
+            was_hrule = 1
+        } else {
+            was_hrule = 0
+        }
+
+        # Skip repeated mode indicators (only show first of each type)
+        if (is_mode_indicator($0)) {
+            if (seen_mode[$0]) next
+            seen_mode[$0] = 1
+        }
+
+        # Skip repeated prompt placeholders
+        if (is_prompt_placeholder($0)) {
+            if (seen_prompt) next
+            seen_prompt = 1
+        }
+
+        # Skip repeated logo lines
+        if (is_logo_line($0)) {
+            if (seen_logo[$0]) next
+            seen_logo[$0] = 1
+        }
+
+        print
+        prev_norm = norm
+    }
+    '
 }
 
 # Generate operation logs section

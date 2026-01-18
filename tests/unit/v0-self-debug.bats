@@ -524,3 +524,204 @@ Another normal line"
     # Should not contain escape sequences
     [[ "${filtered}" != *$'\x1b['* ]]
 }
+
+# ============================================================================
+# TUI Noise Filter Tests
+# ============================================================================
+
+@test "v0-self-debug: filter_tui_noise deduplicates spinner lines" {
+    source "${PROJECT_ROOT}/lib/v0-common.sh"
+    source "${PROJECT_ROOT}/lib/debug-common.sh"
+
+    local input="Content before
+✽ Tinkering… (ctrl+c to interrupt · thinking)
+✻ Tinkering… (ctrl+c to interrupt · thinking)
+✶ Tinkering… (ctrl+c to interrupt · thought for 2s)
+✳ Tinkering… (ctrl+c to interrupt · 5s)
+Content after"
+
+    local filtered
+    filtered=$(echo "${input}" | filter_tui_noise)
+    local spinner_count
+    spinner_count=$(echo "${filtered}" | grep -c "Tinkering")
+
+    # Should only have one spinner line (all are the same after normalization)
+    [[ "${spinner_count}" -eq 1 ]]
+    # Should preserve other content
+    [[ "${filtered}" == *"Content before"* ]]
+    [[ "${filtered}" == *"Content after"* ]]
+}
+
+@test "v0-self-debug: filter_tui_noise keeps spinner lines with different content" {
+    source "${PROJECT_ROOT}/lib/v0-common.sh"
+    source "${PROJECT_ROOT}/lib/debug-common.sh"
+
+    local input="✽ Tinkering… (ctrl+c to interrupt · thinking)
+✻ Creating feature… (ctrl+c to interrupt · thinking)
+✶ Building project… (ctrl+c to interrupt · thought for 2s)"
+
+    local filtered
+    filtered=$(echo "${input}" | filter_tui_noise)
+    local line_count
+    line_count=$(echo "${filtered}" | wc -l | tr -d ' ')
+
+    # Should keep all three since they have different content
+    [[ "${line_count}" -eq 3 ]]
+}
+
+@test "v0-self-debug: filter_tui_noise deduplicates consecutive horizontal rules" {
+    source "${PROJECT_ROOT}/lib/v0-common.sh"
+    source "${PROJECT_ROOT}/lib/debug-common.sh"
+
+    local input="Content
+────────────────────────────────────────────────────────────────────────────────
+────────────────────────────────────────────────────────────────────────────────
+────────────────────────────────────────────────────────────────────────────────
+More content"
+
+    local filtered
+    filtered=$(echo "${input}" | filter_tui_noise)
+    local hrule_count
+    hrule_count=$(echo "${filtered}" | grep -c "────────────────────────────────")
+
+    # Should only have one horizontal rule
+    [[ "${hrule_count}" -eq 1 ]]
+    # Should preserve other content
+    [[ "${filtered}" == *"Content"* ]]
+    [[ "${filtered}" == *"More content"* ]]
+}
+
+@test "v0-self-debug: filter_tui_noise keeps mode indicators but deduplicates" {
+    source "${PROJECT_ROOT}/lib/v0-common.sh"
+    source "${PROJECT_ROOT}/lib/debug-common.sh"
+
+    local input="Content
+  ⏵⏵ bypass permissions on (shift+tab to cycle)
+Other content
+  ⏵⏵ bypass permissions on (shift+tab to cycle)
+  ⏵⏵ bypass permissions on (shift+tab to cycle)
+Final content"
+
+    local filtered
+    filtered=$(echo "${input}" | filter_tui_noise)
+    local mode_count
+    mode_count=$(echo "${filtered}" | grep -c "bypass permissions on")
+
+    # Should only have one mode indicator
+    [[ "${mode_count}" -eq 1 ]]
+    # Should preserve other content
+    [[ "${filtered}" == *"Other content"* ]]
+    [[ "${filtered}" == *"Final content"* ]]
+}
+
+@test "v0-self-debug: filter_tui_noise deduplicates prompt placeholders" {
+    source "${PROJECT_ROOT}/lib/v0-common.sh"
+    source "${PROJECT_ROOT}/lib/debug-common.sh"
+
+    local input="Content
+❯ Try \"edit <filepath> to...\"
+Other content
+❯ Try \"edit <filepath> to...\"
+Final content"
+
+    local filtered
+    filtered=$(echo "${input}" | filter_tui_noise)
+    local prompt_count
+    prompt_count=$(echo "${filtered}" | grep -c 'Try "edit')
+
+    # Should only have one prompt placeholder
+    [[ "${prompt_count}" -eq 1 ]]
+}
+
+@test "v0-self-debug: filter_tui_noise deduplicates logo lines" {
+    source "${PROJECT_ROOT}/lib/v0-common.sh"
+    source "${PROJECT_ROOT}/lib/debug-common.sh"
+
+    local input=" ▐▛███▜▌   Claude Code v2.1.12
+▝▜█████▛▘  Opus 4.5 · Claude Max
+  ▘▘ ▝▝    ~/Developer/project
+Content
+ ▐▛███▜▌   Claude Code v2.1.12
+▝▜█████▛▘  Opus 4.5 · Claude Max
+  ▘▘ ▝▝    ~/Developer/project
+More content"
+
+    local filtered
+    filtered=$(echo "${input}" | filter_tui_noise)
+    local logo_count
+    logo_count=$(echo "${filtered}" | grep -c "▐▛███▜▌")
+
+    # Should only have one logo
+    [[ "${logo_count}" -eq 1 ]]
+    # Should preserve content
+    [[ "${filtered}" == *"Content"* ]]
+    [[ "${filtered}" == *"More content"* ]]
+}
+
+@test "v0-self-debug: filter_tui_noise handles mixed TUI noise" {
+    source "${PROJECT_ROOT}/lib/v0-common.sh"
+    source "${PROJECT_ROOT}/lib/debug-common.sh"
+
+    local input=" ▐▛███▜▌   Claude Code v2.1.12
+────────────────────────────────────────────────────────────────────────────────
+❯ Try \"create something\"
+────────────────────────────────────────────────────────────────────────────────
+  ⏵⏵ bypass permissions on (shift+tab to cycle)
+✽ Tinkering… (ctrl+c to interrupt · thinking)
+✻ Tinkering… (ctrl+c to interrupt · thought for 2s)
+Actual content here
+ ▐▛███▜▌   Claude Code v2.1.12
+────────────────────────────────────────────────────────────────────────────────
+  ⏵⏵ bypass permissions on (shift+tab to cycle)
+More actual content"
+
+    local filtered
+    filtered=$(echo "${input}" | filter_tui_noise)
+
+    # Check deduplication worked
+    local logo_count hrule_count mode_count spinner_count
+    logo_count=$(echo "${filtered}" | grep -c "▐▛███▜▌")
+    mode_count=$(echo "${filtered}" | grep -c "bypass permissions")
+    spinner_count=$(echo "${filtered}" | grep -c "Tinkering")
+
+    [[ "${logo_count}" -eq 1 ]]
+    [[ "${mode_count}" -eq 1 ]]
+    [[ "${spinner_count}" -eq 1 ]]
+
+    # Should preserve actual content
+    [[ "${filtered}" == *"Actual content here"* ]]
+    [[ "${filtered}" == *"More actual content"* ]]
+}
+
+@test "v0-self-debug: TUI noise is filtered in log output" {
+    create_mock_operation "test-op" "feature" "building" "running"
+    local logs_dir="${TEST_TEMP_DIR}/project/.v0/build/operations/test-op/logs"
+
+    # Create a log with TUI noise
+    cat > "${logs_dir}/feature.log" <<'EOF'
+ ▐▛███▜▌   Claude Code v2.1.12
+────────────────────────────────────────────────────────────────────────────────
+❯ Try "edit <filepath> to..."
+────────────────────────────────────────────────────────────────────────────────
+  ⏵⏵ bypass permissions on (shift+tab to cycle)
+✽ Tinkering… (ctrl+c to interrupt · thinking)
+✻ Tinkering… (ctrl+c to interrupt · thinking)
+Actual log content
+ ▐▛███▜▌   Claude Code v2.1.12
+────────────────────────────────────────────────────────────────────────────────
+  ⏵⏵ bypass permissions on (shift+tab to cycle)
+More log content
+EOF
+
+    run "${V0_SELF_DEBUG}" test-op --stdout
+    assert_success
+
+    # Should contain actual content
+    assert_output --partial "Actual log content"
+    assert_output --partial "More log content"
+
+    # Count occurrences - logo should appear only once
+    local logo_matches
+    logo_matches=$(echo "${output}" | grep -c "▐▛███▜▌" || true)
+    [[ "${logo_matches}" -eq 1 ]]
+}
