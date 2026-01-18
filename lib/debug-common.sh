@@ -76,7 +76,7 @@ generate_operation_state() {
 }
 
 # Include a log file safely (with truncation for large files)
-# Filters out debug report frontmatter, ANSI escape sequences, and TUI noise from tmux captures
+# Filters out debug report frontmatter and ANSI escape sequences
 # Usage: include_log_file <log_file> [max_lines] [label]
 include_log_file() {
     local log_file="$1"
@@ -94,9 +94,9 @@ include_log_file() {
     echo '```'
     if (( line_count > max_lines )); then
         echo "# [Truncated: showing last ${max_lines} of ${line_count} lines]"
-        tail -n "${max_lines}" "${log_file}" | filter_ansi_sequences | filter_tui_noise | filter_debug_frontmatter
+        tail -n "${max_lines}" "${log_file}" | filter_ansi_sequences | filter_debug_frontmatter
     else
-        filter_ansi_sequences < "${log_file}" | filter_tui_noise | filter_debug_frontmatter
+        filter_ansi_sequences < "${log_file}" | filter_debug_frontmatter
     fi
     echo '```'
 }
@@ -123,160 +123,6 @@ filter_ansi_sequences() {
     ' 2>/dev/null || cat
 }
 
-# Filter TUI noise from Claude Code log output
-# Deduplicates spinner lines, horizontal rules, mode indicators, etc.
-# Also filters streaming fragments and collapses excessive blank lines.
-filter_tui_noise() {
-    awk '
-    # Normalize line for comparison (strip spinner chars and timestamps)
-    function normalize(line) {
-        # Replace spinner characters with placeholder
-        gsub(/[✽✻✶✳✢·⏺⏵⏸]/, "X", line)
-        # Remove all timing/status info in parentheses
-        gsub(/\(ctrl\+c to interrupt[^)]*\)/, "(status)", line)
-        gsub(/\([0-9]+s[^)]*\)/, "(status)", line)
-        gsub(/\(thinking\)/, "(status)", line)
-        gsub(/\(thought for [^)]*\)/, "(status)", line)
-        # Remove token counts
-        gsub(/[↓↑] *[0-9.]+k? *tokens?/, "", line)
-        # Normalize whitespace
-        gsub(/[[:space:]]+/, " ", line)
-        gsub(/^ +| +$/, "", line)
-        return line
-    }
-
-    # Check if line is a horizontal rule (mostly ─ chars)
-    function is_hrule(line) {
-        temp = line
-        gsub(/[^─]/, "", temp)
-        return length(temp) > 20
-    }
-
-    # Check if line is a spinner/status line (with status info)
-    function is_spinner_status_line(line) {
-        return line ~ /^[[:space:]]*[✽✻✶✳✢·⏺][[:space:]]/ && \
-               (line ~ /ctrl\+c/ || line ~ /thinking/ || line ~ /thought/ || line ~ /tokens/)
-    }
-
-    # Check if line is a standalone spinner or spinner with minimal content
-    # These are streaming fragments that should be filtered
-    function is_spinner_fragment(line) {
-        # Strip whitespace
-        gsub(/^[[:space:]]+|[[:space:]]+$/, "", line)
-        # Line is just spinner chars and/or very short text fragments
-        if (line ~ /^[✽✻✶✳✢·⏺⏵⏸]+$/) return 1
-        # Spinner followed by 1-3 chars including arrows (streaming fragment)
-        if (line ~ /^[✽✻✶✳✢·⏺][[:alnum:][:punct:]↓↑←→]{0,3}$/) return 1
-        # Just a few chars that look like streaming fragments (include arrows)
-        if (length(line) <= 3 && line !~ /^[0-9]+\.?$/ && line !~ /^[-*>]$/) return 1
-        return 0
-    }
-
-    # Check if line is a streaming text fragment (partial word/text)
-    function is_streaming_fragment(line) {
-        # Strip whitespace
-        gsub(/^[[:space:]]+|[[:space:]]+$/, "", line)
-        # Very short lines that are likely streaming fragments
-        if (length(line) <= 2) return 1
-        # Lines that are just ellipsis or partial text with ellipsis
-        if (line ~ /^[a-z]…$/ || line ~ /^…[a-z]?$/) return 1
-        # Single letters or digits (streaming output)
-        if (line ~ /^[a-zA-Z]$/) return 1
-        return 0
-    }
-
-    # Check if line is a mode indicator
-    function is_mode_indicator(line) {
-        return line ~ /⏵⏵.*\(shift\+tab/ || \
-               line ~ /⏸.*\(shift\+tab/ || \
-               line ~ /^\s*\? for shortcuts/ || \
-               line ~ /Use meta\+[a-z] to/
-    }
-
-    # Check if line is a prompt placeholder
-    function is_prompt_placeholder(line) {
-        return line ~ /^❯[[:space:]]*Try "/
-    }
-
-    # Check if line is part of Claude Code logo
-    function is_logo_line(line) {
-        return line ~ /▐▛███▜▌/ || line ~ /▝▜█████▛▘/ || line ~ /▘▘ ▝▝/
-    }
-
-    # Check if line is just "Processing..." or similar status
-    function is_processing_line(line) {
-        gsub(/^[[:space:]]+|[[:space:]]+$/, "", line)
-        return line ~ /^Processing…?$/ || line ~ /^Running…?$/
-    }
-
-    {
-        # Track blank lines to collapse multiples
-        if ($0 ~ /^[[:space:]]*$/) {
-            blank_count++
-            # Only emit first blank line in a sequence
-            if (blank_count == 1) print
-            next
-        }
-        blank_count = 0
-
-        norm = normalize($0)
-
-        # Skip spinner fragments and streaming fragments
-        if (is_spinner_fragment($0)) next
-        if (is_streaming_fragment($0)) next
-
-        # Handle spinner status lines - only emit when normalized content changes
-        if (is_spinner_status_line($0)) {
-            if (norm != last_spinner_norm) {
-                print
-                last_spinner_norm = norm
-            }
-            next
-        }
-
-        # Skip repeated Processing lines
-        if (is_processing_line($0)) {
-            if (seen_processing) next
-            seen_processing = 1
-            print
-            next
-        }
-
-        # Skip consecutive duplicate normalized lines
-        if (norm == prev_norm && norm != "") next
-
-        # Skip consecutive horizontal rules
-        if (is_hrule($0)) {
-            if (was_hrule) next
-            was_hrule = 1
-        } else {
-            was_hrule = 0
-        }
-
-        # Skip repeated mode indicators (only show first of each type)
-        if (is_mode_indicator($0)) {
-            if (seen_mode[$0]) next
-            seen_mode[$0] = 1
-        }
-
-        # Skip repeated prompt placeholders
-        if (is_prompt_placeholder($0)) {
-            if (seen_prompt) next
-            seen_prompt = 1
-        }
-
-        # Skip repeated logo lines
-        if (is_logo_line($0)) {
-            if (seen_logo[$0]) next
-            seen_logo[$0] = 1
-        }
-
-        print
-        prev_norm = norm
-    }
-    '
-}
-
 # Generate operation logs section
 # Usage: generate_operation_logs <op_dir> [verbose]
 generate_operation_logs() {
@@ -290,14 +136,6 @@ generate_operation_logs() {
     if [[ ! -d "${logs_dir}" ]]; then
         echo "*No logs directory found*"
         return
-    fi
-
-    # Feature log
-    if [[ -f "${logs_dir}/feature.log" ]]; then
-        echo "### Feature Log"
-        echo ""
-        include_log_file "${logs_dir}/feature.log" 500 "feature log"
-        echo ""
     fi
 
     # Events log
