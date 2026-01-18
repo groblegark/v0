@@ -179,6 +179,15 @@ else
   prune_completed
 fi
 
+# Prune old mergeq entries (> 6 hours) with terminal status
+echo ""
+echo "Pruning old mergeq entries..."
+if [[ -n "${DRY_RUN}" ]]; then
+  v0_prune_mergeq --dry-run
+else
+  v0_prune_mergeq
+fi
+
 # Prune old log entries (> 6 hours) from logs with timestamps
 echo ""
 echo "Pruning old log entries..."
