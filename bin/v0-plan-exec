@@ -43,7 +43,7 @@ Plan name: ${NAME}. Write to ${V0_PLANS_DIR}/${NAME}.md"
 if [[ "${V0_SAFE:-}" = "1" ]]; then
   claude --model opus "${PROMPT}"
 else
-  claude --model opus --dangerously-skip-permissions "${PROMPT}"
+  claude --model opus --dangerously-skip-permissions --allow-dangerously-skip-permissions "${PROMPT}"
 fi
 
 # Auto-commit the plan unless --draft or worktree is dirty

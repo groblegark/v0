@@ -538,7 +538,7 @@ SETTINGS_EOF
 
   local SAFE
   SAFE=$(get_state safe)
-  CLAUDE_ARGS="--model opus --dangerously-skip-permissions"
+  CLAUDE_ARGS="--model opus --dangerously-skip-permissions --allow-dangerously-skip-permissions"
   [[ "${SAFE}" = "true" ]] && CLAUDE_ARGS="--model opus --permission-mode acceptEdits"
 
   cat > "${TREE_DIR}/.claude/on-complete.sh" <<WRAPPER

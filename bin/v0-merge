@@ -289,7 +289,7 @@ cd "${TREE_DIR}"
 {
   echo "=== Uncommitted changes resolution started at \$(date) ==="
 } >> "${resolve_log}" 2>&1
-claude --model opus --dangerously-skip-permissions "\$(cat '${prompt_file}')" 2>> "${resolve_log}"
+claude --model opus --dangerously-skip-permissions --allow-dangerously-skip-permissions "\$(cat '${prompt_file}')" 2>> "${resolve_log}"
 EXIT_CODE=\$?
 echo "=== Claude exited with code \$EXIT_CODE at \$(date) ===" >> "${resolve_log}" 2>&1
 rm -f "${prompt_file}"
@@ -488,7 +488,7 @@ if ! command -v claude >/dev/null 2>&1; then
   exit 1
 fi
 
-claude --model opus --dangerously-skip-permissions "\$(cat '${PROMPT_FILE}')" 2>> "${RESOLVE_LOG}"
+claude --model opus --dangerously-skip-permissions --allow-dangerously-skip-permissions "\$(cat '${PROMPT_FILE}')" 2>> "${RESOLVE_LOG}"
 EXIT_CODE=\$?
 echo "=== Claude exited with code \$EXIT_CODE at \$(date) ===" >> "${RESOLVE_LOG}" 2>&1
 rm -f "${PROMPT_FILE}"

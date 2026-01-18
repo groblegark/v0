@@ -345,7 +345,7 @@ FIXED_SCRIPT
   # Read CLAUDE.md and pass as instruction
   local claude_instruction
   claude_instruction="$(cat "${tree_dir}/CLAUDE.md")"
-  create_wrapper_script "${tree_dir}" "claude-worker.log" "Claude Fix Worker" "v0 fix --err" "${V0_DIR}" claude --model opus --dangerously-skip-permissions "${claude_instruction}"
+  create_wrapper_script "${tree_dir}" "claude-worker.log" "Claude Fix Worker" "v0 fix --err" "${V0_DIR}" claude --model opus --dangerously-skip-permissions --allow-dangerously-skip-permissions "${claude_instruction}"
 
   echo -e "Starting fix worker in tmux session: ${C_CYAN}${WORKER_SESSION}${C_RESET}"
   echo -e "Worktree: ${C_CYAN}${tree_dir}${C_RESET}"
