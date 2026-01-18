@@ -49,7 +49,7 @@ Commands:
   talk          Open claude with haiku model for quick conversations
   coffee        Keep computer awake
   monitor       Monitor worker queues for auto-shutdown
-  self debug    Generate debug report for failed operations
+  self          Debug and diagnostics commands
   issue         Alias for 'wk' issue tracker (see 'wk --help')
 
 Options:
@@ -120,15 +120,36 @@ case "${CMD}" in
     exec "${V0_DIR}/bin/v0-self-debug" "$@"
     ;;
   self)
-    # Handle 'v0 self debug ...' -> 'v0-self-debug ...'
-    if [[ "${1:-}" = "debug" ]]; then
-      shift
-      exec "${V0_DIR}/bin/v0-self-debug" "$@"
-    else
-      echo "Unknown self command: ${1:-}" >&2
-      echo "Available: v0 self debug" >&2
-      exit 1
-    fi
+    # Handle 'v0 self <subcommand>' dispatch
+    case "${1:-}" in
+      debug)
+        shift
+        exec "${V0_DIR}/bin/v0-self-debug" "$@"
+        ;;
+      --help|-h|"")
+        cat <<'SELF_HELP'
+v0 self - Debug and diagnostics commands
+
+Usage: v0 self <command> [args]
+
+Commands:
+  debug         Generate debug report for failed operations
+
+Run 'v0 self debug --help' for debug command options.
+
+Examples:
+  v0 self debug my-feature     # Debug a specific feature operation
+  v0 self debug fix            # Debug fix worker issues
+  v0 self debug mergeq         # Debug merge queue daemon
+SELF_HELP
+        exit 0
+        ;;
+      *)
+        echo "Unknown self command: ${1}" >&2
+        echo "Run 'v0 self --help' for usage" >&2
+        exit 1
+        ;;
+    esac
     ;;
   # Aliases
   feat)
