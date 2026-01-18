@@ -338,7 +338,7 @@ run_decompose_phase() {
 
     cat > "${STATE_DIR}/run-feature.sh" <<EOF
 #!/bin/bash
-cd '${WORKTREE}'
+cd '${V0_ROOT}'
 export V0_ROOT='${V0_ROOT}'
 ${V0_SAFE_EXPORT}
 script -q '${STATE_DIR}/logs/feature.log' '${V0_DIR}/bin/v0-decompose' '${PLAN_FILE}'
