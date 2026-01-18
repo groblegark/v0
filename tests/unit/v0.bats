@@ -138,3 +138,55 @@ load '../helpers/test_helper'
     # Should show claude's version, not error about unknown command
     refute_output --partial "Unknown command"
 }
+
+# ============================================================================
+# Show alias tests (undocumented alias for status)
+# ============================================================================
+
+@test "v0 show routes to status" {
+    create_v0rc "testproject" "test"
+    run "${PROJECT_ROOT}/bin/v0" show
+    # Don't require assert_success since status may return non-zero in certain states
+    assert_output --partial "Operations:"
+}
+
+@test "v0 show with feature name routes to status" {
+    create_v0rc "testproject" "test"
+    run "${PROJECT_ROOT}/bin/v0" show nonexistent-feature
+    assert_failure
+    assert_output --partial "No operation found"
+}
+
+@test "v0 show fix routes to status --fix" {
+    create_v0rc "testproject" "test"
+    run "${PROJECT_ROOT}/bin/v0" show fix
+    assert_success
+    assert_output --partial "Fix Worker:"
+}
+
+@test "v0 show chore routes to status --chore" {
+    create_v0rc "testproject" "test"
+    run "${PROJECT_ROOT}/bin/v0" show chore
+    assert_success
+    assert_output --partial "Chore Worker:"
+}
+
+@test "v0 show merge routes to status --merge" {
+    create_v0rc "testproject" "test"
+    run "${PROJECT_ROOT}/bin/v0" show merge
+    assert_success
+    assert_output --partial "Merge Queue Status:"
+}
+
+@test "v0 show mergeq routes to status --merge" {
+    create_v0rc "testproject" "test"
+    run "${PROJECT_ROOT}/bin/v0" show mergeq
+    assert_success
+    assert_output --partial "Merge Queue Status:"
+}
+
+@test "v0 show is not in help (undocumented)" {
+    run "${PROJECT_ROOT}/bin/v0" --help
+    assert_success
+    refute_output --partial "show"
+}

@@ -170,6 +170,15 @@ SELF_HELP
   issue)
     exec wk "$@"
     ;;
+  show)
+    # Undocumented alias: v0 show [<feature-name>|chore|fix|merge(q)?]
+    case "${1:-}" in
+      chore) shift; exec "${V0_DIR}/bin/v0-status" --chore "$@" ;;
+      fix) shift; exec "${V0_DIR}/bin/v0-status" --fix "$@" ;;
+      merge|mergeq) shift; exec "${V0_DIR}/bin/v0-status" --merge "$@" ;;
+      *) exec "${V0_DIR}/bin/v0-status" "$@" ;;
+    esac
+    ;;
   *)
     echo "Unknown command: ${CMD}" >&2
     echo "Run 'v0 --help' for usage" >&2
