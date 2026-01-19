@@ -9,7 +9,7 @@ BATS_LIB_PATH := $(MAKEFILE_DIR)tests/bats
 
 TEST_FILES := $(wildcard tests/unit/*.bats)
 
-.PHONY: test test-unit test-debug test-file test-init test-integration test-all lint lint-tests lint-policy check help license test-fixtures
+.PHONY: test test-unit test-debug test-file test-init lint lint-tests lint-policy check help license test-fixtures
 
 # Default target
 help:
@@ -69,20 +69,8 @@ test-file: test-init
 	fi
 	BATS_LIB_PATH="$(BATS_LIB_PATH)" $(BATS) --timing $(FILE)
 
-# Run integration tests
-test-integration: test-init
-	@if [ ! -d "tests/integration" ]; then \
-		echo "No integration tests found (tests/integration/ does not exist)"; \
-		exit 0; \
-	fi
-	@if [ ! -x "$(BATS)" ]; then \
-		echo "Error: BATS not found. Run 'make test-init' or install bats-core."; \
-		exit 1; \
-	fi
-	BATS_LIB_PATH="$(BATS_LIB_PATH)" $(BATS) --timing tests/integration/
-
-# Run all tests (unit + integration)
-test-all: test-unit test-integration
+# Run all tests
+test-all: test-unit
 
 # Lint scripts with ShellCheck
 lint:
