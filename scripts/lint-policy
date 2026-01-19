@@ -1,0 +1,163 @@
+#!/usr/bin/env bash
+# SPDX-License-Identifier: MIT
+# Copyright (c) 2025 Alfred Jean LLC
+#
+# Policy enforcement for CI lints.
+#
+# Checks:
+# 1. No new disables added to .shellcheckrc (vs base branch)
+# 2. No shellcheck disable comments in scripts (inline exceptions)
+#
+# Usage: ./lint-policy [--base-branch main]
+
+set -euo pipefail
+
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+ROOT_DIR="$(dirname "$SCRIPT_DIR")"
+
+# Default base branch for comparison
+BASE_BRANCH="${1:-main}"
+if [[ "$BASE_BRANCH" == "--base-branch" ]]; then
+    BASE_BRANCH="${2:-main}"
+fi
+
+ERRORS=0
+
+# =============================================================================
+# Check 1: .shellcheckrc policy
+# =============================================================================
+check_shellcheckrc() {
+    echo "Checking .shellcheckrc policy..."
+
+    local shellcheckrc="$ROOT_DIR/.shellcheckrc"
+
+    if [[ ! -f "$shellcheckrc" ]]; then
+        echo "  OK: No .shellcheckrc file"
+        return
+    fi
+
+    # Check if we're in a git repo and base branch exists
+    if ! git -C "$ROOT_DIR" rev-parse --git-dir >/dev/null 2>&1; then
+        echo "  SKIP: Not a git repository"
+        return
+    fi
+
+    if ! git -C "$ROOT_DIR" rev-parse "$BASE_BRANCH" >/dev/null 2>&1; then
+        echo "  SKIP: Base branch '$BASE_BRANCH' not found"
+        return
+    fi
+
+    # Get base version of .shellcheckrc
+    local base_shellcheckrc
+    base_shellcheckrc=$(git -C "$ROOT_DIR" show "$BASE_BRANCH:.shellcheckrc" 2>/dev/null || echo "")
+
+    if [[ -z "$base_shellcheckrc" ]]; then
+        echo "  SKIP: .shellcheckrc not present in base branch"
+        return
+    fi
+
+    # Extract disable list from both versions
+    # Format: disable=SC2034,SC2154,... (comma-separated on one line)
+    local current_disables base_disables
+    current_disables=$(grep '^disable=' "$shellcheckrc" 2>/dev/null | sed 's/^disable=//' | tr ',' '\n' | sort || true)
+    base_disables=$(echo "$base_shellcheckrc" | grep '^disable=' 2>/dev/null | sed 's/^disable=//' | tr ',' '\n' | sort || true)
+
+    local new_disables
+    new_disables=$(comm -23 <(echo "$current_disables") <(echo "$base_disables") 2>/dev/null || true)
+
+    if [[ -n "$new_disables" ]]; then
+        echo "ERROR: New shellcheck disables added to .shellcheckrc:"
+        echo "$new_disables" | sed 's/^/  /'
+        echo ""
+        echo "Adding shellcheck disables requires human review."
+        echo "Fix the warnings instead, or document why the disable is necessary."
+        ERRORS=$((ERRORS + 1))
+    else
+        echo "  OK: No new shellcheck disables in .shellcheckrc"
+    fi
+}
+
+# =============================================================================
+# Check 2: Inline shellcheck exceptions policy
+# =============================================================================
+
+# Inline disables that are allowed because they're case-specific with documentation.
+# These shouldn't be globally disabled - they need inline justification.
+ALLOWED_INLINE_DISABLES=(
+    "SC2012"  # ls usage - sometimes needed for sorting by time
+    "SC2090"  # eval usage - intentional in specific cases
+)
+
+check_inline_shellcheck() {
+    echo "Checking inline shellcheck exceptions..."
+
+    # Build grep pattern to exclude allowed inline disables
+    local exclude_pattern
+    exclude_pattern=$(printf '%s|' "${ALLOWED_INLINE_DISABLES[@]}")
+    exclude_pattern="${exclude_pattern%|}"  # Remove trailing |
+
+    local violations=""
+
+    # Check scripts/ directory
+    if [[ -d "$ROOT_DIR/scripts" ]]; then
+        # Note: exclude this script itself from the search
+        local script_violations
+        script_violations=$(grep -rn "# shellcheck disable=" "$ROOT_DIR/scripts" --exclude="lint-policy" 2>/dev/null | grep -v -E "${exclude_pattern}" || true)
+        violations="$violations$script_violations"
+    fi
+
+    # Check bin/ directory
+    if [[ -d "$ROOT_DIR/bin" ]]; then
+        local bin_violations
+        bin_violations=$(grep -rn "# shellcheck disable=" "$ROOT_DIR/bin" 2>/dev/null | grep -v -E "${exclude_pattern}" || true)
+        if [[ -n "$bin_violations" ]]; then
+            violations="$violations
+$bin_violations"
+        fi
+    fi
+
+    # Check lib/ directory
+    if [[ -d "$ROOT_DIR/lib" ]]; then
+        local lib_violations
+        lib_violations=$(grep -rn "# shellcheck disable=" "$ROOT_DIR/lib" 2>/dev/null | grep -v -E "${exclude_pattern}" || true)
+        if [[ -n "$lib_violations" ]]; then
+            violations="$violations
+$lib_violations"
+        fi
+    fi
+
+    violations=$(echo "$violations" | grep -v '^$' || true)
+
+    if [[ -n "$violations" ]]; then
+        echo "ERROR: Found inline shellcheck disable comments:"
+        echo "$violations" | sed 's/^/  /'
+        echo ""
+        echo "Fix the shellcheck warnings instead of disabling them inline."
+        echo "If a global disable is truly needed, add it to .shellcheckrc with documentation."
+        echo ""
+        echo "Allowed inline exceptions (case-specific, require documentation):"
+        printf '  %s\n' "${ALLOWED_INLINE_DISABLES[@]}"
+        ERRORS=$((ERRORS + 1))
+    else
+        echo "  OK: No unexpected inline shellcheck disable comments"
+    fi
+}
+
+# =============================================================================
+# Main
+# =============================================================================
+echo "=== Policy Lint Checks ==="
+echo ""
+
+check_shellcheckrc
+echo ""
+
+check_inline_shellcheck
+echo ""
+
+if [[ $ERRORS -gt 0 ]]; then
+    echo "=== FAILED: $ERRORS policy violation(s) found ==="
+    exit 1
+else
+    echo "=== All policy checks passed ==="
+fi

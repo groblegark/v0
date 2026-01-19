@@ -119,7 +119,6 @@ case "${1:-}" in
     echo ""
 
     # Run caffeinate with timeout
-    # shellcheck disable=SC2086
     exec caffeinate ${FLAGS} -t "${SECONDS}"
     ;;
 esac

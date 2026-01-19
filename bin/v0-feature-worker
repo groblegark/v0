@@ -480,7 +480,6 @@ run_build_phase() {
   FEATURE_ID=$(get_state epic_id)
 
   M4_ARGS="-D EPIC_ID=${FEATURE_ID} -D PLAN_LABEL=plan:${NAME} -D HAS_PLAN=1"
-  # shellcheck disable=SC2086 # M4_ARGS needs word splitting
   m4 ${M4_ARGS} "${V0_DIR}/lib/templates/claude.feature.m4" > "${TREE_DIR}/CLAUDE.md"
   emit_event "claude.md:created" "${TREE_DIR}/CLAUDE.md"
 

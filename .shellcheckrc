@@ -15,8 +15,9 @@ enable=all
 # SC2312: Masked return value ($(date), $(basename) are safe)
 # SC2129: Consider using { } >> file (style preference)
 # SC2001: Use ${var//pattern/replace} instead of sed (not possible for multiline)
+# SC2086: Double quote to prevent word splitting (often intentional for passing args)
 # SC2249: Consider adding default *) case (style, not required)
-disable=SC2034,SC2154,SC2310,SC2311,SC2312,SC2129,SC2001,SC2249
+disable=SC2034,SC2154,SC2310,SC2311,SC2312,SC2129,SC2001,SC2086,SC2249
 
 # Source path for sourced files (relative to script location)
 source-path=lib

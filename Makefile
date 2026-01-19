@@ -9,7 +9,7 @@ BATS_LIB_PATH := $(MAKEFILE_DIR)tests/bats
 
 TEST_FILES := $(wildcard tests/unit/*.bats)
 
-.PHONY: test test-unit test-debug test-file test-init test-integration test-all lint lint-tests check help license test-fixtures
+.PHONY: test test-unit test-debug test-file test-init test-integration test-all lint lint-tests lint-policy check help license test-fixtures
 
 # Default target
 help:
@@ -106,8 +106,12 @@ lint-tests:
 	@shellcheck -x -S warning -e SC1090,SC2155,SC2164,SC2178 tests/unit/*.bats tests/helpers/*.bash
 	@echo "All test files pass ShellCheck!"
 
+# Check policy compliance (shellcheck disables, etc.)
+lint-policy:
+	@scripts/lint-policy
+
 # Run lint and all tests
-check: lint test-all
+check: lint lint-policy test-all
 
 # Add license headers to source files
 license:

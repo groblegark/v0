@@ -42,7 +42,6 @@ coffee_start() {
   # Start caffeinate in background
   # -i: prevent idle sleep (always)
   # Redirect FDs so BATS (and other test runners) don't wait for process to finish
-  # shellcheck disable=SC2086
   caffeinate -i ${opts} -t "${seconds}" </dev/null >/dev/null 2>&1 &
   local pid=$!
   echo "${pid}" > "${pid_file}"

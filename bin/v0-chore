@@ -360,10 +360,8 @@ show_status() {
     local count
     count=$(echo "${in_progress}" | wc -l | tr -d ' ')
     if [[ "${count}" -le "${shown}" ]]; then
-      # shellcheck disable=SC2001
       echo "${in_progress}" | sed 's/^/  /'
     else
-      # shellcheck disable=SC2001
       echo "${in_progress}" | head -n "${shown}" | sed 's/^/  /'
       local remaining=$((count - shown))
       echo "  ... and ${remaining} more"
@@ -376,10 +374,8 @@ show_status() {
     local count
     count=$(echo "${open}" | wc -l | tr -d ' ')
     if [[ "${count}" -le "${shown}" ]]; then
-      # shellcheck disable=SC2001
       echo "${open}" | sed 's/^/  /'
     else
-      # shellcheck disable=SC2001
       echo "${open}" | head -n "${shown}" | sed 's/^/  /'
       local remaining=$((count - shown))
       echo "  ... and ${remaining} more"
@@ -534,7 +530,6 @@ show_history() {
     else
       # No state file - show from wk list
       local title
-      # shellcheck disable=SC2001
       title=$(echo "${line}" | sed 's/^[^-]*-[^ ]* \[P[0-4]\] \[chore\] closed - //')
       printf "%-12s (no state) %s\n" "${id}" "${title}"
     fi
