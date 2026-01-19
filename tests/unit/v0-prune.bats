@@ -278,3 +278,195 @@ teardown() {
     [[ "${output}" == *"Pruned operation 'op1'"* ]]
     [[ "${output}" == *"Pruned operation 'op2'"* ]]
 }
+
+# ============================================================================
+# v0_prune_mergeq tests
+# ============================================================================
+
+# Helper to source v0-common.sh for direct function testing
+source_common() {
+    source "${PROJECT_ROOT}/lib/v0-common.sh"
+}
+
+# Helper to get timestamp from N hours ago in ISO 8601 format
+get_timestamp_hours_ago() {
+    local hours="$1"
+    # macOS date syntax
+    date -u -v-"${hours}"H +%Y-%m-%dT%H:%M:%SZ 2>/dev/null || \
+    # GNU date syntax
+    date -u -d "${hours} hours ago" +%Y-%m-%dT%H:%M:%SZ 2>/dev/null
+}
+
+@test "v0_prune_mergeq removes completed entries older than 6 hours" {
+    source_common
+
+    mkdir -p "${BUILD_DIR}/mergeq"
+    local old_ts
+    old_ts=$(get_timestamp_hours_ago 7)
+
+    cat > "${BUILD_DIR}/mergeq/queue.json" <<EOF
+{"version": 1, "entries": [
+  {"operation": "old-completed", "status": "completed", "enqueued_at": "${old_ts}", "updated_at": "${old_ts}"},
+  {"operation": "old-pending", "status": "pending", "enqueued_at": "${old_ts}"}
+]}
+EOF
+
+    run v0_prune_mergeq
+    assert_success
+    [[ "${output}" == *"Pruned 1 mergeq entries"* ]]
+
+    # Verify old-completed was removed, old-pending was kept
+    run jq '.entries | length' "${BUILD_DIR}/mergeq/queue.json"
+    assert_output "1"
+
+    run jq -r '.entries[0].operation' "${BUILD_DIR}/mergeq/queue.json"
+    assert_output "old-pending"
+}
+
+@test "v0_prune_mergeq keeps completed entries newer than 6 hours" {
+    source_common
+
+    mkdir -p "${BUILD_DIR}/mergeq"
+    local new_ts
+    new_ts=$(get_timestamp_hours_ago 1)
+
+    cat > "${BUILD_DIR}/mergeq/queue.json" <<EOF
+{"version": 1, "entries": [
+  {"operation": "new-completed", "status": "completed", "enqueued_at": "${new_ts}", "updated_at": "${new_ts}"}
+]}
+EOF
+
+    run v0_prune_mergeq
+    assert_success
+
+    # Entry should still exist
+    run jq '.entries | length' "${BUILD_DIR}/mergeq/queue.json"
+    assert_output "1"
+}
+
+@test "v0_prune_mergeq removes failed and conflict entries older than 6 hours" {
+    source_common
+
+    mkdir -p "${BUILD_DIR}/mergeq"
+    local old_ts
+    old_ts=$(get_timestamp_hours_ago 8)
+
+    cat > "${BUILD_DIR}/mergeq/queue.json" <<EOF
+{"version": 1, "entries": [
+  {"operation": "old-failed", "status": "failed", "enqueued_at": "${old_ts}", "updated_at": "${old_ts}"},
+  {"operation": "old-conflict", "status": "conflict", "enqueued_at": "${old_ts}", "updated_at": "${old_ts}"}
+]}
+EOF
+
+    run v0_prune_mergeq
+    assert_success
+    [[ "${output}" == *"Pruned 2 mergeq entries"* ]]
+
+    run jq '.entries | length' "${BUILD_DIR}/mergeq/queue.json"
+    assert_output "0"
+}
+
+@test "v0_prune_mergeq keeps pending and processing entries regardless of age" {
+    source_common
+
+    mkdir -p "${BUILD_DIR}/mergeq"
+    local old_ts
+    old_ts=$(get_timestamp_hours_ago 24)
+
+    cat > "${BUILD_DIR}/mergeq/queue.json" <<EOF
+{"version": 1, "entries": [
+  {"operation": "old-pending", "status": "pending", "enqueued_at": "${old_ts}"},
+  {"operation": "old-processing", "status": "processing", "enqueued_at": "${old_ts}"}
+]}
+EOF
+
+    run v0_prune_mergeq
+    assert_success
+
+    # Both entries should remain
+    run jq '.entries | length' "${BUILD_DIR}/mergeq/queue.json"
+    assert_output "2"
+}
+
+@test "v0_prune_mergeq dry-run shows preview without removing" {
+    source_common
+
+    mkdir -p "${BUILD_DIR}/mergeq"
+    local old_ts
+    old_ts=$(get_timestamp_hours_ago 10)
+
+    cat > "${BUILD_DIR}/mergeq/queue.json" <<EOF
+{"version": 1, "entries": [
+  {"operation": "old-completed", "status": "completed", "enqueued_at": "${old_ts}", "updated_at": "${old_ts}"}
+]}
+EOF
+
+    run v0_prune_mergeq --dry-run
+    assert_success
+    [[ "${output}" == *"Would prune 1 mergeq entries"* ]]
+
+    # Entry should still exist
+    run jq '.entries | length' "${BUILD_DIR}/mergeq/queue.json"
+    assert_output "1"
+}
+
+@test "v0_prune_mergeq handles empty queue" {
+    source_common
+
+    mkdir -p "${BUILD_DIR}/mergeq"
+    echo '{"version": 1, "entries": []}' > "${BUILD_DIR}/mergeq/queue.json"
+
+    run v0_prune_mergeq
+    assert_success
+    # No output when nothing to prune
+}
+
+@test "v0_prune_mergeq handles missing queue file" {
+    source_common
+
+    # Don't create queue file
+    rm -f "${BUILD_DIR}/mergeq/queue.json"
+
+    run v0_prune_mergeq
+    assert_success
+    # No output when file doesn't exist
+}
+
+@test "v0_prune_mergeq uses updated_at over enqueued_at for age" {
+    source_common
+
+    mkdir -p "${BUILD_DIR}/mergeq"
+    local old_enqueue new_update
+    old_enqueue=$(get_timestamp_hours_ago 10)
+    new_update=$(get_timestamp_hours_ago 1)
+
+    cat > "${BUILD_DIR}/mergeq/queue.json" <<EOF
+{"version": 1, "entries": [
+  {"operation": "old-enqueue-new-update", "status": "completed", "enqueued_at": "${old_enqueue}", "updated_at": "${new_update}"}
+]}
+EOF
+
+    run v0_prune_mergeq
+    assert_success
+
+    # Entry should still exist because updated_at is recent
+    run jq '.entries | length' "${BUILD_DIR}/mergeq/queue.json"
+    assert_output "1"
+}
+
+@test "v0_prune_mergeq called by v0 prune command" {
+    mkdir -p "${BUILD_DIR}/mergeq"
+    local old_ts
+    old_ts=$(get_timestamp_hours_ago 8)
+
+    cat > "${BUILD_DIR}/mergeq/queue.json" <<EOF
+{"version": 1, "entries": [
+  {"operation": "old-completed", "status": "completed", "enqueued_at": "${old_ts}", "updated_at": "${old_ts}"}
+]}
+EOF
+
+    run "${PROJECT_ROOT}/bin/v0-prune"
+    assert_success
+    [[ "${output}" == *"Pruning old mergeq entries"* ]]
+    [[ "${output}" == *"Pruned 1 mergeq entries"* ]]
+}

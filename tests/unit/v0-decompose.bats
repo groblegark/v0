@@ -209,6 +209,7 @@ EOF
 
     run cat "${MOCK_CALLS_DIR}/claude.calls"
     assert_output --partial "--dangerously-skip-permissions"
+    assert_output --partial "--allow-dangerously-skip-permissions"
 }
 
 @test "v0-decompose: respects V0_SAFE mode" {

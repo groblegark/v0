@@ -1023,7 +1023,7 @@ SETTINGS_EOF
 
     SAFE_FROM_STATE=$(get_state safe)
     [[ "${SAFE_FROM_STATE}" = "true" ]] && SAFE=1
-    CLAUDE_ARGS="--model opus --dangerously-skip-permissions"
+    CLAUDE_ARGS="--model opus --dangerously-skip-permissions --allow-dangerously-skip-permissions"
     [[ -n "${SAFE}" ]] && CLAUDE_ARGS="--model opus --permission-mode acceptEdits"
 
     cat > "${TREE_DIR}/.claude/on-complete.sh" <<WRAPPER
@@ -1090,7 +1090,8 @@ WRAPPER
     echo -e "  ${C_BOLD}v0 status ${NAME}${C_RESET}"
     echo ""
     echo "Stop:"
-    echo -e "  ${C_BOLD}v0 shutdown${C_RESET}"
+    echo -e "  ${C_BOLD}v0 cancel ${NAME}${C_RESET}${C_DIM}   # stop and cancel operation${C_RESET}"
+    echo -e "  ${C_BOLD}v0 hold ${NAME}${C_RESET}${C_DIM}     # pause after current work completes${C_RESET}"
   fi
 elif [[ "${PHASE}" = "queued" ]]; then
   echo ""

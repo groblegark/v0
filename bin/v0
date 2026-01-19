@@ -1,7 +1,7 @@
 #!/bin/bash
 # SPDX-License-Identifier: MIT
 # Copyright (c) 2026 Alfred Jean LLC
-# v0 - Autonomous build orchestration toolkit
+# v0 - A tool to ease you in to multi-agent vibe coding
 # Usage: v0 <command> [args]
 
 set -e
@@ -49,6 +49,7 @@ Commands:
   talk          Open claude with haiku model for quick conversations
   coffee        Keep computer awake
   monitor       Monitor worker queues for auto-shutdown
+  self          Debug and diagnostics commands
   issue         Alias for 'wk' issue tracker (see 'wk --help')
 
 Options:
@@ -115,6 +116,41 @@ case "${CMD}" in
   plan|tree|decompose|merge|mergeq|status|watch|feature|fix|chore|attach|cancel|shutdown|startup|talk|coffee|prune|monitor|hold)
     exec "${V0_DIR}/bin/v0-${CMD}" "$@"
     ;;
+  self-debug)
+    exec "${V0_DIR}/bin/v0-self-debug" "$@"
+    ;;
+  self)
+    # Handle 'v0 self <subcommand>' dispatch
+    case "${1:-}" in
+      debug)
+        shift
+        exec "${V0_DIR}/bin/v0-self-debug" "$@"
+        ;;
+      --help|-h|"")
+        cat <<'SELF_HELP'
+v0 self - Debug and diagnostics commands
+
+Usage: v0 self <command> [args]
+
+Commands:
+  debug         Generate debug report for failed operations
+
+Run 'v0 self debug --help' for debug command options.
+
+Examples:
+  v0 self debug my-feature     # Debug a specific feature operation
+  v0 self debug fix            # Debug fix worker issues
+  v0 self debug mergeq         # Debug merge queue daemon
+SELF_HELP
+        exit 0
+        ;;
+      *)
+        echo "Unknown self command: ${1}" >&2
+        echo "Run 'v0 self --help' for usage" >&2
+        exit 1
+        ;;
+    esac
+    ;;
   # Aliases
   feat)
     exec "${V0_DIR}/bin/v0-feature" "$@"
@@ -133,6 +169,15 @@ case "${CMD}" in
     ;;
   issue)
     exec wk "$@"
+    ;;
+  show)
+    # Undocumented alias: v0 show [<feature-name>|chore|fix|merge(q)?]
+    case "${1:-}" in
+      chore) shift; exec "${V0_DIR}/bin/v0-status" --chore "$@" ;;
+      fix) shift; exec "${V0_DIR}/bin/v0-status" --fix "$@" ;;
+      merge|mergeq) shift; exec "${V0_DIR}/bin/v0-status" --merge "$@" ;;
+      *) exec "${V0_DIR}/bin/v0-status" "$@" ;;
+    esac
     ;;
   *)
     echo "Unknown command: ${CMD}" >&2

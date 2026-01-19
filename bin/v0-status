@@ -25,6 +25,7 @@ Options:
   --merge        Show merge queue status
   --fix          Show fix worker status
   --chore        Show chore worker status
+  --recent       Show recently completed bugs/chores
   --watch        Watch for live updates
   --json         Output as JSON
 
@@ -199,15 +200,16 @@ get_merged_operations() {
 
   for state_file in "${BUILD_DIR}/operations"/*/state.json; do
     [[ -f "${state_file}" ]] || continue
-    local merge_status merged_at name
-    merge_status=$(jq -r '.merge_status // empty' "${state_file}" 2>/dev/null)
-    merged_at=$(jq -r '.merged_at // empty' "${state_file}" 2>/dev/null)
+    # Single jq call extracts all needed fields
+    local name merge_status merged_at
+    read -r name merge_status merged_at < <(
+      jq -r '[.name, (.merge_status // ""), (.merged_at // "")] | @tsv' "${state_file}" 2>/dev/null
+    )
 
     if [[ "${merge_status}" = "merged" ]] && [[ -n "${merged_at}" ]]; then
       local merged_epoch
       merged_epoch=$(timestamp_to_epoch "${merged_at}")
       if [[ -n "${merged_epoch}" ]] && [[ "${merged_epoch}" -ge "${cutoff_time}" ]]; then
-        name=$(jq -r '.name' "${state_file}")
         echo "${name}|${merged_at}"
       fi
     fi
@@ -345,6 +347,7 @@ BUGFIX=""
 CHORE=""
 WATCH=""
 JSON=""
+RECENT=""
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
@@ -356,6 +359,7 @@ while [[ $# -gt 0 ]]; do
     --chore) CHORE=1; shift ;;
     --watch) WATCH=1; shift ;;
     --json) JSON=1; shift ;;
+    --recent) RECENT=1; shift ;;
     --prune|--prune-all)
       echo "Warning: $1 is deprecated. Use 'v0 prune' instead." >&2
       exec "${V0_DIR}/bin/v0-prune" "$@"
@@ -510,23 +514,25 @@ if [[ -n "${LIST}" ]] || [[ -n "${BLOCKED}" ]]; then
   fi
   echo ""
 
+  # Batch tmux session check - single call to list all sessions (used by operations loop and workers)
+  all_sessions=$(tmux list-sessions -F '#{session_name}' 2>/dev/null || true)
+  local_machine=$(hostname -s)
+
   if [[ ! -d "${BUILD_DIR}/operations" ]]; then
     echo -e "  ${C_DIM}(no operations found)${C_RESET}"
   else
 
+  # Collect all state files (bash 3.2 compatible)
+  state_files=()
+  for f in "${BUILD_DIR}"/operations/*/state.json; do
+    [[ -f "${f}" ]] && state_files+=("${f}")
+  done
+
   found_any=""
-  for state_file in "${BUILD_DIR}"/operations/*/state.json; do
-    [[ -f "${state_file}" ]] || continue
-    name=$(jq -r '.name' "${state_file}")
-    op_type=$(jq -r '.type // "build"' "${state_file}")
-    phase=$(jq -r '.phase' "${state_file}")
-    created=$(jq -r '.created_at' "${state_file}")
-    machine=$(jq -r '.machine // "unknown"' "${state_file}")
-    completed=$(jq -r '.completed | length' "${state_file}")
-    merge_queued=$(jq -r '.merge_queued // false' "${state_file}")
-    merge_status=$(jq -r '.merge_status // empty' "${state_file}")
-    merged_at=$(jq -r '.merged_at // empty' "${state_file}")
-    after=$(jq -r '.after // empty' "${state_file}")
+  # Process all state files in single jq -s invocation (one process instead of many)
+  if [[ ${#state_files[@]} -gt 0 ]]; then
+    while IFS=$'\t' read -r name op_type phase created machine completed merge_queued merge_status merged_at after session worker_pid held held_at; do
+      [[ -z "${name}" ]] && continue
     # If --blocked filter, skip non-blocked operations
     if [[ -n "${BLOCKED}" ]]; then
       if [[ -z "${after}" ]] || [[ "${after}" = "null" ]]; then
@@ -536,19 +542,15 @@ if [[ -n "${LIST}" ]] || [[ -n "${BLOCKED}" ]]; then
 
     found_any=1
 
-    # Check if session is running (if local)
-    session=$(jq -r '.tmux_session // empty' "${state_file}")
-    worker_pid=$(jq -r '.worker_pid // empty' "${state_file}")
+    # Check if session is running - uses batched all_sessions
+    # Note: all_sessions only contains LOCAL tmux sessions, so if we find a match,
+    # it's definitely running locally regardless of the machine field in state.json
     status_icon=""
-    if [[ -n "${session}" ]]; then
-      local_machine=$(hostname -s)
-      if [[ "${machine}" = "${local_machine}" ]] && tmux has-session -t "${session}" 2>/dev/null; then
-        status_icon=" ${C_CYAN}[active]${C_RESET}"
-      fi
+    if [[ -n "${session}" ]] && [[ "${all_sessions}" == *"${session}"* ]]; then
+      status_icon=" ${C_CYAN}[active]${C_RESET}"
     fi
     # Check if background worker is running
     if [[ -z "${status_icon}" ]] && [[ -n "${worker_pid}" ]] && [[ "${worker_pid}" != "null" ]]; then
-      local_machine=$(hostname -s)
       if [[ "${machine}" = "${local_machine}" ]] && kill -0 "${worker_pid}" 2>/dev/null; then
         status_icon=" ${C_CYAN}[bg-worker]${C_RESET}"
       fi
@@ -562,9 +564,7 @@ if [[ -n "${LIST}" ]] || [[ -n "${BLOCKED}" ]]; then
 
     # Add hold indicator
     hold_icon=""
-    held=$(jq -r '.held // false' "${state_file}")
     if [[ "${held}" = "true" ]]; then
-      held_at=$(jq -r '.held_at // ""' "${state_file}")
       hold_icon=" ${C_YELLOW}[HELD]${C_RESET}"
     fi
 
@@ -584,46 +584,42 @@ if [[ -n "${LIST}" ]] || [[ -n "${BLOCKED}" ]]; then
           merge_icon=""
         elif [[ "${merge_queued}" = "true" ]]; then
           display_phase="${C_GREEN}completed${C_RESET}"
-          if [[ "${merge_status}" = "merged" ]]; then
-            merge_icon=" ${C_GREEN}${C_DIM}(merged)${C_RESET}"
-          elif [[ "${merge_status}" = "conflict" ]]; then
-            merge_icon=" ${C_RED}${C_BOLD}(== CONFLICT ==)${C_RESET}"
-          elif [[ -n "${merged_at}" ]] && [[ "${merged_at}" != "null" ]]; then
-            # merged_at timestamp exists, so merge succeeded even if merge_status wasn't set
-            merge_icon=" ${C_GREEN}${C_DIM}(merged)${C_RESET}"
-          else
-            queue_file="${BUILD_DIR}/mergeq/queue.json"
-            queue_entry_status=""
-            if [[ -f "${queue_file}" ]]; then
-              queue_entry_status=$(jq -r ".entries[] | select(.operation == \"${name}\") | .status" "${queue_file}" 2>/dev/null || true)
-            fi
-            case "${queue_entry_status}" in
-              pending|processing)
-                merge_icon=" ${C_CYAN}(merging...)${C_RESET}"
-                ;;
-              completed)
-                merge_icon=" ${C_GREEN}${C_DIM}(merged)${C_RESET}"
-                ;;
-              failed)
-                merge_icon=" ${C_RED}${C_BOLD}(== MERGE FAILED ==)${C_RESET}"
-                ;;
-              conflict)
-                merge_icon=" ${C_RED}${C_BOLD}(== CONFLICT ==)${C_RESET}"
-                ;;
-              resumed)
-                merge_icon=" ${C_CYAN}(resumed)${C_RESET}"
-                ;;
-              *)
-                # No queue entry - check if branch still exists on remote
-                # If branch is gone, merge likely succeeded
-                if ! git ls-remote --heads origin "${name}" 2>/dev/null | grep -q .; then
-                  merge_icon=" ${C_GREEN}${C_DIM}(merged)${C_RESET}"
-                else
-                  merge_icon=" ${C_YELLOW}(merge pending)${C_RESET}"
-                fi
-                ;;
-            esac
+          # Always check queue status first - it's more authoritative than state.json
+          # The queue reflects actual merge attempts, while state.json may be stale
+          queue_file="${BUILD_DIR}/mergeq/queue.json"
+          queue_entry_status=""
+          if [[ -f "${queue_file}" ]]; then
+            queue_entry_status=$(jq -r ".entries[] | select(.operation == \"${name}\") | .status" "${queue_file}" 2>/dev/null || true)
           fi
+          case "${queue_entry_status}" in
+            pending|processing)
+              merge_icon=" ${C_CYAN}(merging...)${C_RESET}"
+              ;;
+            completed)
+              merge_icon=" ${C_GREEN}${C_DIM}(merged)${C_RESET}"
+              ;;
+            failed)
+              merge_icon=" ${C_RED}${C_BOLD}(== MERGE FAILED ==)${C_RESET}"
+              ;;
+            conflict)
+              merge_icon=" ${C_RED}${C_BOLD}(== CONFLICT ==)${C_RESET}"
+              ;;
+            resumed)
+              merge_icon=" ${C_CYAN}(resumed)${C_RESET}"
+              ;;
+            *)
+              # No queue entry - fall back to state.json indicators
+              if [[ "${merge_status}" = "merged" ]]; then
+                merge_icon=" ${C_GREEN}${C_DIM}(merged)${C_RESET}"
+              elif [[ "${merge_status}" = "conflict" ]]; then
+                merge_icon=" ${C_RED}${C_BOLD}(== CONFLICT ==)${C_RESET}"
+              elif [[ -n "${merged_at}" ]] && [[ "${merged_at}" != "null" ]]; then
+                merge_icon=" ${C_GREEN}${C_DIM}(merged)${C_RESET}"
+              else
+                merge_icon=" ${C_YELLOW}(merge pending)${C_RESET}"
+              fi
+              ;;
+          esac
         else
           display_phase="${C_GREEN}completed${C_RESET}"
           merge_icon=" ${C_YELLOW}(== NEEDS MERGE ==)${C_RESET}"
@@ -660,7 +656,23 @@ if [[ -n "${LIST}" ]] || [[ -n "${BLOCKED}" ]]; then
     esac
 
     printf "  %-20s %b%b%b%b%b ${C_DIM}(created: %s)${C_RESET}\n" "${name}:" "${display_phase}" "${status_icon}" "${after_icon}" "${hold_icon}" "${merge_icon}" "${created}"
-  done
+    done < <(jq -rs '.[] | [
+      .name,
+      (.type // "build"),
+      .phase,
+      .created_at,
+      (.machine // "unknown"),
+      (.completed | length),
+      (.merge_queued // false),
+      (.merge_status // ""),
+      (.merged_at // ""),
+      (.after // ""),
+      (.tmux_session // ""),
+      (.worker_pid // ""),
+      (.held // false),
+      (.held_at // "")
+    ] | @tsv' "${state_files[@]}")
+  fi
 
   if [[ -z "${found_any}" ]]; then
     if [[ -n "${BLOCKED}" ]]; then
@@ -679,12 +691,16 @@ if [[ -n "${LIST}" ]] || [[ -n "${BLOCKED}" ]]; then
     chore_session="v0-${PROJECT}-worker-chore"
     chore_polling_log="/tmp/v0-${PROJECT}-chore-polling.log"
 
+    # Batch pgrep for all polling daemons - single call
+    all_polling=$(pgrep -af "while true.*v0-${PROJECT}" 2>/dev/null || true)
+
     echo ""
     echo "Bugfix Worker:"
     fix_worker_running=false
     fix_polling_pid=""
-    tmux has-session -t "${fix_session}" 2>/dev/null && fix_worker_running=true
-    [[ -f "${fix_polling_log}" ]] && fix_polling_pid=$(pgrep -f "while true.*${fix_session}" 2>/dev/null || true)
+    # Check via string matching (no process spawning)
+    [[ "${all_sessions}" == *"${fix_session}"* ]] && fix_worker_running=true
+    [[ -f "${fix_polling_log}" ]] && fix_polling_pid=$(echo "${all_polling}" | grep "worker-fix" | awk '{print $1}')
     if [[ "${fix_worker_running}" = true ]]; then
       echo -e "  Status: ${C_CYAN}Active${C_RESET} ${C_DIM}[tmux: ${fix_session}]${C_RESET}"
     elif [[ -n "${fix_polling_pid}" ]]; then
@@ -698,8 +714,9 @@ if [[ -n "${LIST}" ]] || [[ -n "${BLOCKED}" ]]; then
     echo "Chore Worker:"
     chore_worker_running=false
     chore_polling_pid=""
-    tmux has-session -t "${chore_session}" 2>/dev/null && chore_worker_running=true
-    [[ -f "${chore_polling_log}" ]] && chore_polling_pid=$(pgrep -f "while true.*${chore_session}" 2>/dev/null || true)
+    # Check via string matching (no process spawning)
+    [[ "${all_sessions}" == *"${chore_session}"* ]] && chore_worker_running=true
+    [[ -f "${chore_polling_log}" ]] && chore_polling_pid=$(echo "${all_polling}" | grep "worker-chore" | awk '{print $1}')
     if [[ "${chore_worker_running}" = true ]]; then
       echo -e "  Status: ${C_CYAN}Active${C_RESET} ${C_DIM}[tmux: ${chore_session}]${C_RESET}"
     elif [[ -n "${chore_polling_pid}" ]]; then
@@ -715,8 +732,13 @@ if [[ -n "${LIST}" ]] || [[ -n "${BLOCKED}" ]]; then
     mergeq_queue_file="${BUILD_DIR}/mergeq/queue.json"
     if [[ -f "${mergeq_pid_file}" ]] && kill -0 "$(cat "${mergeq_pid_file}" 2>/dev/null)" 2>/dev/null; then
       mergeq_pid=$(cat "${mergeq_pid_file}")
-      processing=$(jq '[.entries[] | select(.status == "processing")] | length' "${mergeq_queue_file}" 2>/dev/null || echo 0)
-      pending=$(jq '[.entries[] | select(.status == "pending")] | length' "${mergeq_queue_file}" 2>/dev/null || echo 0)
+      # Single jq call extracts both processing and pending counts
+      read -r processing pending < <(
+        jq -r '[
+          ([.entries[] | select(.status == "processing")] | length),
+          ([.entries[] | select(.status == "pending")] | length)
+        ] | @tsv' "${mergeq_queue_file}" 2>/dev/null || echo "0	0"
+      )
       if [[ "${processing}" -gt 0 ]]; then
         echo -e "  Status: ${C_CYAN}Active${C_RESET} ${C_DIM}(merging) [pid: ${mergeq_pid}]${C_RESET}"
       elif [[ "${pending}" -gt 0 ]]; then
@@ -749,8 +771,10 @@ if [[ -n "${LIST}" ]] || [[ -n "${BLOCKED}" ]]; then
       echo -e "  Status: ${C_DIM}Stopped${C_RESET}"
     fi
 
-    # Show recently completed items
-    show_recently_completed 3
+    # Show recently completed items (opt-in to avoid N+1 queries)
+    if [[ -n "${RECENT}" ]]; then
+      show_recently_completed 3
+    fi
   fi
 
   echo ""
@@ -826,46 +850,42 @@ show_status() {
       if [[ "${op_type}" = "plan" ]]; then
         echo "Status: plan completed"
       elif [[ "${merge_queued}" = "true" ]]; then
-        if [[ "${merge_status}" = "merged" ]]; then
-          echo "Status: completed (merged)"
-        elif [[ "${merge_status}" = "conflict" ]]; then
-          echo "Status: completed (== CONFLICT ==)"
-        elif [[ -n "${merged_at}" ]] && [[ "${merged_at}" != "null" ]]; then
-          # merged_at timestamp exists, so merge succeeded even if merge_status wasn't set
-          echo "Status: completed (merged)"
-        else
-          local queue_file="${BUILD_DIR}/mergeq/queue.json"
-          local queue_entry_status=""
-          if [[ -f "${queue_file}" ]]; then
-            queue_entry_status=$(jq -r ".entries[] | select(.operation == \"${NAME}\") | .status" "${queue_file}" 2>/dev/null || true)
-          fi
-          case "${queue_entry_status}" in
-            pending|processing)
-              echo "Status: completed (merging...)"
-              ;;
-            completed)
-              echo "Status: completed (merged)"
-              ;;
-            failed)
-              echo "Status: completed (== MERGE FAILED ==)"
-              ;;
-            conflict)
-              echo "Status: completed (== CONFLICT ==)"
-              ;;
-            resumed)
-              echo "Status: completed (resumed)"
-              ;;
-            *)
-              # No queue entry - check if branch still exists on remote
-              # If branch is gone, merge likely succeeded
-              if ! git ls-remote --heads origin "${NAME}" 2>/dev/null | grep -q .; then
-                echo "Status: completed (merged)"
-              else
-                echo "Status: completed (merge pending)"
-              fi
-              ;;
-          esac
+        # Always check queue status first - it's more authoritative than state.json
+        # The queue reflects actual merge attempts, while state.json may be stale
+        local queue_file="${BUILD_DIR}/mergeq/queue.json"
+        local queue_entry_status=""
+        if [[ -f "${queue_file}" ]]; then
+          queue_entry_status=$(jq -r ".entries[] | select(.operation == \"${NAME}\") | .status" "${queue_file}" 2>/dev/null || true)
         fi
+        case "${queue_entry_status}" in
+          pending|processing)
+            echo "Status: completed (merging...)"
+            ;;
+          completed)
+            echo "Status: completed (merged)"
+            ;;
+          failed)
+            echo "Status: completed (== MERGE FAILED ==)"
+            ;;
+          conflict)
+            echo "Status: completed (== CONFLICT ==)"
+            ;;
+          resumed)
+            echo "Status: completed (resumed)"
+            ;;
+          *)
+            # No queue entry - fall back to state.json indicators
+            if [[ "${merge_status}" = "merged" ]]; then
+              echo "Status: completed (merged)"
+            elif [[ "${merge_status}" = "conflict" ]]; then
+              echo "Status: completed (== CONFLICT ==)"
+            elif [[ -n "${merged_at}" ]] && [[ "${merged_at}" != "null" ]]; then
+              echo "Status: completed (merged)"
+            else
+              echo "Status: completed (merge pending)"
+            fi
+            ;;
+        esac
       else
         echo "Status: completed (== NEEDS MERGE ==)"
         local worktree branch

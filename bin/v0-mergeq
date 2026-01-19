@@ -717,7 +717,7 @@ git fetch origin "${branch}"
 git merge --no-edit "origin/${branch}" || true
 
 # Run claude to resolve conflicts
-claude --model opus --dangerously-skip-permissions "\$(cat '${V0_DIR}/lib/prompts/merge.md')
+claude --model opus --dangerously-skip-permissions --allow-dangerously-skip-permissions "\$(cat '${V0_DIR}/lib/prompts/merge.md')
 
 Resolve the merge conflicts in the current directory.
 

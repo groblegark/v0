@@ -349,6 +349,16 @@ if [[ -z "${DRY_RUN}" ]]; then
     echo "Stopped coffee (system can sleep)"
   fi
 
+  # Prune old mergeq entries (> 6 hours) with terminal status
+  echo ""
+  echo "Pruning old mergeq entries..."
+  v0_prune_mergeq
+
+  # Prune old log entries (> 6 hours) from logs with timestamps
+  echo ""
+  echo "Pruning old log entries..."
+  v0_prune_logs
+
   echo ""
   if [[ -n "${skipped_branches}" ]]; then
     echo "Shutdown complete (some branches preserved)"
@@ -363,4 +373,13 @@ if [[ -z "${DRY_RUN}" ]]; then
   else
     echo "Shutdown complete"
   fi
+else
+  # Dry-run mode: show what would be pruned
+  echo ""
+  echo "Pruning old mergeq entries..."
+  v0_prune_mergeq --dry-run
+
+  echo ""
+  echo "Pruning old log entries..."
+  v0_prune_logs --dry-run
 fi

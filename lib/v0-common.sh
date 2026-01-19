@@ -567,3 +567,228 @@ v0_exit_if_held() {
     exit 0
   fi
 }
+
+# ============================================================================
+# Trace Logging (for debugging)
+# ============================================================================
+
+# v0_trace <event> <message>
+# Log trace events to trace.log for debugging
+# Cheap append-only operation with minimal performance impact
+v0_trace() {
+  local event="$1"
+  shift
+  local message="$*"
+
+  # Ensure BUILD_DIR is set
+  [[ -z "${BUILD_DIR:-}" ]] && return 0
+
+  local trace_dir="${BUILD_DIR}/logs"
+  local trace_file="${trace_dir}/trace.log"
+
+  # Create log directory if needed (only on first trace)
+  if [[ ! -d "${trace_dir}" ]]; then
+    mkdir -p "${trace_dir}" 2>/dev/null || return 0
+  fi
+
+  # Append trace entry (suppress errors to avoid breaking callers)
+  printf '[%s] %s: %s\n' "$(date -u '+%Y-%m-%dT%H:%M:%SZ')" "${event}" "${message}" >> "${trace_file}" 2>/dev/null || true
+}
+
+# v0_trace_rotate
+# Rotate trace.log if it exceeds 1MB
+# Call periodically (e.g., at start of long operations)
+v0_trace_rotate() {
+  [[ -z "${BUILD_DIR:-}" ]] && return 0
+
+  local trace_file="${BUILD_DIR}/logs/trace.log"
+  [[ ! -f "${trace_file}" ]] && return 0
+
+  local size
+  # macOS uses -f%z, Linux uses -c%s
+  size=$(stat -f%z "${trace_file}" 2>/dev/null || stat -c%s "${trace_file}" 2>/dev/null || echo 0)
+
+  if (( size > 1048576 )); then  # 1MB
+    mv "${trace_file}" "${trace_file}.old" 2>/dev/null || true
+    v0_trace "rotate" "Rotated trace.log (was ${size} bytes)"
+  fi
+}
+
+# v0_capture_error_context
+# Capture debugging context when an error occurs
+# Call this in error handlers to help with debugging
+v0_capture_error_context() {
+  [[ -z "${BUILD_DIR:-}" ]] && return 0
+
+  local context_file="${BUILD_DIR}/logs/error-context.log"
+  local log_dir="${BUILD_DIR}/logs"
+
+  mkdir -p "${log_dir}" 2>/dev/null || return 0
+
+  {
+    echo "=== Error Context $(date -u '+%Y-%m-%dT%H:%M:%SZ') ==="
+    echo "PWD: $(pwd)"
+    echo "Script: ${BASH_SOURCE[1]:-unknown}"
+    echo "Line: ${BASH_LINENO[0]:-unknown}"
+    echo "Git branch: $(git branch --show-current 2>/dev/null || echo 'N/A')"
+    echo "Git status:"
+    git status --porcelain 2>/dev/null | head -10 || echo "  (git status failed)"
+    echo ""
+  } >> "${context_file}" 2>/dev/null || true
+}
+
+# ============================================================================
+# Log Pruning
+# ============================================================================
+
+# v0_prune_logs [--dry-run]
+# Prune log entries older than 6 hours from logs with ISO 8601 timestamps
+# Only processes logs with [YYYY-MM-DDTHH:MM:SSZ] format at line start
+# Usage: v0_prune_logs [--dry-run]
+v0_prune_logs() {
+  local dry_run=""
+  [[ "$1" = "--dry-run" ]] && dry_run=1
+
+  [[ -z "${BUILD_DIR:-}" ]] && return 0
+  [[ ! -d "${BUILD_DIR}" ]] && return 0
+
+  # Calculate cutoff time (6 hours ago) in epoch seconds
+  local cutoff_epoch
+  cutoff_epoch=$(date -u -v-6H +%s 2>/dev/null || date -u -d '6 hours ago' +%s 2>/dev/null || echo "")
+  [[ -z "${cutoff_epoch}" ]] && return 0
+
+  local pruned_count=0
+  local log_files
+  log_files=$(find "${BUILD_DIR}" -name "*.log" -type f 2>/dev/null || true)
+
+  # No log files found
+  [[ -z "${log_files}" ]] && return 0
+
+  while IFS= read -r log_file; do
+    [[ -z "${log_file}" ]] && continue
+    [[ ! -f "${log_file}" ]] && continue
+
+    # Check if file has ISO 8601 timestamps by looking at first line with a timestamp
+    local first_ts_line
+    first_ts_line=$(grep -m1 '^\[20[0-9][0-9]-[0-9][0-9]-[0-9][0-9]T[0-9][0-9]:[0-9][0-9]:[0-9][0-9]Z\]' "${log_file}" 2>/dev/null || true)
+    [[ -z "${first_ts_line}" ]] && continue
+
+    # Process the file: keep lines with recent timestamps or no timestamp
+    local tmp_file
+    tmp_file=$(mktemp)
+    local lines_before lines_after
+
+    lines_before=$(wc -l < "${log_file}" | tr -d ' ')
+
+    while IFS= read -r line; do
+      # Extract timestamp if line starts with [YYYY-MM-DDTHH:MM:SSZ]
+      local ts
+      ts=$(echo "${line}" | grep -oE '^\[20[0-9][0-9]-[0-9][0-9]-[0-9][0-9]T[0-9][0-9]:[0-9][0-9]:[0-9][0-9]Z\]' 2>/dev/null || true)
+
+      if [[ -z "${ts}" ]]; then
+        # Line doesn't start with timestamp - keep it (could be continuation)
+        echo "${line}" >> "${tmp_file}"
+      else
+        # Parse timestamp and compare with cutoff
+        local ts_clean line_epoch
+        ts_clean="${ts:1:19}"  # Extract YYYY-MM-DDTHH:MM:SS from [YYYY-MM-DDTHH:MM:SSZ]
+
+        # Convert to epoch (macOS vs GNU date)
+        line_epoch=$(date -j -u -f "%Y-%m-%dT%H:%M:%S" "${ts_clean}" +%s 2>/dev/null || \
+                     date -u -d "${ts_clean}" +%s 2>/dev/null || echo 0)
+
+        if [[ "${line_epoch}" -ge "${cutoff_epoch}" ]]; then
+          echo "${line}" >> "${tmp_file}"
+        fi
+      fi
+    done < "${log_file}"
+
+    lines_after=$(wc -l < "${tmp_file}" | tr -d ' ')
+    local removed=$((lines_before - lines_after))
+
+    if [[ "${removed}" -gt 0 ]]; then
+      if [[ -n "${dry_run}" ]]; then
+        echo "Would prune ${removed} lines from: ${log_file#"${BUILD_DIR}/"}"
+      else
+        mv "${tmp_file}" "${log_file}"
+        echo "Pruned ${removed} lines from: ${log_file#"${BUILD_DIR}/"}"
+      fi
+      pruned_count=$((pruned_count + 1))
+    else
+      rm -f "${tmp_file}"
+    fi
+  done <<< "${log_files}"
+
+  if [[ "${pruned_count}" -eq 0 ]]; then
+    [[ -n "${dry_run}" ]] && echo "No log entries older than 6 hours to prune"
+  fi
+}
+
+# v0_prune_mergeq [--dry-run]
+# Prune completed mergeq entries older than 6 hours
+# Removes entries with terminal status (completed, failed, conflict) whose
+# updated_at (or enqueued_at) timestamp is older than 6 hours
+# Usage: v0_prune_mergeq [--dry-run]
+v0_prune_mergeq() {
+  local dry_run=""
+  [[ "$1" = "--dry-run" ]] && dry_run=1
+
+  [[ -z "${BUILD_DIR:-}" ]] && return 0
+
+  local queue_file="${BUILD_DIR}/mergeq/queue.json"
+  [[ ! -f "${queue_file}" ]] && return 0
+
+  # Calculate cutoff time (6 hours ago) in epoch seconds
+  local cutoff_epoch
+  cutoff_epoch=$(date -u -v-6H +%s 2>/dev/null || date -u -d '6 hours ago' +%s 2>/dev/null || echo "")
+  [[ -z "${cutoff_epoch}" ]] && return 0
+
+  # Count entries before pruning
+  local entries_before
+  entries_before=$(jq '.entries | length' "${queue_file}" 2>/dev/null || echo 0)
+  [[ "${entries_before}" -eq 0 ]] && return 0
+
+  # Build jq filter to keep entries that are:
+  # 1. Not in terminal state (pending, processing, resumed), OR
+  # 2. In terminal state but updated/enqueued within the last 6 hours
+  #
+  # Terminal states: completed, failed, conflict
+  # We use updated_at if present, otherwise fall back to enqueued_at
+  local tmp_file
+  tmp_file=$(mktemp)
+
+  # Use jq with epoch comparison
+  # Pass cutoff as argument to avoid shell injection
+  if ! jq --arg cutoff "${cutoff_epoch}" '
+    def is_terminal: . == "completed" or . == "failed" or . == "conflict";
+    def parse_ts: if . == null then 0 else fromdateiso8601 end;
+    def get_age: (.updated_at // .enqueued_at) | parse_ts;
+    .entries |= [.[] | select(
+      (.status | is_terminal | not) or
+      (get_age >= ($cutoff | tonumber))
+    )]
+  ' "${queue_file}" > "${tmp_file}" 2>/dev/null; then
+    rm -f "${tmp_file}"
+    return 0
+  fi
+
+  # Count entries after pruning
+  local entries_after
+  entries_after=$(jq '.entries | length' "${tmp_file}" 2>/dev/null || echo "${entries_before}")
+  local removed=$((entries_before - entries_after))
+
+  if [[ "${removed}" -gt 0 ]]; then
+    if [[ -n "${dry_run}" ]]; then
+      echo "Would prune ${removed} mergeq entries older than 6 hours"
+      rm -f "${tmp_file}"
+    else
+      mv "${tmp_file}" "${queue_file}"
+      echo "Pruned ${removed} mergeq entries older than 6 hours"
+    fi
+  else
+    rm -f "${tmp_file}"
+    if [[ -n "${dry_run}" ]]; then
+      echo "No mergeq entries older than 6 hours to prune"
+    fi
+  fi
+}

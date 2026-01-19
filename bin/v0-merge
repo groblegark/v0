@@ -148,6 +148,18 @@ commits_on_branch() {
   git log --oneline "${base}..${BRANCH}"
 }
 
+# Update merge queue entry to reflect successful merge
+# Called when merge completes (directly or after resolution)
+# Tries both operation name (if available) and branch name
+update_merge_queue_entry() {
+  # Try to update by operation name first (if we have one)
+  if [[ -n "${OP_NAME:-}" ]]; then
+    "${V0_DIR}/bin/v0-mergeq" --update "${OP_NAME}" "completed" 2>/dev/null || true
+  fi
+  # Also try by branch name (handles branch merges like fix/xxx)
+  "${V0_DIR}/bin/v0-mergeq" --update "${BRANCH}" "completed" 2>/dev/null || true
+}
+
 # Update operation state to reflect successful merge
 # Called when merge completes (directly or after resolution)
 update_operation_state() {
@@ -277,7 +289,7 @@ cd "${TREE_DIR}"
 {
   echo "=== Uncommitted changes resolution started at \$(date) ==="
 } >> "${resolve_log}" 2>&1
-claude --model opus --dangerously-skip-permissions "\$(cat '${prompt_file}')" 2>> "${resolve_log}"
+claude --model opus --dangerously-skip-permissions --allow-dangerously-skip-permissions "\$(cat '${prompt_file}')" 2>> "${resolve_log}"
 EXIT_CODE=\$?
 echo "=== Claude exited with code \$EXIT_CODE at \$(date) ===" >> "${resolve_log}" 2>&1
 rm -f "${prompt_file}"
@@ -476,7 +488,7 @@ if ! command -v claude >/dev/null 2>&1; then
   exit 1
 fi
 
-claude --model opus --dangerously-skip-permissions "\$(cat '${PROMPT_FILE}')" 2>> "${RESOLVE_LOG}"
+claude --model opus --dangerously-skip-permissions --allow-dangerously-skip-permissions "\$(cat '${PROMPT_FILE}')" 2>> "${RESOLVE_LOG}"
 EXIT_CODE=\$?
 echo "=== Claude exited with code \$EXIT_CODE at \$(date) ===" >> "${RESOLVE_LOG}" 2>&1
 rm -f "${PROMPT_FILE}"
@@ -552,6 +564,7 @@ RESOLVE_EOF
       cleanup
       git push
       update_operation_state
+      update_merge_queue_entry
       v0_trigger_dependent_operations "${BRANCH}"
       v0_notify "${PROJECT}: merged" "${BRANCH} (after resolution)"
       git push origin --delete "${BRANCH}" 2>/dev/null || true
@@ -571,7 +584,7 @@ RESOLVE_EOF
     exit 1
   fi
 else
-  do_merge && cleanup && git push && update_operation_state && {
+  do_merge && cleanup && git push && update_operation_state && update_merge_queue_entry && {
     v0_trigger_dependent_operations "${BRANCH}"
     v0_notify "${PROJECT}: merged" "${BRANCH}"
     git push origin --delete "${BRANCH}" 2>/dev/null || true

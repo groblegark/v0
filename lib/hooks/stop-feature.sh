@@ -2,7 +2,7 @@
 # SPDX-License-Identifier: MIT
 # Copyright (c) 2026 Alfred Jean LLC
 # Stop hook for v0 feature operations - verifies all plan issues are closed
-# Input: JSON on stdin with session_id, transcript_path, stop_hook_active
+# Input: JSON on stdin with session_id, transcript_path, stop_hook_active, reason
 # Output: JSON with decision (block/allow) and reason
 
 set -e
@@ -10,6 +10,15 @@ set -e
 # Read hook input
 INPUT=$(cat)
 STOP_HOOK_ACTIVE=$(echo "$INPUT" | jq -r '.stop_hook_active // false')
+STOP_REASON=$(echo "$INPUT" | jq -r '.reason // ""')
+
+# Approve immediately if stop is due to system reasons (auth, credits, etc.)
+case "$STOP_REASON" in
+  *auth*|*login*|*credential*|*credit*|*subscription*|*billing*|*payment*)
+    echo '{"decision": "approve"}'
+    exit 0
+    ;;
+esac
 
 # Prevent infinite loops - if already continuing from a stop hook, allow stop
 if [ "$STOP_HOOK_ACTIVE" = "true" ]; then
