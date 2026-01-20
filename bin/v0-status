@@ -768,7 +768,7 @@ if [[ -n "${LIST}" ]] || [[ -n "${BLOCKED}" ]]; then
 
     # If all queues are empty, show each on its own line
     if [[ "${bugs_empty}" = true ]] && [[ "${chores_empty}" = true ]] && [[ "${merges_empty}" = true ]]; then
-      echo ""
+      [[ "${has_operations}" = true ]] && echo ""
       echo -e "Bugfix: ${C_DIM}None${C_RESET}"
       echo -e "Chores: ${C_DIM}None${C_RESET}"
       echo -e "Merges: ${C_DIM}None${C_RESET}"
