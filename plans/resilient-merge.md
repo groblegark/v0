@@ -1,6 +1,6 @@
 # Resilient Merge: Post-Push Verification Improvements
 
-**Root Feature:** `v0-merge` reliability
+**Root Feature:** `v0-1af0`
 
 ## Overview
 
