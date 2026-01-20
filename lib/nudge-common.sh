@@ -291,3 +291,53 @@ write_session_marker() {
   [[ -d "${tree_dir}" ]] || return 1
   echo "${session_name}" > "${tree_dir}/.tmux-session"
 }
+
+# Find the operation name and build directory for a tmux session
+# Searches through all project state directories for matching session
+# Args: $1 = session name
+# Outputs: operation_name<tab>build_dir (or empty if not found)
+# Returns: 0 if found, 1 if not found
+find_operation_for_session() {
+  local session="$1"
+
+  # Search in all project state directories
+  for state_root in "${HOME}/.local/state/v0"/*; do
+    [[ ! -d "${state_root}" ]] && continue
+
+    # Check operations state for feature sessions
+    local build_dir="${state_root}/../.v0/build"
+    if [[ -d "${build_dir}/operations" ]]; then
+      for op_dir in "${build_dir}/operations"/*; do
+        [[ ! -f "${op_dir}/state.json" ]] && continue
+
+        local tmux_session
+        tmux_session=$(jq -r '.tmux_session // empty' "${op_dir}/state.json" 2>/dev/null)
+        if [[ "${tmux_session}" = "${session}" ]]; then
+          local op_name
+          op_name=$(basename "${op_dir}")
+          # Normalize build_dir path
+          build_dir=$(cd "${build_dir}" 2>/dev/null && pwd)
+          printf '%s\t%s\n' "${op_name}" "${build_dir}"
+          return 0
+        fi
+      done
+    fi
+  done
+
+  return 1
+}
+
+# Emit an event to an operation's log file
+# This is a standalone function that doesn't require state-machine.sh
+# Args: $1 = build_dir, $2 = op_name, $3 = event, $4 = details (optional)
+nudge_emit_operation_event() {
+  local build_dir="$1"
+  local op_name="$2"
+  local event="$3"
+  local details="${4:-}"
+  local log_dir="${build_dir}/operations/${op_name}/logs"
+  local log_file="${log_dir}/events.log"
+
+  mkdir -p "${log_dir}"
+  echo "[$(date -u +%Y-%m-%dT%H:%M:%SZ)] ${event}: ${details}" >> "${log_file}"
+}

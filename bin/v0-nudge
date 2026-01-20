@@ -80,6 +80,14 @@ handle_session_complete() {
   # Kill the tmux session gracefully
   tmux kill-session -t "${session}" 2>/dev/null || true
 
+  # Log to operation's event log if this is a tracked operation
+  local op_info
+  if op_info=$(find_operation_for_session "${session}"); then
+    local op_name build_dir
+    IFS=$'\t' read -r op_name build_dir <<< "${op_info}"
+    nudge_emit_operation_event "${build_dir}" "${op_name}" "nudge:completed" "Session terminated after successful completion"
+  fi
+
   # Log to v0 log if available
   if type v0_log &>/dev/null; then
     v0_log "nudge" "Session ${session} completed successfully"
@@ -98,6 +106,14 @@ handle_session_error() {
 
   # Kill the session
   tmux kill-session -t "${session}" 2>/dev/null || true
+
+  # Log to operation's event log if this is a tracked operation
+  local op_info
+  if op_info=$(find_operation_for_session "${session}"); then
+    local op_name build_dir
+    IFS=$'\t' read -r op_name build_dir <<< "${op_info}"
+    nudge_emit_operation_event "${build_dir}" "${op_name}" "nudge:error" "Session terminated due to error state"
+  fi
 
   # Send OS notification (macOS)
   if [[ "$(uname)" = "Darwin" ]] && [[ "${DISABLE_NOTIFICATIONS:-}" != "1" ]] && [[ "${V0_TEST_MODE:-}" != "1" ]]; then

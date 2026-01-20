@@ -395,3 +395,105 @@ EOF
     # Should succeed but may return empty output
     assert_success
 }
+
+# ============================================================================
+# find_operation_for_session() tests
+# ============================================================================
+
+@test "find_operation_for_session finds operation by tmux_session" {
+    source_lib "nudge-common.sh"
+
+    # Set up a mock operation directory with state.json
+    local project_dir="$HOME/.local/state/v0/testproj"
+    local build_dir="$project_dir/../.v0/build"
+    mkdir -p "$build_dir/operations/my-feature"
+
+    cat > "$build_dir/operations/my-feature/state.json" <<'EOF'
+{
+  "name": "my-feature",
+  "tmux_session": "v0-testproj-my-feature",
+  "phase": "executing"
+}
+EOF
+
+    run find_operation_for_session "v0-testproj-my-feature"
+    assert_success
+
+    # Output should be "op_name<tab>build_dir"
+    local op_name build_dir_out
+    IFS=$'\t' read -r op_name build_dir_out <<< "$output"
+    assert_equal "$op_name" "my-feature"
+    # build_dir should be the normalized path
+    [[ -n "$build_dir_out" ]]
+}
+
+@test "find_operation_for_session returns 1 for unknown session" {
+    source_lib "nudge-common.sh"
+
+    run find_operation_for_session "v0-nonexistent-session"
+    assert_failure
+}
+
+@test "find_operation_for_session ignores operations without tmux_session" {
+    source_lib "nudge-common.sh"
+
+    # Set up a mock operation without tmux_session
+    local project_dir="$HOME/.local/state/v0/testproj"
+    local build_dir="$project_dir/../.v0/build"
+    mkdir -p "$build_dir/operations/no-session"
+
+    cat > "$build_dir/operations/no-session/state.json" <<'EOF'
+{
+  "name": "no-session",
+  "phase": "planned"
+}
+EOF
+
+    run find_operation_for_session "v0-testproj-no-session"
+    assert_failure
+}
+
+# ============================================================================
+# nudge_emit_operation_event() tests
+# ============================================================================
+
+@test "nudge_emit_operation_event creates events.log file" {
+    source_lib "nudge-common.sh"
+
+    local build_dir="$TEST_TEMP_DIR/project/.v0/build"
+    mkdir -p "$build_dir/operations/test-op"
+
+    nudge_emit_operation_event "$build_dir" "test-op" "nudge:completed" "Session terminated"
+
+    assert_file_exists "$build_dir/operations/test-op/logs/events.log"
+    run cat "$build_dir/operations/test-op/logs/events.log"
+    [[ "$output" =~ "nudge:completed: Session terminated" ]]
+}
+
+@test "nudge_emit_operation_event appends to existing log" {
+    source_lib "nudge-common.sh"
+
+    local build_dir="$TEST_TEMP_DIR/project/.v0/build"
+    mkdir -p "$build_dir/operations/test-op/logs"
+    echo "[2026-01-01T00:00:00Z] existing:event: Previous entry" > "$build_dir/operations/test-op/logs/events.log"
+
+    nudge_emit_operation_event "$build_dir" "test-op" "nudge:error" "Error occurred"
+
+    run cat "$build_dir/operations/test-op/logs/events.log"
+    # Should have both entries
+    [[ "$output" =~ "existing:event" ]]
+    [[ "$output" =~ "nudge:error: Error occurred" ]]
+}
+
+@test "nudge_emit_operation_event includes ISO timestamp" {
+    source_lib "nudge-common.sh"
+
+    local build_dir="$TEST_TEMP_DIR/project/.v0/build"
+    mkdir -p "$build_dir/operations/test-op"
+
+    nudge_emit_operation_event "$build_dir" "test-op" "test:event" "Details"
+
+    run cat "$build_dir/operations/test-op/logs/events.log"
+    # Should have ISO 8601 timestamp format
+    [[ "$output" =~ \[20[0-9][0-9]-[0-9][0-9]-[0-9][0-9]T[0-9][0-9]:[0-9][0-9]:[0-9][0-9]Z\] ]]
+}
