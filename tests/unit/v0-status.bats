@@ -580,3 +580,208 @@ is_session_active() {
     run bash -c "grep 'jq.*\.held' '$PROJECT_ROOT/bin/v0-status' | wc -l | tr -d ' '"
     assert_output "0"
 }
+
+# ============================================================================
+# get_last_updated_timestamp tests (last-updated timestamps feature)
+# ============================================================================
+
+# Copy of function from v0-status for testing
+get_last_updated_timestamp() {
+    local phase="$1"
+    local created_at="$2"
+    local completed_at="$3"
+    local merged_at="$4"
+    local held_at="$5"
+
+    case "${phase}" in
+        merged)
+            # Prefer merged_at, fall back to completed_at, then created_at
+            if [[ -n "${merged_at}" && "${merged_at}" != "null" ]]; then
+                echo "${merged_at}"
+            elif [[ -n "${completed_at}" && "${completed_at}" != "null" ]]; then
+                echo "${completed_at}"
+            else
+                echo "${created_at}"
+            fi
+            ;;
+        completed|pending_merge)
+            # Show when it was completed
+            if [[ -n "${completed_at}" && "${completed_at}" != "null" ]]; then
+                echo "${completed_at}"
+            else
+                echo "${created_at}"
+            fi
+            ;;
+        held)
+            # Show when it was put on hold
+            if [[ -n "${held_at}" && "${held_at}" != "null" ]]; then
+                echo "${held_at}"
+            else
+                echo "${created_at}"
+            fi
+            ;;
+        *)
+            # For init, planned, queued, executing, etc. - use created_at
+            echo "${created_at}"
+            ;;
+    esac
+}
+
+@test "get_last_updated_timestamp returns merged_at for merged phase" {
+    run get_last_updated_timestamp "merged" "2026-01-01T10:00:00Z" "2026-01-02T10:00:00Z" "2026-01-03T10:00:00Z" "null"
+    assert_success
+    assert_output "2026-01-03T10:00:00Z"
+}
+
+@test "get_last_updated_timestamp returns completed_at for completed phase" {
+    run get_last_updated_timestamp "completed" "2026-01-01T10:00:00Z" "2026-01-02T10:00:00Z" "null" "null"
+    assert_success
+    assert_output "2026-01-02T10:00:00Z"
+}
+
+@test "get_last_updated_timestamp returns completed_at for pending_merge phase" {
+    run get_last_updated_timestamp "pending_merge" "2026-01-01T10:00:00Z" "2026-01-02T10:00:00Z" "null" "null"
+    assert_success
+    assert_output "2026-01-02T10:00:00Z"
+}
+
+@test "get_last_updated_timestamp returns held_at for held phase" {
+    run get_last_updated_timestamp "held" "2026-01-01T10:00:00Z" "null" "null" "2026-01-04T10:00:00Z"
+    assert_success
+    assert_output "2026-01-04T10:00:00Z"
+}
+
+@test "get_last_updated_timestamp returns created_at for init phase" {
+    run get_last_updated_timestamp "init" "2026-01-01T10:00:00Z" "null" "null" "null"
+    assert_success
+    assert_output "2026-01-01T10:00:00Z"
+}
+
+@test "get_last_updated_timestamp returns created_at for planned phase" {
+    run get_last_updated_timestamp "planned" "2026-01-01T10:00:00Z" "null" "null" "null"
+    assert_success
+    assert_output "2026-01-01T10:00:00Z"
+}
+
+@test "get_last_updated_timestamp returns created_at for queued phase" {
+    run get_last_updated_timestamp "queued" "2026-01-01T10:00:00Z" "null" "null" "null"
+    assert_success
+    assert_output "2026-01-01T10:00:00Z"
+}
+
+@test "get_last_updated_timestamp returns created_at for executing phase" {
+    run get_last_updated_timestamp "executing" "2026-01-01T10:00:00Z" "null" "null" "null"
+    assert_success
+    assert_output "2026-01-01T10:00:00Z"
+}
+
+@test "get_last_updated_timestamp falls back to completed_at when merged_at is null for merged phase" {
+    run get_last_updated_timestamp "merged" "2026-01-01T10:00:00Z" "2026-01-02T10:00:00Z" "null" "null"
+    assert_success
+    assert_output "2026-01-02T10:00:00Z"
+}
+
+@test "get_last_updated_timestamp falls back to created_at when merged_at and completed_at are null for merged phase" {
+    run get_last_updated_timestamp "merged" "2026-01-01T10:00:00Z" "null" "null" "null"
+    assert_success
+    assert_output "2026-01-01T10:00:00Z"
+}
+
+@test "get_last_updated_timestamp falls back to created_at when completed_at is null for completed phase" {
+    run get_last_updated_timestamp "completed" "2026-01-01T10:00:00Z" "null" "null" "null"
+    assert_success
+    assert_output "2026-01-01T10:00:00Z"
+}
+
+@test "get_last_updated_timestamp falls back to created_at when held_at is null for held phase" {
+    run get_last_updated_timestamp "held" "2026-01-01T10:00:00Z" "null" "null" "null"
+    assert_success
+    assert_output "2026-01-01T10:00:00Z"
+}
+
+# ============================================================================
+# Last-updated timestamp integration tests
+# ============================================================================
+
+@test "operations sort by created_at even when showing last-updated timestamps" {
+    # Create operations with different created_at but same or different last-updated
+    local ops_dir="$BUILD_DIR/operations"
+    mkdir -p "$ops_dir/op1" "$ops_dir/op2" "$ops_dir/op3"
+
+    # op1: created first, completed last
+    cat > "$ops_dir/op1/state.json" <<'EOF'
+{"name": "op1", "type": "feature", "phase": "completed", "created_at": "2026-01-01T10:00:00Z", "completed_at": "2026-01-05T10:00:00Z"}
+EOF
+
+    # op2: created second, completed first
+    cat > "$ops_dir/op2/state.json" <<'EOF'
+{"name": "op2", "type": "feature", "phase": "completed", "created_at": "2026-01-02T10:00:00Z", "completed_at": "2026-01-03T10:00:00Z"}
+EOF
+
+    # op3: created third, still executing
+    cat > "$ops_dir/op3/state.json" <<'EOF'
+{"name": "op3", "type": "feature", "phase": "executing", "created_at": "2026-01-03T10:00:00Z"}
+EOF
+
+    # Verify operations can be sorted by created_at
+    local sorted_names
+    sorted_names=$(jq -rs 'sort_by(.created_at) | .[].name' "$ops_dir"/*/state.json)
+
+    # First operation should be op1 (earliest created_at)
+    local first_name
+    first_name=$(echo "$sorted_names" | head -1)
+    assert_equal "$first_name" "op1"
+
+    # Second operation should be op2
+    local second_name
+    second_name=$(echo "$sorted_names" | sed -n '2p')
+    assert_equal "$second_name" "op2"
+
+    # Third operation should be op3 (latest created_at)
+    local third_name
+    third_name=$(echo "$sorted_names" | tail -1)
+    assert_equal "$third_name" "op3"
+}
+
+@test "completed_at field is extracted correctly from state.json" {
+    local ops_dir="$BUILD_DIR/operations"
+    mkdir -p "$ops_dir/test-op"
+
+    cat > "$ops_dir/test-op/state.json" <<'EOF'
+{"name": "test-op", "phase": "completed", "created_at": "2026-01-01T10:00:00Z", "completed_at": "2026-01-02T15:30:00Z"}
+EOF
+
+    local completed_at
+    completed_at=$(jq -r '.completed_at // "null"' "$ops_dir/test-op/state.json")
+    assert_equal "$completed_at" "2026-01-02T15:30:00Z"
+}
+
+@test "held_at field is extracted correctly from state.json" {
+    local ops_dir="$BUILD_DIR/operations"
+    mkdir -p "$ops_dir/held-op"
+
+    cat > "$ops_dir/held-op/state.json" <<'EOF'
+{"name": "held-op", "phase": "held", "created_at": "2026-01-01T10:00:00Z", "held_at": "2026-01-02T08:00:00Z"}
+EOF
+
+    local held_at
+    held_at=$(jq -r '.held_at // "null"' "$ops_dir/held-op/state.json")
+    assert_equal "$held_at" "2026-01-02T08:00:00Z"
+}
+
+@test "missing timestamp fields default to null string" {
+    local ops_dir="$BUILD_DIR/operations"
+    mkdir -p "$ops_dir/legacy-op"
+
+    # Simulate old state file without new timestamp fields
+    cat > "$ops_dir/legacy-op/state.json" <<'EOF'
+{"name": "legacy-op", "phase": "completed", "created_at": "2026-01-01T10:00:00Z"}
+EOF
+
+    local completed_at held_at
+    completed_at=$(jq -r '.completed_at // "null"' "$ops_dir/legacy-op/state.json")
+    held_at=$(jq -r '.held_at // "null"' "$ops_dir/legacy-op/state.json")
+
+    assert_equal "$completed_at" "null"
+    assert_equal "$held_at" "null"
+}
