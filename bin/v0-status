@@ -871,7 +871,7 @@ if [[ -n "${LIST}" ]] || [[ -n "${BLOCKED}" ]]; then
       coffee_status="${C_DIM}Stopped${C_RESET}"
     fi
     if nudge_running; then
-      nudge_pid_val=$(cat "$(nudge_pid_file)" 2>/dev/null || true)
+      nudge_pid_val=$(nudge_pid)
       nudge_status="${C_GREEN}Running${C_RESET} ${C_DIM}[pid: ${nudge_pid_val}]${C_RESET}"
     else
       nudge_status="${C_DIM}Stopped${C_RESET}"
