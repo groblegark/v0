@@ -29,28 +29,32 @@ Usage: v0 <command> [args]
 
 Commands:
   init          Initialize .v0.rc in current directory
-  plan          Create implementation plan from prompt
-  tree          Create worktree for isolated development
-  decomp[ose]   Convert plan to issues
-  merge         Merge worktree branch to main
-  mergeq        Merge queue daemon
   status        Show operation status
   watch         Continuously watch status (like 'status --watch')
-  feat[ure]     Full pipeline: plan -> decompose -> execute -> merge
-  resume        Resume an existing feature (alias for 'feature --resume')
+  startup       Start workers (fix, chore, mergeq)
+  shutdown      Stop all v0 processes for this project
+
   fix           Sequential bug fixing worker
   chore         Sequential chore processing worker
+  feat[ure]     Full pipeline: plan -> decompose -> execute -> merge
+  resume        Resume an existing feature (alias for 'feature --resume')
+  plan          Create implementation plan from prompt
+  decomp[ose]   Convert plan to issues
+  tree          Create worktree for isolated development
+  merge         Merge worktree branch to main
+  mergeq        Merge queue daemon
+
   attach        Attach to a running tmux session (fix, chore, mergeq, feature)
   cancel        Cancel a running operation
   hold          Put an operation on hold (pause phase transitions)
-  shutdown      Stop all v0 processes for this project
-  startup       Start workers (fix, chore, mergeq)
   prune         Remove completed/cancelled operation state
+  monitor       Monitor worker queues for auto-shutdown
+
   talk          Open claude with haiku model for quick conversations
   coffee        Keep computer awake
-  monitor       Monitor worker queues for auto-shutdown
-  self          Debug and diagnostics commands
   issue         Alias for 'wk' issue tracker (see 'wk --help')
+
+  self          Debug and diagnostics commands
 
 Options:
   --help, -h    Show this help
