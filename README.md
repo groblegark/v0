@@ -9,14 +9,16 @@ Ask for features, fixes, and chores and watch them be implemented and merged aut
 
 ## Installation
 
+### Homebrew (macOS)
+
 ```bash
-curl -fsSL https://github.com/alfredjeanlab/v0/releases/latest/download/install.sh | bash
+brew install alfredjeanlab/tap/v0
 ```
 
-Or install a specific version:
+### Linux / Manual
 
 ```bash
-V0_VERSION=0.1.0 curl -fsSL https://github.com/alfredjeanlab/v0/releases/latest/download/install.sh | bash
+curl -fsSL https://github.com/alfredjeanlab/v0/releases/latest/download/install.sh | bash
 ```
 
 Then initialize a project:

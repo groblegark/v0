@@ -114,10 +114,8 @@ done
 
 # Process install scripts
 echo "Processing install scripts..."
-for file in install.sh install-remote.sh; do
-    if [ -f "$file" ]; then
-        add_bash_header "$file"
-    fi
-done
+if [ -f "install.sh" ]; then
+    add_bash_header "install.sh"
+fi
 
 echo "Done."
