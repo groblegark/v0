@@ -637,3 +637,265 @@ EOF
     run v0_git_worktree_clean "${TEST_TEMP_DIR}/not-a-repo"
     assert_failure
 }
+
+# ============================================================================
+# v0_verify_push_with_retry() tests
+# ============================================================================
+
+@test "v0_verify_push_with_retry returns 0 for commit on branch" {
+    source_lib "v0-common.sh"
+    init_mock_git_repo "${TEST_TEMP_DIR}/project"
+    cd "${TEST_TEMP_DIR}/project" || return 1
+
+    # Create a bare "remote" repo and set up origin
+    git clone --bare . "${TEST_TEMP_DIR}/origin.git"
+    git remote remove origin 2>/dev/null || true
+    git remote add origin "${TEST_TEMP_DIR}/origin.git"
+
+    # Get the current commit
+    local commit
+    commit=$(git rev-parse HEAD)
+
+    # Get current branch name (may be main or master depending on git version)
+    local branch
+    branch=$(git rev-parse --abbrev-ref HEAD)
+
+    # Push to origin (so origin/main exists)
+    git push -u origin "${branch}"
+
+    # Verify commit is on origin branch
+    run v0_verify_push_with_retry "${commit}" "origin/${branch}" 1 0
+    assert_success
+}
+
+@test "v0_verify_push_with_retry returns 1 for commit not on branch" {
+    source_lib "v0-common.sh"
+    init_mock_git_repo "${TEST_TEMP_DIR}/project"
+    cd "${TEST_TEMP_DIR}/project" || return 1
+
+    # Create a bare "remote" repo and set up origin
+    git clone --bare . "${TEST_TEMP_DIR}/origin.git"
+    git remote remove origin 2>/dev/null || true
+    git remote add origin "${TEST_TEMP_DIR}/origin.git"
+
+    # Get current branch name
+    local branch
+    branch=$(git rev-parse --abbrev-ref HEAD)
+    git push -u origin "${branch}"
+
+    # Create a new commit on a separate branch (not pushed)
+    git checkout -b feature-branch
+    echo "new content" > newfile.txt
+    git add newfile.txt
+    git commit -m "New commit on feature branch"
+    local feature_commit
+    feature_commit=$(git rev-parse HEAD)
+
+    # Switch back to main
+    git checkout "${branch}"
+
+    # Verify feature commit is NOT on origin/main (should fail after retries)
+    run v0_verify_push_with_retry "${feature_commit}" "origin/${branch}" 1 0
+    assert_failure
+}
+
+@test "v0_verify_push_with_retry succeeds when remote moved forward" {
+    source_lib "v0-common.sh"
+    init_mock_git_repo "${TEST_TEMP_DIR}/project"
+    cd "${TEST_TEMP_DIR}/project" || return 1
+
+    # Create a bare "remote" repo and set up origin
+    git clone --bare . "${TEST_TEMP_DIR}/origin.git"
+    git remote remove origin 2>/dev/null || true
+    git remote add origin "${TEST_TEMP_DIR}/origin.git"
+
+    # Get current branch name
+    local branch
+    branch=$(git rev-parse --abbrev-ref HEAD)
+
+    # Get commit A and push it
+    local commit_a
+    commit_a=$(git rev-parse HEAD)
+    git push -u origin "${branch}"
+
+    # Create commit B on top
+    echo "more content" > more.txt
+    git add more.txt
+    git commit -m "Commit B"
+    git push origin "${branch}"
+
+    # Verify commit A is still on origin/main (because A is ancestor of B)
+    run v0_verify_push_with_retry "${commit_a}" "origin/${branch}" 1 0
+    assert_success
+}
+
+@test "v0_verify_push_with_retry uses prefix matching for commit hashes" {
+    source_lib "v0-common.sh"
+    init_mock_git_repo "${TEST_TEMP_DIR}/project"
+    cd "${TEST_TEMP_DIR}/project" || return 1
+
+    # Create a bare "remote" repo and set up origin
+    git clone --bare . "${TEST_TEMP_DIR}/origin.git"
+    git remote remove origin 2>/dev/null || true
+    git remote add origin "${TEST_TEMP_DIR}/origin.git"
+
+    # Get current branch name
+    local branch
+    branch=$(git rev-parse --abbrev-ref HEAD)
+    git push -u origin "${branch}"
+
+    # Get full commit hash
+    local full_commit
+    full_commit=$(git rev-parse HEAD)
+
+    # Use short hash (first 7 chars)
+    local short_commit="${full_commit:0:7}"
+
+    # Verify using short hash
+    run v0_verify_push_with_retry "${short_commit}" "origin/${branch}" 1 0
+    assert_success
+}
+
+# ============================================================================
+# v0_diagnose_push_verification() tests
+# ============================================================================
+
+@test "v0_diagnose_push_verification outputs diagnostic info" {
+    source_lib "v0-common.sh"
+    init_mock_git_repo "${TEST_TEMP_DIR}/project"
+    cd "${TEST_TEMP_DIR}/project" || return 1
+
+    # Create a bare "remote" repo and set up origin
+    git clone --bare . "${TEST_TEMP_DIR}/origin.git"
+    git remote remove origin 2>/dev/null || true
+    git remote add origin "${TEST_TEMP_DIR}/origin.git"
+
+    # Get current branch name
+    local branch
+    branch=$(git rev-parse --abbrev-ref HEAD)
+    git push -u origin "${branch}"
+
+    local commit
+    commit=$(git rev-parse HEAD)
+
+    # Capture diagnostic output
+    run v0_diagnose_push_verification "${commit}" "origin/${branch}"
+
+    # Check that key diagnostic sections are present
+    assert_output --partial "Push Verification Diagnostic"
+    assert_output --partial "Commit to verify:"
+    assert_output --partial "Local refs:"
+    assert_output --partial "Remote state"
+    assert_output --partial "Ancestry check:"
+}
+
+@test "v0_diagnose_push_verification shows commit existence" {
+    source_lib "v0-common.sh"
+    init_mock_git_repo "${TEST_TEMP_DIR}/project"
+    cd "${TEST_TEMP_DIR}/project" || return 1
+
+    # Create a bare "remote" repo and set up origin
+    git clone --bare . "${TEST_TEMP_DIR}/origin.git"
+    git remote remove origin 2>/dev/null || true
+    git remote add origin "${TEST_TEMP_DIR}/origin.git"
+
+    # Get current branch name
+    local branch
+    branch=$(git rev-parse --abbrev-ref HEAD)
+    git push -u origin "${branch}"
+
+    local commit
+    commit=$(git rev-parse HEAD)
+
+    run v0_diagnose_push_verification "${commit}" "origin/${branch}"
+    assert_output --partial "exists locally"
+}
+
+@test "v0_diagnose_push_verification handles missing commit" {
+    source_lib "v0-common.sh"
+    init_mock_git_repo "${TEST_TEMP_DIR}/project"
+    cd "${TEST_TEMP_DIR}/project" || return 1
+
+    # Create a bare "remote" repo and set up origin
+    git clone --bare . "${TEST_TEMP_DIR}/origin.git"
+    git remote remove origin 2>/dev/null || true
+    git remote add origin "${TEST_TEMP_DIR}/origin.git"
+
+    # Get current branch name
+    local branch
+    branch=$(git rev-parse --abbrev-ref HEAD)
+    git push -u origin "${branch}"
+
+    # Use a fake commit hash that doesn't exist
+    local fake_commit="1234567890abcdef1234567890abcdef12345678"
+
+    run v0_diagnose_push_verification "${fake_commit}" "origin/${branch}"
+    assert_output --partial "NOT FOUND locally"
+}
+
+@test "v0_verify_push_with_retry uses ls-remote fallback when local ref stale" {
+    source_lib "v0-common.sh"
+    init_mock_git_repo "${TEST_TEMP_DIR}/project"
+    cd "${TEST_TEMP_DIR}/project" || return 1
+
+    # Create a bare "remote" repo and set up origin
+    git clone --bare . "${TEST_TEMP_DIR}/origin.git"
+    git remote remove origin 2>/dev/null || true
+    git remote add origin "${TEST_TEMP_DIR}/origin.git"
+
+    # Get current branch name
+    local branch
+    branch=$(git rev-parse --abbrev-ref HEAD)
+
+    # Push initial commit
+    git push -u origin "${branch}"
+
+    # Get the commit we pushed
+    local commit
+    commit=$(git rev-parse HEAD)
+
+    # Reset local origin/main to an older state to simulate stale ref cache
+    # Create a second commit and push it
+    echo "second" > second.txt
+    git add second.txt
+    git commit -m "Second commit"
+    git push origin "${branch}"
+
+    # Now reset local origin/main to before our second commit
+    # This simulates a stale local ref (remote has moved forward but local ref is stale)
+    git update-ref "refs/remotes/origin/${branch}" "${commit}"
+
+    # The second commit should still verify because ls-remote fallback will see it
+    local second_commit
+    second_commit=$(git rev-parse HEAD)
+
+    # Verification should succeed via ls-remote fallback
+    run v0_verify_push_with_retry "${second_commit}" "origin/${branch}" 1 0
+    assert_success
+}
+
+@test "v0_verify_push_with_retry shows retry message when first attempt fails" {
+    source_lib "v0-common.sh"
+    init_mock_git_repo "${TEST_TEMP_DIR}/project"
+    cd "${TEST_TEMP_DIR}/project" || return 1
+
+    # Create a bare "remote" repo and set up origin
+    git clone --bare . "${TEST_TEMP_DIR}/origin.git"
+    git remote remove origin 2>/dev/null || true
+    git remote add origin "${TEST_TEMP_DIR}/origin.git"
+
+    # Get current branch name
+    local branch
+    branch=$(git rev-parse --abbrev-ref HEAD)
+    git push -u origin "${branch}"
+
+    # Use a commit that doesn't exist - verification will fail and show retry messages
+    local fake_commit="1234567890abcdef1234567890abcdef12345678"
+
+    # Run with 2 attempts and 0 delay so we get retry output quickly
+    run v0_verify_push_with_retry "${fake_commit}" "origin/${branch}" 2 0
+    assert_failure
+
+    # Should show retry message for the first failed attempt
+    assert_output --partial "Verification attempt 1/2 failed, retrying"
+}
