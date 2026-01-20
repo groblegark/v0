@@ -743,6 +743,7 @@ if [[ -n "${LIST}" ]] || [[ -n "${BLOCKED}" ]]; then
           fi
         fi
       fi
+      [[ "${bugs_empty}" != true ]] && echo ""
 
       # Chores section
       chore_worker_running=false
@@ -782,6 +783,7 @@ if [[ -n "${LIST}" ]] || [[ -n "${BLOCKED}" ]]; then
           fi
         fi
       fi
+      [[ "${chores_empty}" != true ]] && echo ""
 
       # Merges section
       mergeq_pid_file="${BUILD_DIR}/mergeq/.daemon.pid"
