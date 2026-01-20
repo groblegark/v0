@@ -945,7 +945,7 @@ _sm_format_phase_display() {
             merge_icon="(== CONFLICT ==)"
             ;;
           resumed)
-            merge_icon="(resumed)"
+            merge_icon="(== NEEDS MERGE ==)"
             ;;
           *)
             # No queue entry - fall back to state.json

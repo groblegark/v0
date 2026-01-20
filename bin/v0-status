@@ -922,7 +922,7 @@ show_status() {
             echo "Status: completed (== CONFLICT ==)"
             ;;
           resumed)
-            echo "Status: completed (resumed)"
+            echo "Status: completed (== NEEDS MERGE ==)"
             ;;
           *)
             # No queue entry - fall back to state.json indicators
