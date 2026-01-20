@@ -560,7 +560,14 @@ RESOLVE_EOF
 
       rm -f "${RESOLVE_LOG}" && cleanup && git push && {
         # Verify push succeeded with retries to handle propagation delay
+        verify_start=$(date +%s)
         if v0_verify_push_with_retry "${merge_commit}" "origin/main" 3 2; then
+          verify_end=$(date +%s)
+          verify_duration=$((verify_end - verify_start))
+          if [[ ${verify_duration} -gt 2 ]]; then
+            echo "Note: Push verification took ${verify_duration}s" >&2
+          fi
+
           # Record merge commit in state, then update status
           op_to_update="${OP_NAME:-}"
           if [[ -z "${op_to_update}" ]]; then
@@ -601,7 +608,14 @@ else
 
     cleanup && git push && {
       # Verify push succeeded with retries to handle propagation delay
+      verify_start=$(date +%s)
       if v0_verify_push_with_retry "${merge_commit}" "origin/main" 3 2; then
+        verify_end=$(date +%s)
+        verify_duration=$((verify_end - verify_start))
+        if [[ ${verify_duration} -gt 2 ]]; then
+          echo "Note: Push verification took ${verify_duration}s" >&2
+        fi
+
         # Record merge commit in state, then update status
         # Try operation name first (if available), then basename of branch
         op_to_update="${OP_NAME:-}"
