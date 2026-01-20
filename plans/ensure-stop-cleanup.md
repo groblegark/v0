@@ -1,5 +1,7 @@
 # Plan: ensure-stop-cleanup
 
+**Root Feature:** `v0-e7e1`
+
 ## Overview
 
 Add cleanup logic to `v0 chore --stop` and `v0 fix --stop` commands that reopens in-progress issues assigned to the respective workers. Currently, these commands clean up worktrees and branches but leave issues in `in_progress` status with worker assignees, requiring `v0 shutdown` for full cleanup.

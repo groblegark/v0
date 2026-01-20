@@ -1,5 +1,7 @@
 # Fix: False Positive "Merged" Status in v0 status
 
+**Root Feature:** `v0-784e`
+
 ## Overview
 
 `v0 status` occasionally displays operations as "merged" before the code is actually merged to main. This plan identifies root causes and implements verification to ensure the "merged" status only appears when commits are truly on the main branch.
