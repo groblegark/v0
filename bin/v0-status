@@ -549,12 +549,12 @@ if [[ -n "${LIST}" ]] || [[ -n "${BLOCKED}" ]]; then
     # it's definitely running locally regardless of the machine field in state.json
     status_icon=""
     if [[ -n "${session}" ]] && [[ "${all_sessions}" == *"${session}"* ]]; then
-      status_icon=" ${C_CYAN}[active]${C_RESET}"
+      status_icon=" ${C_CYAN}(active)${C_RESET}"
     fi
     # Check if background worker is running
     if [[ -z "${status_icon}" ]] && [[ -n "${worker_pid}" ]] && [[ "${worker_pid}" != "null" ]]; then
       if [[ "${machine}" = "${local_machine}" ]] && kill -0 "${worker_pid}" 2>/dev/null; then
-        status_icon=" ${C_CYAN}[bg-worker]${C_RESET}"
+        status_icon=" ${C_CYAN}(bg-worker)${C_RESET}"
       fi
     fi
 
@@ -616,15 +616,19 @@ if [[ -n "${LIST}" ]] || [[ -n "${BLOCKED}" ]]; then
     fi
 
     # Update status_icon for specific phase/activity combinations
+    # Use () for active status indicators, [] for conditions like [held] or [after ...]
     case "${phase}" in
       init)
-        [[ -n "${status_icon}" ]] && status_icon=" ${C_YELLOW}[planning]${C_RESET}"
+        [[ -n "${status_icon}" ]] && status_icon=" ${C_YELLOW}(planning...)${C_RESET}"
         ;;
       planned)
-        [[ -n "${status_icon}" ]] && status_icon=" ${C_YELLOW}[decomposing]${C_RESET}"
+        [[ -n "${status_icon}" ]] && status_icon=" ${C_YELLOW}(decomposing...)${C_RESET}"
         ;;
       queued|executing)
-        [[ -n "${status_icon}" ]] && status_icon=" ${C_CYAN}[building]${C_RESET}"
+        [[ -n "${status_icon}" ]] && status_icon=" ${C_CYAN}(building...)${C_RESET}"
+        ;;
+      blocked)
+        [[ -n "${status_icon}" ]] && status_icon=" ${C_YELLOW}(waiting...)${C_RESET}"
         ;;
       failed)
         status_icon=" ${C_RED}${C_BOLD}(== ERROR ==)${C_RESET}"
