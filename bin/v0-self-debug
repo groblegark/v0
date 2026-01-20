@@ -182,12 +182,15 @@ generate_operation_report() {
         return 1
     fi
 
-    # Extract state info
+    # Extract state info using state machine
     local type="unknown" phase="unknown" status="unknown"
-    if [[ -f "${state_file}" ]]; then
-        type=$(jq -r '.type // "unknown"' "${state_file}")
-        phase=$(jq -r '.phase // "unknown"' "${state_file}")
-        status=$(jq -r '.status // "unknown"' "${state_file}")
+    if sm_state_exists "${op_name}"; then
+        type=$(sm_read_state "${op_name}" "type")
+        [[ -z "${type}" ]] && type="unknown"
+        phase=$(sm_read_state "${op_name}" "phase")
+        [[ -z "${phase}" ]] && phase="unknown"
+        status=$(sm_read_state "${op_name}" "status")
+        [[ -z "${status}" ]] && status="unknown"
     fi
 
     # Find worktree if exists
@@ -507,15 +510,17 @@ generate_merge_phase_operations() {
     for state_file in "${ops_dir}"/*/state.json; do
         [[ -f "${state_file}" ]] || continue
 
-        local phase
-        phase=$(jq -r '.phase // ""' "${state_file}")
+        local op_dir op_name phase
+        op_dir=$(dirname "${state_file}")
+        op_name=$(basename "${op_dir}")
+        phase=$(sm_read_state "${op_name}" "phase")
 
         # Check if in merge-related phase
-        if [[ "${phase}" = "merging" ]] || [[ "${phase}" = "merge" ]] || [[ "${phase}" = "merge_queued" ]]; then
+        if [[ "${phase}" = "merging" ]] || [[ "${phase}" = "pending_merge" ]] || [[ "${phase}" = "conflict" ]]; then
             found_any=true
-            local op_name status
-            op_name=$(jq -r '.name' "${state_file}")
-            status=$(jq -r '.status // "unknown"' "${state_file}")
+            local status
+            status=$(sm_read_state "${op_name}" "status")
+            [[ -z "${status}" ]] && status="unknown"
 
             echo "### ${op_name}"
             echo ""

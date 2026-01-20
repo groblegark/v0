@@ -791,3 +791,274 @@ create_test_state() {
     run sm_get_phase "child-op"
     assert_output "init"
 }
+
+# ============================================================================
+# Schema Versioning Tests
+# ============================================================================
+
+@test "sm_get_state_version returns 0 for legacy state files" {
+    create_test_state "test-op" "init"
+
+    run sm_get_state_version "test-op"
+    assert_success
+    assert_output "0"
+}
+
+@test "sm_get_state_version returns version from state file" {
+    local op_dir="${BUILD_DIR}/operations/test-op"
+    mkdir -p "${op_dir}/logs"
+    echo '{"name": "test-op", "phase": "init", "_schema_version": 1}' > "${op_dir}/state.json"
+
+    run sm_get_state_version "test-op"
+    assert_success
+    assert_output "1"
+}
+
+@test "sm_get_state_version fails for missing state file" {
+    run sm_get_state_version "nonexistent"
+    assert_failure
+}
+
+@test "sm_migrate_state migrates v0 to v1" {
+    create_test_state "test-op" "init"
+
+    sm_migrate_state "test-op"
+
+    run sm_get_state_version "test-op"
+    assert_output "1"
+
+    # Should have _migrated_at field
+    migrated_at=$(sm_read_state "test-op" "_migrated_at")
+    [[ "${migrated_at}" =~ ^[0-9]{4}-[0-9]{2}-[0-9]{2}T ]]
+
+    # Should have logged the migration event
+    run cat "${BUILD_DIR}/operations/test-op/logs/events.log"
+    assert_output --partial "schema:migrated"
+}
+
+@test "sm_migrate_state skips already current schema" {
+    local op_dir="${BUILD_DIR}/operations/test-op"
+    mkdir -p "${op_dir}/logs"
+    echo '{"name": "test-op", "phase": "init", "_schema_version": 1}' > "${op_dir}/state.json"
+
+    sm_migrate_state "test-op"
+
+    # Should not have _migrated_at field (no migration occurred)
+    run sm_read_state "test-op" "_migrated_at"
+    assert_output ""
+}
+
+@test "sm_ensure_current_schema auto-migrates on access" {
+    create_test_state "test-op" "init"
+
+    # Reading phase triggers auto-migration
+    run sm_get_phase "test-op"
+    assert_output "init"
+
+    # Should now have schema version 1
+    run sm_get_state_version "test-op"
+    assert_output "1"
+}
+
+@test "new state files should include _schema_version when created with transitions" {
+    # Create a minimal state file
+    local op_dir="${BUILD_DIR}/operations/test-op"
+    mkdir -p "${op_dir}/logs"
+    echo '{"name": "test-op", "phase": "init"}' > "${op_dir}/state.json"
+
+    # Transition should trigger migration
+    sm_transition_to_planned "test-op" "plans/test.md"
+
+    run sm_get_state_version "test-op"
+    assert_output "1"
+}
+
+# ============================================================================
+# Batch State Reads Tests
+# ============================================================================
+
+@test "sm_read_state_fields reads multiple fields" {
+    create_test_state "test-op" "executing" '"tmux_session": "v0-test", "worktree": "/path/to/worktree"'
+
+    run sm_read_state_fields "test-op" phase tmux_session worktree
+    assert_success
+    # Output is tab-separated
+    assert_output "executing	v0-test	/path/to/worktree"
+}
+
+@test "sm_read_state_fields returns empty for missing fields" {
+    create_test_state "test-op" "init"
+
+    run sm_read_state_fields "test-op" phase nonexistent another_missing
+    assert_success
+    # Only phase should have a value, missing fields are empty
+    # Output contains init followed by tab-separated empty values
+    assert_output --partial "init"
+}
+
+@test "sm_read_state_fields fails for missing state file" {
+    run sm_read_state_fields "nonexistent" phase
+    assert_failure
+}
+
+# bats test_tags=skip:bash3
+@test "sm_read_all_state reads entire state" {
+    # Skip on bash < 4 (no associative arrays)
+    if [[ "${BASH_VERSINFO[0]}" -lt 4 ]]; then
+        skip "Requires bash 4+ for associative arrays"
+    fi
+
+    create_test_state "test-op" "executing" '"tmux_session": "v0-test", "prompt": "Build feature"'
+
+    declare -A state
+    sm_read_all_state "test-op" state
+
+    [[ "${state[name]}" == "test-op" ]]
+    [[ "${state[phase]}" == "executing" ]]
+    [[ "${state[tmux_session]}" == "v0-test" ]]
+    [[ "${state[prompt]}" == "Build feature" ]]
+}
+
+# bats test_tags=skip:bash3
+@test "sm_read_all_state fails for missing state file" {
+    # Skip on bash < 4 (no associative arrays)
+    if [[ "${BASH_VERSINFO[0]}" -lt 4 ]]; then
+        skip "Requires bash 4+ for associative arrays"
+    fi
+
+    declare -A state
+    run sm_read_all_state "nonexistent" state
+    assert_failure
+}
+
+# ============================================================================
+# Log Rotation Tests
+# ============================================================================
+
+@test "sm_rotate_log rotates log files" {
+    local op_dir="${BUILD_DIR}/operations/test-op"
+    mkdir -p "${op_dir}/logs"
+    echo "log content 1" > "${op_dir}/logs/events.log"
+
+    sm_rotate_log "${op_dir}/logs/events.log"
+
+    # Original should be gone
+    assert_file_not_exists "${op_dir}/logs/events.log"
+    # Should be rotated to .1
+    assert_file_exists "${op_dir}/logs/events.log.1"
+    run cat "${op_dir}/logs/events.log.1"
+    assert_output "log content 1"
+}
+
+@test "sm_rotate_log shifts existing rotated logs" {
+    local op_dir="${BUILD_DIR}/operations/test-op"
+    mkdir -p "${op_dir}/logs"
+    echo "current" > "${op_dir}/logs/events.log"
+    echo "previous" > "${op_dir}/logs/events.log.1"
+    echo "older" > "${op_dir}/logs/events.log.2"
+
+    sm_rotate_log "${op_dir}/logs/events.log"
+
+    # Current should be gone, .1 should have current content
+    assert_file_not_exists "${op_dir}/logs/events.log"
+    run cat "${op_dir}/logs/events.log.1"
+    assert_output "current"
+    run cat "${op_dir}/logs/events.log.2"
+    assert_output "previous"
+    run cat "${op_dir}/logs/events.log.3"
+    assert_output "older"
+}
+
+@test "sm_rotate_log removes oldest log when at limit" {
+    local op_dir="${BUILD_DIR}/operations/test-op"
+    mkdir -p "${op_dir}/logs"
+    echo "current" > "${op_dir}/logs/events.log"
+    echo "log1" > "${op_dir}/logs/events.log.1"
+    echo "log2" > "${op_dir}/logs/events.log.2"
+    echo "log3" > "${op_dir}/logs/events.log.3"  # This is the limit
+
+    sm_rotate_log "${op_dir}/logs/events.log"
+
+    # .3 should now have log2 content (shifted), original .3 deleted
+    run cat "${op_dir}/logs/events.log.3"
+    assert_output "log2"
+    # There should be no .4
+    assert_file_not_exists "${op_dir}/logs/events.log.4"
+}
+
+@test "sm_emit_event triggers rotation when log exceeds size limit" {
+    local op_dir="${BUILD_DIR}/operations/test-op"
+    mkdir -p "${op_dir}/logs"
+    # Create a file larger than SM_LOG_MAX_SIZE (100KB)
+    dd if=/dev/zero bs=1024 count=101 2>/dev/null | tr '\0' 'x' > "${op_dir}/logs/events.log"
+
+    sm_emit_event "test-op" "test:event" "After rotation"
+
+    # Old log should be rotated
+    assert_file_exists "${op_dir}/logs/events.log.1"
+    # New log should exist with our event
+    assert_file_exists "${op_dir}/logs/events.log"
+    run cat "${op_dir}/logs/events.log"
+    assert_output --partial "test:event"
+    assert_output --partial "After rotation"
+}
+
+# ============================================================================
+# Cancel Transition Tests
+# ============================================================================
+
+@test "sm_transition_to_cancelled transitions from init" {
+    create_test_state "test-op" "init"
+
+    sm_transition_to_cancelled "test-op"
+
+    run sm_read_state "test-op" "phase"
+    assert_output "cancelled"
+
+    # Should have cancelled_at timestamp
+    cancelled_at=$(sm_read_state "test-op" "cancelled_at")
+    [[ "${cancelled_at}" =~ ^[0-9]{4}-[0-9]{2}-[0-9]{2}T ]]
+}
+
+@test "sm_transition_to_cancelled transitions from executing" {
+    create_test_state "test-op" "executing"
+
+    sm_transition_to_cancelled "test-op"
+
+    run sm_read_state "test-op" "phase"
+    assert_output "cancelled"
+}
+
+@test "sm_transition_to_cancelled transitions from blocked" {
+    create_test_state "test-op" "blocked" '"after": "parent-op"'
+
+    sm_transition_to_cancelled "test-op"
+
+    run sm_read_state "test-op" "phase"
+    assert_output "cancelled"
+}
+
+@test "sm_transition_to_cancelled fails from merged (terminal)" {
+    create_test_state "test-op" "merged"
+
+    run sm_transition_to_cancelled "test-op"
+    assert_failure
+    assert_output --partial "terminal state"
+}
+
+@test "sm_transition_to_cancelled fails from cancelled (terminal)" {
+    create_test_state "test-op" "cancelled"
+
+    run sm_transition_to_cancelled "test-op"
+    assert_failure
+    assert_output --partial "terminal state"
+}
+
+@test "sm_transition_to_cancelled emits event" {
+    create_test_state "test-op" "init"
+
+    sm_transition_to_cancelled "test-op"
+
+    run cat "${BUILD_DIR}/operations/test-op/logs/events.log"
+    assert_output --partial "operation:cancelled"
+}

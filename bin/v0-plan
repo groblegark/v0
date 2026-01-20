@@ -103,7 +103,7 @@ if [[ -n "${DIRECT}" ]]; then
 
   # Check if operation is held
   if [[ -f "${STATE_FILE}" ]]; then
-    v0_exit_if_held "${NAME}" "plan"
+    sm_exit_if_held "${NAME}" "plan"
   fi
 
   # Create or update operation state if it doesn't exist
@@ -173,7 +173,7 @@ mkdir -p "${STATE_DIR}/logs"
 
 # Check if operation is held
 if [[ -f "${STATE_FILE}" ]]; then
-  v0_exit_if_held "${NAME}" "plan"
+  sm_exit_if_held "${NAME}" "plan"
 fi
 
 # Create or update operation state if it doesn't exist

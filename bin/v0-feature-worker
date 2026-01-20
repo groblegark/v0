@@ -76,17 +76,16 @@ emit_event() {
 
 is_after_op_merged() {
   local op="$1"
-  local state_file="${BUILD_DIR}/operations/${op}/state.json"
-  [[ ! -f "${state_file}" ]] && return 1
   local phase
-  phase=$(jq -r '.phase' "${state_file}")
+  phase=$(sm_get_phase "${op}")
   [[ "${phase}" = "merged" ]]
 }
 
 get_blocker_phase() {
   local op="$1"
-  local state_file="${BUILD_DIR}/operations/${op}/state.json"
-  [[ -f "${state_file}" ]] && jq -r '.phase' "${state_file}" || echo "unknown"
+  local phase
+  phase=$(sm_get_phase "${op}")
+  echo "${phase:-unknown}"
 }
 
 create_done_script() {
@@ -149,15 +148,23 @@ handle_signal() {
 trap handle_signal SIGTERM SIGINT
 
 cleanup() {
-  update_state "worker_pid" "null"
+  sm_update_state "${NAME}" "worker_pid" "null"
   if [[ -n "${INTERRUPTED}" ]]; then
-    update_state "phase" '"interrupted"'
-    emit_event "worker:interrupted" "Worker was terminated by signal"
+    # Use state machine transition for interrupted state
+    sm_transition_to_interrupted "${NAME}" 2>/dev/null || {
+      # Fall back to direct update if transition fails (e.g., from terminal state)
+      sm_update_state "${NAME}" "phase" '"interrupted"'
+      sm_emit_event "${NAME}" "worker:interrupted" "Worker was terminated by signal"
+    }
     log "Worker interrupted"
   elif [[ -n "${ERROR_MSG}" ]]; then
-    update_state "phase" '"failed"'
-    update_state "error" "$(printf '%s' "${ERROR_MSG}" | jq -Rs .)"
-    emit_event "worker:failed" "${ERROR_MSG}"
+    # Use state machine transition for failed state
+    sm_transition_to_failed "${NAME}" "${ERROR_MSG}" 2>/dev/null || {
+      # Fall back to direct update if transition fails
+      sm_update_state "${NAME}" "phase" '"failed"'
+      sm_update_state "${NAME}" "error" "$(printf '%s' "${ERROR_MSG}" | jq -Rs .)"
+      sm_emit_event "${NAME}" "worker:failed" "${ERROR_MSG}"
+    }
   fi
   log "Background worker cleanup complete"
 }
@@ -166,9 +173,9 @@ trap cleanup EXIT
 # Check hold before starting new phases
 # Returns 0 if can proceed, 1 if held
 check_hold_before_phase() {
-  if v0_is_held "${NAME}"; then
+  if sm_is_held "${NAME}"; then
     log "Operation is held, pausing worker"
-    emit_event "hold:paused" "Worker paused due to hold"
+    sm_emit_event "${NAME}" "hold:paused" "Worker paused due to hold"
     return 1
   fi
   return 0
@@ -296,9 +303,8 @@ EOF
 
   rm -f "${STATE_DIR}/done"
 
-  update_state "plan_file" "\"${V0_PLANS_DIR}/${NAME}.md\""
-  update_state "phase" '"planned"'
-  emit_event "plan:created" "${V0_PLANS_DIR}/${NAME}.md"
+  # Use state machine transition to planned phase
+  sm_transition_to_planned "${NAME}" "${V0_PLANS_DIR}/${NAME}.md"
   log "Plan phase complete"
 }
 
@@ -428,8 +434,9 @@ EOF
 
   rm -f "${STATE_DIR}/done"
 
-  update_state "phase" '"queued"'
-  emit_event "work:queued" "Issues created with label plan:${NAME}"
+  # Use state machine transition to queued phase
+  FEATURE_ID=$(sm_read_state "${NAME}" "epic_id")
+  sm_transition_to_queued "${NAME}" "${FEATURE_ID}"
   log "Decompose phase complete"
 }
 
@@ -451,9 +458,8 @@ run_build_phase() {
 
   if [[ "${EAGER}" = "true" ]] && [[ -n "${AFTER}" ]] && [[ "${AFTER}" != "null" ]]; then
     if ! is_after_op_merged "${AFTER}"; then
-      emit_event "blocked:waiting" "Waiting for ${AFTER} to merge (eager)"
-      update_state "phase" '"blocked"'
-      update_state "blocked_phase" '"queued"'
+      # Use state machine transition to blocked phase
+      sm_transition_to_blocked "${NAME}" "${AFTER}" "queued"
       log "Planning complete. Will execute after '${AFTER}' merges."
       log "Current phase: $(get_blocker_phase "${AFTER}")"
       return 0
@@ -581,10 +587,10 @@ WRAPPER
      '${TREE_DIR}/.claude/on-complete.sh'; \
      echo ''; echo 'Session complete. Closing in 5 seconds...'; sleep 5"
 
-  update_state "tmux_session" "\"${SESSION}\""
-  update_state "worktree" "\"${TREE_DIR}/${REPO_NAME}\""
-  update_state "phase" '"executing"'
-  emit_event "agent:launched" "tmux session ${SESSION}"
+  # Store worktree first (needed by sm_is_merge_ready later)
+  sm_update_state "${NAME}" "worktree" "\"${TREE_DIR}/${REPO_NAME}\""
+  # Use state machine transition to executing phase
+  sm_transition_to_executing "${NAME}" "${SESSION}"
 
   log "Build phase started: tmux session ${SESSION}"
   log "Watch live: v0 attach feature ${NAME}"
@@ -593,9 +599,9 @@ WRAPPER
 main() {
   log "Starting background worker for ${NAME}"
 
-  update_state "worker_started_at" "\"$(date -u +%Y-%m-%dT%H:%M:%SZ)\""
+  sm_update_state "${NAME}" "worker_started_at" "\"$(date -u +%Y-%m-%dT%H:%M:%SZ)\""
 
-  PHASE=$(get_state phase)
+  PHASE=$(sm_get_phase "${NAME}")
   log "Current phase: ${PHASE}"
 
   case "${PHASE}" in
@@ -622,29 +628,25 @@ main() {
       ;;
     failed|interrupted|cancelled)
       log "Recovering from ${PHASE} state"
-      update_state "error" "null"
-      # Determine what phase to resume from based on state
-      PLAN_FILE=$(get_state plan_file)
-      EPIC_ID=$(get_state epic_id)
-      if [[ -n "${EPIC_ID}" ]] && [[ "${EPIC_ID}" != "null" ]]; then
-        log "Resuming from queued (epic exists)"
-        update_state "phase" '"queued"'
-        emit_event "worker:recovered" "Resuming from ${PHASE} at queued"
-        run_build_phase || exit 1
-      elif [[ -n "${PLAN_FILE}" ]] && [[ "${PLAN_FILE}" != "null" ]]; then
-        log "Resuming from planned (plan file exists)"
-        update_state "phase" '"planned"'
-        emit_event "worker:recovered" "Resuming from ${PHASE} at planned"
-        run_decompose_phase || exit 1
-        run_build_phase || exit 1
-      else
-        log "Resuming from init (no prior progress)"
-        update_state "phase" '"init"'
-        emit_event "worker:recovered" "Resuming from ${PHASE} at init"
-        run_plan_phase || exit 1
-        run_decompose_phase || exit 1
-        run_build_phase || exit 1
-      fi
+      # Use state machine to determine resume phase and clear error
+      RESUME_PHASE=$(sm_get_resume_phase "${NAME}")
+      sm_clear_error_state "${NAME}"
+      log "Resuming from ${RESUME_PHASE}"
+      sm_emit_event "${NAME}" "worker:recovered" "Resuming from ${PHASE} at ${RESUME_PHASE}"
+      case "${RESUME_PHASE}" in
+        queued)
+          run_build_phase || exit 1
+          ;;
+        planned)
+          run_decompose_phase || exit 1
+          run_build_phase || exit 1
+          ;;
+        init)
+          run_plan_phase || exit 1
+          run_decompose_phase || exit 1
+          run_build_phase || exit 1
+          ;;
+      esac
       ;;
     *)
       log "Phase '${PHASE}' does not require worker processing"

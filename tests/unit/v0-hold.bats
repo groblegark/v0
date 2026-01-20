@@ -314,7 +314,7 @@ EOF
 # Helper Function Tests
 # ============================================================================
 
-@test "v0_is_held: returns false for non-held operation" {
+@test "sm_is_held: returns false for non-held operation" {
     local project_dir
     project_dir=$(setup_isolated_project)
     create_isolated_operation "${project_dir}" "testop" '{"name": "testop", "phase": "executing", "machine": "testmachine", "held": false}'
@@ -323,7 +323,7 @@ EOF
         cd "'"${project_dir}"'" || exit 1
         source "'"${PROJECT_ROOT}"'/lib/v0-common.sh"
         v0_load_config
-        if v0_is_held testop; then
+        if sm_is_held testop; then
             echo "held"
         else
             echo "not held"
@@ -333,7 +333,7 @@ EOF
     assert_output "not held"
 }
 
-@test "v0_is_held: returns true for held operation" {
+@test "sm_is_held: returns true for held operation" {
     local project_dir
     project_dir=$(setup_isolated_project)
     create_isolated_operation "${project_dir}" "testop" '{"name": "testop", "phase": "executing", "machine": "testmachine", "held": true, "held_at": "2026-01-15T10:00:00Z"}'
@@ -342,7 +342,7 @@ EOF
         cd "'"${project_dir}"'" || exit 1
         source "'"${PROJECT_ROOT}"'/lib/v0-common.sh"
         v0_load_config
-        if v0_is_held testop; then
+        if sm_is_held testop; then
             echo "held"
         else
             echo "not held"
@@ -352,7 +352,7 @@ EOF
     assert_output "held"
 }
 
-@test "v0_is_held: returns false for non-existent operation" {
+@test "sm_is_held: returns false for non-existent operation" {
     local project_dir
     project_dir=$(setup_isolated_project)
 
@@ -360,7 +360,7 @@ EOF
         cd "'"${project_dir}"'" || exit 1
         source "'"${PROJECT_ROOT}"'/lib/v0-common.sh"
         v0_load_config
-        if v0_is_held nonexistent; then
+        if sm_is_held nonexistent; then
             echo "held"
         else
             echo "not held"
@@ -370,7 +370,7 @@ EOF
     assert_output "not held"
 }
 
-@test "v0_exit_if_held: exits with message for held operation" {
+@test "sm_exit_if_held: exits with message for held operation" {
     local project_dir
     project_dir=$(setup_isolated_project)
     create_isolated_operation "${project_dir}" "testop" '{"name": "testop", "phase": "executing", "machine": "testmachine", "held": true, "held_at": "2026-01-15T10:00:00Z"}'
@@ -379,7 +379,7 @@ EOF
         cd "'"${project_dir}"'" || exit 1
         source "'"${PROJECT_ROOT}"'/lib/v0-common.sh"
         v0_load_config
-        v0_exit_if_held testop feature
+        sm_exit_if_held testop feature
         echo "should not reach here"
     '
     assert_success
@@ -388,7 +388,7 @@ EOF
     refute_output --partial "should not reach here"
 }
 
-@test "v0_exit_if_held: continues for non-held operation" {
+@test "sm_exit_if_held: continues for non-held operation" {
     local project_dir
     project_dir=$(setup_isolated_project)
     create_isolated_operation "${project_dir}" "testop" '{"name": "testop", "phase": "executing", "machine": "testmachine", "held": false}'
@@ -397,7 +397,7 @@ EOF
         cd "'"${project_dir}"'" || exit 1
         source "'"${PROJECT_ROOT}"'/lib/v0-common.sh"
         v0_load_config
-        v0_exit_if_held testop feature
+        sm_exit_if_held testop feature
         echo "continued"
     '
     assert_success

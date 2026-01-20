@@ -262,17 +262,16 @@ emit_event() {
 
 is_after_op_merged() {
   local op="$1"
-  local state_file="${BUILD_DIR}/operations/${op}/state.json"
-  [[ ! -f "${state_file}" ]] && return 1
   local phase
-  phase=$(jq -r '.phase' "${state_file}")
+  phase=$(sm_get_phase "${op}")
   [[ "${phase}" = "merged" ]]
 }
 
 get_blocker_phase() {
   local op="$1"
-  local state_file="${BUILD_DIR}/operations/${op}/state.json"
-  [[ -f "${state_file}" ]] && jq -r '.phase' "${state_file}" || echo "unknown"
+  local phase
+  phase=$(sm_get_phase "${op}")
+  echo "${phase:-unknown}"
 }
 
 create_done_script() {
@@ -367,11 +366,9 @@ if [[ -n "${RESUME}" ]]; then
   fi
 
   # Clear hold on resume
-  if v0_is_held "${NAME}"; then
+  if sm_is_held "${NAME}"; then
     echo "Clearing hold on '${NAME}'..."
-    tmp=$(mktemp)
-    jq '.held = false | .held_at = null' "${STATE_FILE}" > "${tmp}" && mv "${tmp}" "${STATE_FILE}"
-    emit_event "hold:cleared" "Hold cleared by resume"
+    sm_clear_hold "${NAME}"
   fi
 
   echo "Resuming '${NAME}' from phase: ${PHASE}"
@@ -536,19 +533,10 @@ if [[ -n "${RESUME}" ]]; then
   # Handle failed/interrupted/cancelled phases - reset to last known good phase
   if [[ "${PHASE}" = "failed" ]] || [[ "${PHASE}" = "interrupted" ]] || [[ "${PHASE}" = "cancelled" ]]; then
     echo "Clearing ${PHASE} state and resuming..."
-    update_state "error" "null"
-    # Determine what phase to resume from based on state
-    PLAN_FILE=$(get_state plan_file)
-    EPIC_ID=$(get_state epic_id)
-    if [[ -n "${EPIC_ID}" ]] && [[ "${EPIC_ID}" != "null" ]]; then
-      PHASE="queued"
-    elif [[ -n "${PLAN_FILE}" ]] && [[ "${PLAN_FILE}" != "null" ]]; then
-      PHASE="planned"
-    else
-      PHASE="init"
-    fi
-    update_state "phase" "\"${PHASE}\""
-    emit_event "resume:from_error" "Resuming from ${PHASE} after error/interrupt/cancel"
+    # Use state machine functions for resume phase determination
+    PHASE=$(sm_get_resume_phase "${NAME}")
+    sm_clear_error_state "${NAME}"
+    echo "Resuming from ${PHASE}"
   fi
 else
   init_state
@@ -556,14 +544,13 @@ else
 
   # Check if operation is held (for new operations with existing state)
   if [[ -f "${STATE_FILE}" ]]; then
-    v0_exit_if_held "${NAME}" "feature"
+    sm_exit_if_held "${NAME}" "feature"
   fi
 
   if [[ -z "${EAGER}" ]] && [[ -n "${AFTER}" ]] && [[ "${AFTER}" != "null" ]]; then
     if ! is_after_op_merged "${AFTER}"; then
-      emit_event "blocked:waiting" "Waiting for ${AFTER} to merge"
-      update_state "phase" '"blocked"'
-      update_state "blocked_phase" '"init"'
+      # Use state machine transition to blocked phase
+      sm_transition_to_blocked "${NAME}" "${AFTER}" "init"
       echo ""
       echo -e "${C_BOLD}${C_YELLOW}=== Waiting for '${AFTER}' ===${C_RESET}"
       echo "Will start after '${AFTER}' merges."
@@ -779,9 +766,8 @@ EOF
 
   rm -f "${STATE_DIR}/done"
 
-  update_state "plan_file" "\"${V0_PLANS_DIR}/${NAME}.md\""
-  update_state "phase" '"planned"'
-  emit_event "plan:created" "${V0_PLANS_DIR}/${NAME}.md"
+  # Use state machine transition to planned phase
+  sm_transition_to_planned "${NAME}" "${V0_PLANS_DIR}/${NAME}.md"
   PHASE="planned"
 fi
 
@@ -916,8 +902,9 @@ EOF
     rm -f "${STATE_DIR}/done"
   fi
 
-  update_state "phase" '"queued"'
-  emit_event "work:queued" "Issues created with label plan:${NAME}"
+  # Use state machine transition to queued phase
+  FEATURE_ID=$(get_state epic_id)
+  sm_transition_to_queued "${NAME}" "${FEATURE_ID}"
   PHASE="queued"
 fi
 
@@ -927,9 +914,8 @@ if [[ "${PHASE}" = "queued" ]] && [[ -z "${ENQUEUE_ONLY}" ]]; then
 
   if [[ -n "${EAGER}" ]] && [[ -n "${AFTER}" ]] && [[ "${AFTER}" != "null" ]]; then
     if ! is_after_op_merged "${AFTER}"; then
-      emit_event "blocked:waiting" "Waiting for ${AFTER} to merge (eager)"
-      update_state "phase" '"blocked"'
-      update_state "blocked_phase" '"queued"'
+      # Use state machine transition to blocked phase (eager mode)
+      sm_transition_to_blocked "${NAME}" "${AFTER}" "queued"
       echo ""
       echo -e "${C_BOLD}${C_YELLOW}=== Waiting for '${AFTER}' (eager mode) ===${C_RESET}"
       echo "Planning complete. Will execute after '${AFTER}' merges."
@@ -1066,10 +1052,10 @@ WRAPPER
        '${TREE_DIR}/.claude/on-complete.sh'; \
        echo ''; echo 'Session complete. Closing in 5 seconds...'; sleep 5"
 
-    update_state "tmux_session" "\"${SESSION}\""
+    # Store worktree first (needed by sm_is_merge_ready later)
     update_state "worktree" "\"${TREE_DIR}/${REPO_NAME}\""
-    update_state "phase" '"executing"'
-    emit_event "agent:launched" "tmux session ${SESSION}"
+    # Use state machine transition to executing phase
+    sm_transition_to_executing "${NAME}" "${SESSION}"
 
     echo ""
     echo -e "${C_BOLD}${C_CYAN}=== Build step started ===${C_RESET}"

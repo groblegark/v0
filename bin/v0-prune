@@ -65,14 +65,13 @@ prune_operation() {
     exit 1
   fi
 
-  # Check for running tmux session
-  local state_file="${op_dir}/state.json"
-  if [[ -f "${state_file}" ]]; then
+  # Check for running tmux session using state machine
+  if sm_state_exists "${name}"; then
     local session machine local_machine
-    session=$(jq -r '.tmux_session // empty' "${state_file}")
-    machine=$(jq -r '.machine // empty' "${state_file}")
+    session=$(sm_read_state "${name}" "tmux_session")
+    machine=$(sm_read_state "${name}" "machine")
     local_machine=$(hostname -s)
-    if [[ -n "${session}" ]] && [[ "${machine}" = "${local_machine}" ]] && tmux has-session -t "${session}" 2>/dev/null; then
+    if [[ -n "${session}" ]] && [[ "${session}" != "null" ]] && [[ "${machine}" = "${local_machine}" ]] && tmux has-session -t "${session}" 2>/dev/null; then
       if [[ -z "${FORCE}" ]]; then
         echo "Warning: Session '${session}' is still running"
         printf "Kill session and prune? [y/N] "
@@ -113,12 +112,11 @@ prune_completed() {
     merge_status=$(jq -r '.merge_status // empty' "${state_file}")
     should_prune=""
 
-    # Determine if operation should be pruned
-    if [[ "${phase}" = "cancelled" ]]; then
-      should_prune=1
-    elif [[ "${phase}" = "merged" ]]; then
+    # Check if operation should be pruned (terminal phases or merged status)
+    if sm_is_terminal_phase "${phase}"; then
       should_prune=1
     elif [[ "${phase}" = "completed" ]] || [[ "${phase}" = "pending_merge" ]]; then
+      # Also prune if merge_status is merged (legacy check)
       if [[ "${merge_status}" = "merged" ]]; then
         should_prune=1
       fi
