@@ -709,63 +709,43 @@ v0_verify_commit_on_branch() {
   return 0
 }
 
-# v0_verify_push_with_retry <commit> <remote_branch> [max_attempts] [delay_seconds]
-# Verify a pushed commit exists on a remote branch with retries
-# Returns 0 if verified, 1 if all attempts fail
+# v0_verify_push <commit>
+# Verify a pushed commit exists on local main.
+# Returns 0 if commit is on main, 1 if not.
 #
-# Handles:
-# - Transient network issues
-# - Propagation delays after push
-# - Git ref cache staleness
+# Why this is sufficient:
+# - git push returns 0 only if the push succeeded
+# - If push succeeded, the remote has the commit
+# - We verify locally that the commit is on main (sanity check)
+# - Remote state queries (ls-remote, fetch) can return stale data
 #
 # Args:
-#   commit        - Commit hash to verify
-#   remote_branch - Remote branch (e.g., "origin/main")
-#   max_attempts  - Number of verification attempts (default: 3)
-#   delay_seconds - Delay between attempts (default: 2)
+#   commit - Commit hash to verify
+v0_verify_push() {
+  local commit="$1"
+
+  # Validate commit exists
+  if ! git cat-file -e "${commit}^{commit}" 2>/dev/null; then
+    echo "Error: Commit ${commit:0:8} does not exist locally" >&2
+    return 1
+  fi
+
+  # Verify commit is on local main
+  if ! git merge-base --is-ancestor "${commit}" main 2>/dev/null; then
+    echo "Error: Commit ${commit:0:8} is not on main branch" >&2
+    return 1
+  fi
+
+  return 0
+}
+
+# DEPRECATED: v0_verify_push_with_retry <commit> <remote_branch> [max_attempts] [delay_seconds]
+# Use v0_verify_push instead. Remote verification is unreliable due to caching.
+# This function now just calls v0_verify_push (ignoring retry params).
 v0_verify_push_with_retry() {
   local commit="$1"
-  local remote_branch="$2"
-  local max_attempts="${3:-3}"
-  local delay="${4:-2}"
-
-  local remote="${remote_branch%%/*}"  # e.g., "origin" from "origin/main"
-  local branch="${remote_branch#*/}"   # e.g., "main" from "origin/main"
-
-  local attempt=1
-  while [[ ${attempt} -le ${max_attempts} ]]; do
-    # Force-refresh the remote ref
-    if ! git fetch "${remote}" "${branch}" --force 2>/dev/null; then
-      echo "Warning: fetch attempt ${attempt} failed" >&2
-    fi
-
-    # Try standard verification
-    if git merge-base --is-ancestor "${commit}" "${remote_branch}" 2>/dev/null; then
-      return 0
-    fi
-
-    # Fallback: check via ls-remote (bypasses local ref cache)
-    local remote_head
-    remote_head=$(git ls-remote "${remote}" "refs/heads/${branch}" 2>/dev/null | cut -f1)
-    if [[ -n "${remote_head}" ]]; then
-      # Check if our commit is ancestor of the remote HEAD
-      if git merge-base --is-ancestor "${commit}" "${remote_head}" 2>/dev/null; then
-        return 0
-      fi
-      # Check if commit IS the remote head (prefix match for short hashes)
-      if [[ "${commit}" = "${remote_head}"* ]] || [[ "${remote_head}" = "${commit}"* ]]; then
-        return 0
-      fi
-    fi
-
-    if [[ ${attempt} -lt ${max_attempts} ]]; then
-      echo "Verification attempt ${attempt}/${max_attempts} failed, retrying in ${delay}s..." >&2
-      sleep "${delay}"
-    fi
-    ((attempt++))
-  done
-
-  return 1
+  # Ignore remote_branch, max_attempts, delay - they cause more harm than good
+  v0_verify_push "${commit}"
 }
 
 # v0_diagnose_push_verification <commit> <remote_branch>

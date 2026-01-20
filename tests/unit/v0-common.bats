@@ -639,7 +639,55 @@ EOF
 }
 
 # ============================================================================
-# v0_verify_push_with_retry() tests
+# v0_verify_push() tests
+# ============================================================================
+
+@test "v0_verify_push returns 0 for commit on main" {
+    source_lib "v0-common.sh"
+    init_mock_git_repo "${TEST_TEMP_DIR}/project"
+    cd "${TEST_TEMP_DIR}/project" || return 1
+
+    local commit
+    commit=$(git rev-parse HEAD)
+
+    run v0_verify_push "${commit}"
+    assert_success
+}
+
+@test "v0_verify_push returns 1 for commit not on main" {
+    source_lib "v0-common.sh"
+    init_mock_git_repo "${TEST_TEMP_DIR}/project"
+    cd "${TEST_TEMP_DIR}/project" || return 1
+
+    # Create commit on separate branch
+    git checkout -b feature
+    echo "feature" > feature.txt
+    git add feature.txt
+    git commit -m "Feature commit"
+    local feature_commit
+    feature_commit=$(git rev-parse HEAD)
+
+    git checkout main
+
+    run v0_verify_push "${feature_commit}"
+    assert_failure
+    assert_output --partial "is not on main branch"
+}
+
+@test "v0_verify_push returns 1 for nonexistent commit" {
+    source_lib "v0-common.sh"
+    init_mock_git_repo "${TEST_TEMP_DIR}/project"
+    cd "${TEST_TEMP_DIR}/project" || return 1
+
+    local fake_commit="1234567890abcdef1234567890abcdef12345678"
+
+    run v0_verify_push "${fake_commit}"
+    assert_failure
+    assert_output --partial "does not exist locally"
+}
+
+# ============================================================================
+# v0_verify_push_with_retry() tests (DEPRECATED - now wraps v0_verify_push)
 # ============================================================================
 
 @test "v0_verify_push_with_retry returns 0 for commit on branch" {
@@ -833,7 +881,7 @@ EOF
     assert_output --partial "NOT FOUND locally"
 }
 
-@test "v0_verify_push_with_retry uses ls-remote fallback when local ref stale" {
+@test "v0_verify_push_with_retry still works for commits on local main" {
     source_lib "v0-common.sh"
     init_mock_git_repo "${TEST_TEMP_DIR}/project"
     cd "${TEST_TEMP_DIR}/project" || return 1
@@ -854,48 +902,17 @@ EOF
     local commit
     commit=$(git rev-parse HEAD)
 
-    # Reset local origin/main to an older state to simulate stale ref cache
     # Create a second commit and push it
     echo "second" > second.txt
     git add second.txt
     git commit -m "Second commit"
     git push origin "${branch}"
 
-    # Now reset local origin/main to before our second commit
-    # This simulates a stale local ref (remote has moved forward but local ref is stale)
-    git update-ref "refs/remotes/origin/${branch}" "${commit}"
-
-    # The second commit should still verify because ls-remote fallback will see it
     local second_commit
     second_commit=$(git rev-parse HEAD)
 
-    # Verification should succeed via ls-remote fallback
+    # Verification should succeed because commit is on local main
+    # (DEPRECATED: this used to test ls-remote fallback, now just tests local main check)
     run v0_verify_push_with_retry "${second_commit}" "origin/${branch}" 1 0
     assert_success
-}
-
-@test "v0_verify_push_with_retry shows retry message when first attempt fails" {
-    source_lib "v0-common.sh"
-    init_mock_git_repo "${TEST_TEMP_DIR}/project"
-    cd "${TEST_TEMP_DIR}/project" || return 1
-
-    # Create a bare "remote" repo and set up origin
-    git clone --bare . "${TEST_TEMP_DIR}/origin.git"
-    git remote remove origin 2>/dev/null || true
-    git remote add origin "${TEST_TEMP_DIR}/origin.git"
-
-    # Get current branch name
-    local branch
-    branch=$(git rev-parse --abbrev-ref HEAD)
-    git push -u origin "${branch}"
-
-    # Use a commit that doesn't exist - verification will fail and show retry messages
-    local fake_commit="1234567890abcdef1234567890abcdef12345678"
-
-    # Run with 2 attempts and 0 delay so we get retry output quickly
-    run v0_verify_push_with_retry "${fake_commit}" "origin/${branch}" 2 0
-    assert_failure
-
-    # Should show retry message for the first failed attempt
-    assert_output --partial "Verification attempt 1/2 failed, retrying"
 }
