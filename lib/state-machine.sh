@@ -13,6 +13,20 @@
 # Requires: V0_ROOT, BUILD_DIR, V0_DIR to be set (via v0_load_config)
 
 # ============================================================================
+# Schema Versioning
+# ============================================================================
+# Current schema version - increment when state.json format changes
+SM_STATE_VERSION=1
+
+# ============================================================================
+# Log Rotation Settings
+# ============================================================================
+# Maximum log file size before rotation (100KB)
+SM_LOG_MAX_SIZE=102400
+# Number of rotated logs to keep
+SM_LOG_KEEP_COUNT=3
+
+# ============================================================================
 # State Transition Table
 # ============================================================================
 # From State      -> Allowed Transitions
@@ -128,7 +142,112 @@ sm_bulk_update_state() {
 # Get current phase of an operation
 sm_get_phase() {
   local op="$1"
+  sm_ensure_current_schema "${op}"
   sm_read_state "${op}" "phase"
+}
+
+# ============================================================================
+# Schema Versioning Functions
+# ============================================================================
+
+# sm_get_state_version <op>
+# Get schema version from state file (defaults to 0 for legacy files)
+sm_get_state_version() {
+  local op="$1"
+  local state_file
+  state_file=$(sm_get_state_file "${op}")
+
+  if [[ ! -f "${state_file}" ]]; then
+    return 1
+  fi
+
+  local version
+  version=$(jq -r '._schema_version // 0' "${state_file}")
+  echo "${version}"
+}
+
+# sm_migrate_state <op>
+# Migrate state file to current schema version
+sm_migrate_state() {
+  local op="$1"
+  local version
+  version=$(sm_get_state_version "${op}")
+
+  # Already current
+  [[ "${version}" -ge "${SM_STATE_VERSION}" ]] && return 0
+
+  # Migration from v0 (legacy) to v1
+  if [[ "${version}" -eq 0 ]]; then
+    sm_bulk_update_state "${op}" \
+      "_schema_version" "${SM_STATE_VERSION}" \
+      "_migrated_at" "\"$(date -u +%Y-%m-%dT%H:%M:%SZ)\""
+    sm_emit_event "${op}" "schema:migrated" "v0 -> v${SM_STATE_VERSION}"
+  fi
+
+  # Future migrations: v1 -> v2, etc.
+  # if [[ "${version}" -eq 1 ]]; then
+  #   # migrate v1 -> v2
+  # fi
+}
+
+# sm_ensure_current_schema <op>
+# Called by transition functions to auto-migrate on first access
+sm_ensure_current_schema() {
+  local op="$1"
+  local state_file
+  state_file=$(sm_get_state_file "${op}")
+
+  # Skip if no state file
+  [[ ! -f "${state_file}" ]] && return 0
+
+  local version
+  version=$(jq -r '._schema_version // 0' "${state_file}")
+  if [[ "${version}" -lt "${SM_STATE_VERSION}" ]]; then
+    sm_migrate_state "${op}"
+  fi
+}
+
+# ============================================================================
+# Batch State Reads (Performance Optimization)
+# ============================================================================
+
+# sm_read_state_fields <op> <field1> [field2] [field3] ...
+# Read multiple fields in a single jq invocation
+# Returns tab-separated values in order requested
+sm_read_state_fields() {
+  local op="$1"
+  shift
+  local state_file
+  state_file=$(sm_get_state_file "${op}")
+
+  [[ ! -f "${state_file}" ]] && return 1
+
+  # Build jq filter: [.field1, .field2, ...] | @tsv
+  local fields=()
+  for field in "$@"; do
+    fields+=(".${field} // empty")
+  done
+  local filter
+  filter="[$(IFS=,; echo "${fields[*]}")] | @tsv"
+
+  jq -r "${filter}" "${state_file}"
+}
+
+# sm_read_all_state <op>
+# Read entire state file as associative array (bash 4+)
+# Usage: declare -A state; sm_read_all_state "op" state
+sm_read_all_state() {
+  local op="$1"
+  local -n _state_ref="$2"
+  local state_file
+  state_file=$(sm_get_state_file "${op}")
+
+  [[ ! -f "${state_file}" ]] && return 1
+
+  # Read all key-value pairs
+  while IFS=$'\t' read -r key value; do
+    _state_ref["${key}"]="${value}"
+  done < <(jq -r 'to_entries | .[] | [.key, (.value | tostring)] | @tsv' "${state_file}")
 }
 
 # ============================================================================
@@ -136,15 +255,44 @@ sm_get_phase() {
 # ============================================================================
 
 # sm_emit_event <op> <event> [details]
-# Log an event for debugging and audit
+# Log an event with automatic rotation
 sm_emit_event() {
   local op="$1"
   local event="$2"
   local details="${3:-}"
   local log_dir="${BUILD_DIR}/operations/${op}/logs"
+  local log_file="${log_dir}/events.log"
 
   mkdir -p "${log_dir}"
-  echo "[$(date -u +%Y-%m-%dT%H:%M:%SZ)] ${event}: ${details}" >> "${log_dir}/events.log"
+
+  # Rotate if needed
+  if [[ -f "${log_file}" ]]; then
+    local size
+    size=$(stat -f%z "${log_file}" 2>/dev/null || stat -c%s "${log_file}" 2>/dev/null || echo 0)
+    if [[ "${size}" -gt "${SM_LOG_MAX_SIZE}" ]]; then
+      sm_rotate_log "${log_file}"
+    fi
+  fi
+
+  echo "[$(date -u +%Y-%m-%dT%H:%M:%SZ)] ${event}: ${details}" >> "${log_file}"
+}
+
+# sm_rotate_log <log_file>
+# Rotate log files: events.log -> events.log.1 -> events.log.2 -> ...
+sm_rotate_log() {
+  local log_file="$1"
+  local i
+
+  # Remove oldest if at limit
+  rm -f "${log_file}.${SM_LOG_KEEP_COUNT}"
+
+  # Shift existing rotated logs
+  for ((i = SM_LOG_KEEP_COUNT - 1; i >= 1; i--)); do
+    [[ -f "${log_file}.${i}" ]] && mv "${log_file}.${i}" "${log_file}.$((i + 1))"
+  done
+
+  # Rotate current log
+  mv "${log_file}" "${log_file}.1"
 }
 
 # ============================================================================
@@ -403,6 +551,26 @@ sm_transition_to_interrupted() {
   fi
 
   _sm_do_transition "${op}" "interrupted" "work:interrupted" ""
+}
+
+# sm_transition_to_cancelled <op>
+# Transition operation to cancelled state
+# Cancelled is allowed from any non-terminal state
+# Also clears any hold on the operation
+sm_transition_to_cancelled() {
+  local op="$1"
+
+  local phase
+  phase=$(sm_get_phase "${op}")
+  if sm_is_terminal_phase "${phase}"; then
+    echo "Error: Cannot cancel operation in terminal state '${phase}'" >&2
+    return 1
+  fi
+
+  _sm_do_transition "${op}" "cancelled" "operation:cancelled" "" \
+    "cancelled_at" "\"$(date -u +%Y-%m-%dT%H:%M:%SZ)\"" \
+    "held" "false" \
+    "held_at" "null"
 }
 
 # ============================================================================

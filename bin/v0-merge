@@ -52,7 +52,7 @@ if [[ "${INPUT}" != /* ]] && [[ "${INPUT}" != .* ]]; then
   fi
 
   # Get worktree path from state
-  WORKTREE=$(jq -r '.worktree // empty' "${STATE_FILE}")
+  WORKTREE=$(sm_read_state "${OP_NAME}" "worktree")
   if [[ -z "${WORKTREE}" ]] || [[ "${WORKTREE}" = "null" ]]; then
     echo "Error: Operation '${OP_NAME}' has no worktree" >&2
     exit 1
@@ -164,22 +164,17 @@ update_merge_queue_entry() {
 # Called when merge completes (directly or after resolution)
 update_operation_state() {
   # Try full branch name first (e.g., "my-feature")
-  local state_file="${BUILD_DIR}/operations/${BRANCH}/state.json"
-  if [[ ! -f "${state_file}" ]]; then
+  local op_name="${BRANCH}"
+  if ! sm_state_exists "${op_name}"; then
     # Branch may have prefix like "feature/my-feature" - try just the basename
-    local op_name
     op_name=$(basename "${BRANCH}")
-    state_file="${BUILD_DIR}/operations/${op_name}/state.json"
-    if [[ ! -f "${state_file}" ]]; then
+    if ! sm_state_exists "${op_name}"; then
       return 0  # No operation state to update
     fi
   fi
 
-  local merged_at
-  merged_at=$(date -u +%Y-%m-%dT%H:%M:%SZ)
-  local tmp
-  tmp=$(mktemp)
-  jq ".merge_status = \"merged\" | .merged_at = \"${merged_at}\" | .phase = \"merged\"" "${state_file}" > "${tmp}" && mv "${tmp}" "${state_file}"
+  # Use state machine transition to merged state
+  sm_transition_to_merged "${op_name}"
 }
 
 # Resolve uncommitted changes by launching claude agent
@@ -565,7 +560,7 @@ RESOLVE_EOF
       git push
       update_operation_state
       update_merge_queue_entry
-      v0_trigger_dependent_operations "${BRANCH}"
+      sm_trigger_dependents "$(basename "${BRANCH}")"
       v0_notify "${PROJECT}: merged" "${BRANCH} (after resolution)"
       git push origin --delete "${BRANCH}" 2>/dev/null || true
     else
@@ -585,7 +580,7 @@ RESOLVE_EOF
   fi
 else
   do_merge && cleanup && git push && update_operation_state && update_merge_queue_entry && {
-    v0_trigger_dependent_operations "${BRANCH}"
+    sm_trigger_dependents "$(basename "${BRANCH}")"
     v0_notify "${PROJECT}: merged" "${BRANCH}"
     git push origin --delete "${BRANCH}" 2>/dev/null || true
   }

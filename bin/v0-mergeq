@@ -478,34 +478,17 @@ is_merge_ready() {
 
   # Check for build operation state
   if [[ -f "${state_file}" ]]; then
-    # Must have merge_queued set
+    # Must have merge_queued set (not checked by sm_is_merge_ready)
     if [[ "$(jq -r '.merge_queued // false' "${state_file}")" != "true" ]]; then
       echo "merge_queued not set for '${op}'" >&2
       return 1
     fi
 
-    # Must have worktree
-    local worktree
-    worktree=$(jq -r '.worktree // empty' "${state_file}")
-    if [[ -z "${worktree}" ]] || [[ ! -d "${worktree}" ]]; then
-      echo "Worktree not found for '${op}': ${worktree}" >&2
-      return 1
-    fi
-
-    # tmux session must be gone (agent exited)
-    local session
-    session=$(jq -r '.tmux_session // empty' "${state_file}")
-    if [[ -n "${session}" ]] && tmux has-session -t "${session}" 2>/dev/null; then
-      echo "Session '${session}' still running for '${op}'" >&2
-      return 1
-    fi
-
-    # All plan issues must be closed
-    local open in_progress
-    open=$(wk list --label "plan:${op}" --status todo 2>/dev/null | wc -l | tr -d ' \n')
-    in_progress=$(wk list --label "plan:${op}" --status in_progress 2>/dev/null | wc -l | tr -d ' \n')
-    if [[ "${open}" -gt 0 ]] || [[ "${in_progress}" -gt 0 ]]; then
-      echo "open_issues:${open}:${in_progress}" >&2
+    # Use state machine function for remaining checks
+    if ! sm_is_merge_ready "${op}"; then
+      local reason
+      reason=$(sm_merge_ready_reason "${op}")
+      echo "${reason}" >&2
       return 1
     fi
 
@@ -528,56 +511,43 @@ update_operation_state() {
   local op="$1"
   local key="$2"
   local value="$3"
-  local state_file="${BUILD_DIR}/operations/${op}/state.json"
 
-  if [[ ! -f "${state_file}" ]]; then
-    return 1
-  fi
-
-  local tmp
-  tmp=$(mktemp)
-  jq ".${key} = ${value}" "${state_file}" > "${tmp}" && mv "${tmp}" "${state_file}"
+  # Use state machine function
+  sm_update_state "${op}" "${key}" "${value}"
 }
 
 # find_dependent_operations <merged_operation>
 # Find operations waiting for the given operation
 find_dependent_operations() {
   local merged_op="$1"
-
-  for state_file in "${BUILD_DIR}"/operations/*/state.json; do
-    [[ -f "${state_file}" ]] || continue
-
-    local after
-    after=$(jq -r '.after // empty' "${state_file}")
-    if [[ "${after}" = "${merged_op}" ]]; then
-      jq -r '.name' "${state_file}"
-    fi
-  done
+  # Use state machine function
+  sm_find_dependents "${merged_op}"
 }
 
 # resume_waiting_operation <operation>
 # Resume an operation that was waiting and is now unblocked
 resume_waiting_operation() {
   local op="$1"
-  local state_file="${BUILD_DIR}/operations/${op}/state.json"
 
-  if [[ ! -f "${state_file}" ]]; then
+  if ! sm_state_exists "${op}"; then
     echo "Warning: No state file for dependent operation '${op}'" >&2
     return 1
   fi
 
-  # Get the phase to resume from
-  local blocked_phase
-  blocked_phase=$(jq -r '.blocked_phase // "init"' "${state_file}")
-  if [[ "${blocked_phase}" = "null" ]] || [[ -z "${blocked_phase}" ]]; then
-    blocked_phase="init"
+  # Check if held before resuming
+  if sm_is_held "${op}"; then
+    sm_emit_event "${op}" "unblock:held" "Dependency merged but operation held"
+    echo "[$(date +%H:%M:%S)] Operation '${op}' remains held"
+    return 0
   fi
 
-  # Clear after state and restore phase
-  local tmp
-  tmp=$(mktemp)
-  jq '.after = null | .phase = (.blocked_phase // "init")' "${state_file}" > "${tmp}"
-  mv "${tmp}" "${state_file}"
+  # Get the phase to resume from (for logging)
+  local blocked_phase
+  blocked_phase=$(sm_read_state "${op}" "blocked_phase")
+  [[ -z "${blocked_phase}" ]] || [[ "${blocked_phase}" = "null" ]] && blocked_phase="init"
+
+  # Use state machine to unblock
+  sm_unblock_operation "${op}"
 
   echo "[$(date +%H:%M:%S)] Resuming operation: ${op} (from phase: ${blocked_phase})"
   echo "[$(date -u +%Y-%m-%dT%H:%M:%SZ)] unblock:resumed: ${op}" >> "${MERGEQ_DIR}/logs/merges.log"

@@ -474,44 +474,6 @@ v0_precheck() {
   return 1
 }
 
-# v0_find_dependent_operations <operation>
-# Find operations waiting for the given operation (have after=<operation>)
-# Outputs operation names, one per line
-# DEPRECATED: Use sm_find_dependents from state-machine.sh instead
-v0_find_dependent_operations() {
-  sm_find_dependents "$@"
-}
-
-# v0_trigger_dependent_operations <branch>
-# Find and resume operations that were waiting on the given operation
-# Called after a successful merge to unblock dependent operations
-# Handles both full branch names (feature/name) and operation names (name)
-# DEPRECATED: Use sm_trigger_dependents from state-machine.sh instead
-v0_trigger_dependent_operations() {
-  local branch="$1"
-  local op_name
-  op_name=$(basename "${branch}")
-
-  # Delegate to state machine library
-  sm_trigger_dependents "${op_name}"
-}
-
-# v0_is_held <name>
-# Check if operation is held
-# Returns 0 if held, 1 if not held
-# DEPRECATED: Use sm_is_held from state-machine.sh instead
-v0_is_held() {
-  sm_is_held "$@"
-}
-
-# v0_exit_if_held <name> <command>
-# Print hold notice and exit if operation is held
-# Usage: v0_exit_if_held <name> <command>
-# DEPRECATED: Use sm_exit_if_held from state-machine.sh instead
-v0_exit_if_held() {
-  sm_exit_if_held "$@"
-}
-
 # ============================================================================
 # Trace Logging (for debugging)
 # ============================================================================

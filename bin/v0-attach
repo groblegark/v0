@@ -129,7 +129,8 @@ case "${1:-}" in
 
     if [[ -z "${SESSION}" ]] || [[ "${SESSION}" = "null" ]]; then
       # Derive from phase
-      PHASE=$(jq -r '.phase // "init"' "${STATE_FILE}")
+      PHASE=$(sm_get_phase "${NAME}")
+      [[ -z "${PHASE}" ]] && PHASE="init"
       case "${PHASE}" in
         init|planned) SESSION=$(v0_session_name "${NAME}" "plan") ;;
         queued) SESSION=$(v0_session_name "${NAME}" "decompose") ;;
@@ -157,7 +158,8 @@ case "${1:-}" in
 
       if [[ -z "${SESSION}" ]] || [[ "${SESSION}" = "null" ]]; then
         # Derive from phase
-        PHASE=$(jq -r '.phase // "init"' "${STATE_FILE}")
+        PHASE=$(sm_get_phase "${NAME}")
+        [[ -z "${PHASE}" ]] && PHASE="init"
         case "${PHASE}" in
           init|planned) SESSION=$(v0_session_name "${NAME}" "plan") ;;
           queued) SESSION=$(v0_session_name "${NAME}" "decompose") ;;
