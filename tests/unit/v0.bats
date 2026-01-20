@@ -38,6 +38,31 @@ load '../helpers/test_helper'
     assert_output --partial "Resume an existing feature"
 }
 
+@test "v0 help does not show tree command" {
+    run "${PROJECT_ROOT}/bin/v0" --help
+    assert_success
+    # Check that 'tree' is not listed as a command (with leading spaces indicating a command entry)
+    refute_output --partial "  tree "
+}
+
+@test "v0 help shows resume in same section as cancel" {
+    # resume should be grouped with cancel/hold/prune (operational control commands)
+    # not with feat/plan/decompose (feature pipeline commands)
+    run "${PROJECT_ROOT}/bin/v0" --help
+    assert_success
+    # Extract the section containing cancel and verify resume is nearby
+    # Cancel and resume should be within a few lines of each other
+    local cancel_line resume_line
+    cancel_line=$(echo "$output" | grep -n "cancel" | head -1 | cut -d: -f1)
+    resume_line=$(echo "$output" | grep -n "resume" | head -1 | cut -d: -f1)
+    # They should be close together (within 5 lines)
+    local diff=$((resume_line - cancel_line))
+    if [[ $diff -lt 0 ]]; then
+        diff=$((-diff))
+    fi
+    [[ $diff -le 5 ]]
+}
+
 # ============================================================================
 # Command dispatch tests
 # ============================================================================

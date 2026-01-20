@@ -37,15 +37,14 @@ Commands:
   fix           Sequential bug fixing worker
   chore         Sequential chore processing worker
   feat[ure]     Full pipeline: plan -> decompose -> execute -> merge
-  resume        Resume an existing feature (alias for 'feature --resume')
   plan          Create implementation plan from prompt
   decomp[ose]   Convert plan to issues
-  tree          Create worktree for isolated development
   merge         Merge worktree branch to main
   mergeq        Merge queue daemon
 
   attach        Attach to a running tmux session (fix, chore, mergeq, feature)
   cancel        Cancel a running operation
+  resume        Resume an existing feature (alias for 'feature --resume')
   hold          Put an operation on hold (pause phase transitions)
   prune         Remove completed/cancelled operation state
   monitor       Monitor worker queues for auto-shutdown
