@@ -42,6 +42,34 @@ nudge_running() {
   return 1
 }
 
+# Get nudge worker PID if running
+# Tries pid file first, falls back to pgrep
+# Returns: 0 if running (outputs PID), 1 if not
+nudge_pid() {
+  local pid_file
+  pid_file=$(nudge_pid_file)
+
+  # Try pid file first
+  if [[ -f "${pid_file}" ]]; then
+    local pid
+    pid=$(cat "${pid_file}" 2>/dev/null)
+    if [[ -n "${pid}" ]] && kill -0 "${pid}" 2>/dev/null; then
+      echo "${pid}"
+      return 0
+    fi
+  fi
+
+  # Fallback to pgrep
+  local pid
+  pid=$(pgrep -f "v0-nudge.*daemon" 2>/dev/null | head -1)
+  if [[ -n "${pid}" ]]; then
+    echo "${pid}"
+    return 0
+  fi
+
+  return 1
+}
+
 # Start nudge worker if not running
 # Returns: 0 on success or if already running
 ensure_nudge_running() {
