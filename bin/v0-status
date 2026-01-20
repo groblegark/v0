@@ -203,7 +203,7 @@ get_merged_operations() {
     # Single jq call extracts all needed fields
     local name merge_status merged_at
     read -r name merge_status merged_at < <(
-      jq -r '[.name, (.merge_status // ""), (.merged_at // "")] | @tsv' "${state_file}" 2>/dev/null
+      jq -r '[.name, (.merge_status // "null"), (.merged_at // "null")] | @tsv' "${state_file}" 2>/dev/null
     )
 
     if [[ "${merge_status}" = "merged" ]] && [[ -n "${merged_at}" ]]; then
@@ -680,13 +680,13 @@ if [[ -n "${LIST}" ]] || [[ -n "${BLOCKED}" ]]; then
       (.machine // "unknown"),
       (.completed | length),
       (.merge_queued // false),
-      (.merge_status // ""),
-      (.merged_at // ""),
-      (.after // ""),
-      (.tmux_session // ""),
-      (.worker_pid // ""),
+      (.merge_status // "null"),
+      (.merged_at // "null"),
+      (.after // "null"),
+      (.tmux_session // "null"),
+      (.worker_pid // "null"),
       (.held // false),
-      (.held_at // "")
+      (.held_at // "null")
     ] | @tsv' "${state_files[@]}")
   fi
 
