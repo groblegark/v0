@@ -596,7 +596,7 @@ if [[ -n "${LIST}" ]] || [[ -n "${BLOCKED}" ]]; then
     # Note: all_sessions only contains LOCAL tmux sessions, so if we find a match,
     # it's definitely running locally regardless of the machine field in state.json
     status_icon=""
-    if [[ -n "${session}" ]] && [[ "${all_sessions}" == *"${session}"* ]]; then
+    if [[ -n "${session}" ]] && [[ "${session}" != "null" ]] && [[ "${all_sessions}" == *"${session}"* ]]; then
       status_icon=" ${C_CYAN}(active)${C_RESET}"
     fi
     # Check if background worker is running
