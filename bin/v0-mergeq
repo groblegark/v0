@@ -226,11 +226,32 @@ enqueue_merge() {
   fi
 
   # Check if already in queue
-  local existing
-  existing=$(jq -r ".entries[] | select(.operation == \"${operation}\") | .operation" "${QUEUE_FILE}")
-  if [[ -n "${existing}" ]]; then
+  local existing_status
+  existing_status=$(jq -r ".entries[] | select(.operation == \"${operation}\") | .status" "${QUEUE_FILE}")
+  if [[ "${existing_status}" = "pending" ]] || [[ "${existing_status}" = "processing" ]]; then
     echo "Operation '${operation}' already in queue" >&2
     release_queue_lock
+    ensure_daemon_running
+    return 0
+  fi
+
+  # If there's an existing entry with inactive status (resumed/completed/failed/conflict),
+  # update it to pending instead of adding a duplicate
+  if [[ -n "${existing_status}" ]]; then
+    local enqueued_at
+    enqueued_at=$(date -u +%Y-%m-%dT%H:%M:%SZ)
+    atomic_queue_update "(.entries[] | select(.operation == \"${operation}\")) |= . + {
+      \"status\": \"pending\",
+      \"enqueued_at\": \"${enqueued_at}\",
+      \"priority\": ${priority}
+    }"
+    release_queue_lock
+
+    echo "[$(date -u +%Y-%m-%dT%H:%M:%SZ)] re-enqueue: ${operation} (was ${existing_status}, priority: ${priority})" >> "${MERGEQ_DIR}/logs/merges.log"
+    emit_event "merge:queued" "${operation}"
+    echo "Re-enqueued: ${operation} (was ${existing_status})"
+
+    ensure_nudge_running
     ensure_daemon_running
     return 0
   fi
