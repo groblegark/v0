@@ -390,17 +390,17 @@ show_status() {
   fi
 
   if worker_running; then
-    echo "Worker: Active (processing bugs)"
+    echo -e "Worker: ${C_CYAN}Active${C_RESET}"
     echo ""
     echo "Attach with: v0 attach fix"
   elif polling_running; then
     if [[ "${open_count}" -gt 0 ]]; then
-      echo "Worker: Polling (${open_count} bugs queued)"
+      echo -e "Worker: ${C_YELLOW}Polling${C_RESET} (${open_count} bugs queued)"
     else
-      echo "Worker: Polling (waiting for bugs)"
+      echo -e "Worker: ${C_YELLOW}Polling${C_RESET} (waiting for bugs)"
     fi
   else
-    echo "Worker: Stopped"
+    echo -e "Worker: ${C_DIM}Stopped${C_RESET}"
   fi
 
   if [[ -z "${in_progress}" ]] && [[ -z "${open}" ]]; then
