@@ -340,9 +340,9 @@ create_polling_loop() {
             worker_branch=\$(cat \"${tree_dir}/.worker-branch\")
             if [[ -d \"\${git_dir}\" ]]; then
               echo \"[\$(date)] Resetting worktree to latest develop branch...\" >> \"${polling_log}\"
-              git -C \"\${git_dir}\" fetch origin \"\${V0_DEVELOP_BRANCH:-main}\" >> \"${polling_log}\" 2>&1 || true
+              git -C \"\${git_dir}\" fetch \"\${V0_GIT_REMOTE:-origin}\" \"\${V0_DEVELOP_BRANCH:-main}\" >> \"${polling_log}\" 2>&1 || true
               git -C \"\${git_dir}\" checkout \"\${worker_branch}\" >> \"${polling_log}\" 2>&1 || true
-              git -C \"\${git_dir}\" reset --hard \"origin/\${V0_DEVELOP_BRANCH:-main}\" >> \"${polling_log}\" 2>&1 || true
+              git -C \"\${git_dir}\" reset --hard \"\${V0_GIT_REMOTE:-origin}/\${V0_DEVELOP_BRANCH:-main}\" >> \"${polling_log}\" 2>&1 || true
               echo \"[\$(date)] Worktree reset complete\" >> \"${polling_log}\"
             fi
           fi

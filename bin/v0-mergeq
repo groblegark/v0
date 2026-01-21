@@ -409,7 +409,7 @@ list_entries() {
 is_branch_merge() {
   local op="$1"
   # Check if it exists as a branch on remote
-  git ls-remote --heads origin "${op}" 2>/dev/null | grep -q .
+  git ls-remote --heads "${V0_GIT_REMOTE}" "${op}" 2>/dev/null | grep -q .
 }
 
 # is_branch_ready <branch>
@@ -419,8 +419,8 @@ is_branch_ready() {
   local branch="$1"
 
   # Check if branch exists on remote (already verified by is_branch_merge)
-  if ! git ls-remote --heads origin "${branch}" 2>/dev/null | grep -q .; then
-    echo "Branch 'origin/${branch}' does not exist" >&2
+  if ! git ls-remote --heads "${V0_GIT_REMOTE}" "${branch}" 2>/dev/null | grep -q .; then
+    echo "Branch '${V0_GIT_REMOTE}/${branch}' does not exist" >&2
     return 1
   fi
 
@@ -472,7 +472,7 @@ is_stale() {
     # Branch name pattern - check if branch exists on remote
     # IMPORTANT: Must distinguish between "branch doesn't exist" and "git command failed"
     local ls_output ls_exit
-    ls_output=$(git -C "${V0_ROOT}" ls-remote --heads origin "${op}" 2>&1)
+    ls_output=$(git -C "${V0_ROOT}" ls-remote --heads "${V0_GIT_REMOTE}" "${op}" 2>&1)
     ls_exit=$?
 
     if [[ ${ls_exit} -ne 0 ]]; then
@@ -618,8 +618,8 @@ process_branch_merge() {
     fi
   fi
 
-  # Pull latest main to stay current
-  git pull --ff-only origin "${V0_DEVELOP_BRANCH}" 2>&1 | tee -a "${MERGEQ_DIR}/logs/merges.log" || true
+  # Pull latest develop branch to stay current
+  git pull --ff-only "${V0_GIT_REMOTE}" "${V0_DEVELOP_BRANCH}" 2>&1 | tee -a "${MERGEQ_DIR}/logs/merges.log" || true
 
   # Clean up any incomplete merge/rebase state from previous failed attempts
   if [[ -d ".git/rebase-merge" ]] || [[ -d ".git/rebase-apply" ]]; then
@@ -632,7 +632,7 @@ process_branch_merge() {
   fi
 
   # Fetch latest
-  git fetch origin "${branch}" 2>&1 | tee -a "${MERGEQ_DIR}/logs/merges.log"
+  git fetch "${V0_GIT_REMOTE}" "${branch}" 2>&1 | tee -a "${MERGEQ_DIR}/logs/merges.log"
   local fetch_exit=${PIPESTATUS[0]}
   if [[ ${fetch_exit} -ne 0 ]]; then
     echo "[$(date +%H:%M:%S)] Failed to fetch ${branch} (exit ${fetch_exit})" >&2
@@ -645,7 +645,7 @@ process_branch_merge() {
   # Try to merge - capture exit code correctly with PIPESTATUS
   set +e
   local merge_output
-  merge_output=$(git merge --no-edit "origin/${branch}" 2>&1)
+  merge_output=$(git merge --no-edit "${V0_GIT_REMOTE}/${branch}" 2>&1)
   local merge_exit=$?
   set -e
 
@@ -655,7 +655,7 @@ process_branch_merge() {
   if [[ ${merge_exit} -eq 0 ]]; then
     # Success - push to remote (capture exit code with PIPESTATUS)
     echo "Pushing merged changes..."
-    git push origin "${V0_DEVELOP_BRANCH}" 2>&1 | tee -a "${MERGEQ_DIR}/logs/merges.log"
+    git push "${V0_GIT_REMOTE}" "${V0_DEVELOP_BRANCH}" 2>&1 | tee -a "${MERGEQ_DIR}/logs/merges.log"
     local push_exit=${PIPESTATUS[0]}
 
     if [[ ${push_exit} -ne 0 ]]; then
@@ -667,8 +667,8 @@ process_branch_merge() {
     fi
 
     # Delete the merged branch
-    echo "Deleting merged branch origin/${branch}..."
-    git push origin --delete "${branch}" 2>&1 | tee -a "${MERGEQ_DIR}/logs/merges.log" || true
+    echo "Deleting merged branch ${V0_GIT_REMOTE}/${branch}..."
+    git push "${V0_GIT_REMOTE}" --delete "${branch}" 2>&1 | tee -a "${MERGEQ_DIR}/logs/merges.log" || true
 
     update_entry "${branch}" "completed"
     echo "[$(date -u +%Y-%m-%dT%H:%M:%SZ)] merge:completed: ${branch} (branch)" >> "${MERGEQ_DIR}/logs/merges.log"
@@ -708,8 +708,8 @@ if [[ -f ".git/MERGE_HEAD" ]]; then
 fi
 
 # Re-attempt the merge to get conflict state
-git fetch origin "${branch}"
-git merge --no-edit "origin/${branch}" || true
+git fetch "${V0_GIT_REMOTE}" "${branch}"
+git merge --no-edit "${V0_GIT_REMOTE}/${branch}" || true
 
 # Run claude to resolve conflicts
 claude --model opus --dangerously-skip-permissions --allow-dangerously-skip-permissions "\$(cat '${V0_DIR}/lib/prompts/merge.md')
@@ -730,11 +730,11 @@ fi
 # Commit the merge
 git commit --no-edit || true
 
-# Push the result to main branch explicitly (HEAD may track a worker branch)
-git push origin HEAD:"${V0_DEVELOP_BRANCH}"
+# Push the result to develop branch explicitly (HEAD may track a worker branch)
+git push "${V0_GIT_REMOTE}" HEAD:"${V0_DEVELOP_BRANCH}"
 
 # Delete the merged branch
-git push origin --delete "${branch}" 2>/dev/null || true
+git push "${V0_GIT_REMOTE}" --delete "${branch}" 2>/dev/null || true
 
 echo "0" > "${MERGEQ_DIR}/resolve-${branch}.exit"
 RESOLVE_EOF
@@ -783,10 +783,10 @@ RESOLVE_EOF
     emit_event "merge:conflict" "${branch}"
     echo "[$(date +%H:%M:%S)] Automatic resolution failed: ${branch}"
     echo "  To resolve manually:"
-    echo "    git fetch origin ${branch}"
-    echo "    git merge origin/${branch}"
+    echo "    git fetch ${V0_GIT_REMOTE} ${branch}"
+    echo "    git merge ${V0_GIT_REMOTE}/${branch}"
     echo "    # resolve conflicts"
-    echo "    git push origin HEAD:${V0_DEVELOP_BRANCH}"
+    echo "    git push ${V0_GIT_REMOTE} HEAD:${V0_DEVELOP_BRANCH}"
     echo "  Or attach to resolve session:"
     echo "    tmux attach -t ${resolve_session}"
     return 1
@@ -858,8 +858,8 @@ process_merge() {
         echo "[$(date +%H:%M:%S)] Warning: v0-merge exited 0 but no merge_commit recorded"
         update_operation_state "${op}" "merge_error" '"No merge_commit in state - possible v0-merge bug"'
       else
-        echo "[$(date +%H:%M:%S)] Warning: v0-merge exited 0 but commit ${merge_commit:0:8} not on origin/${V0_DEVELOP_BRANCH}"
-        update_operation_state "${op}" "merge_error" "\"Commit ${merge_commit} not found on origin/${V0_DEVELOP_BRANCH}\""
+        echo "[$(date +%H:%M:%S)] Warning: v0-merge exited 0 but commit ${merge_commit:0:8} not on ${V0_GIT_REMOTE}/${V0_DEVELOP_BRANCH}"
+        update_operation_state "${op}" "merge_error" "\"Commit ${merge_commit} not found on ${V0_GIT_REMOTE}/${V0_DEVELOP_BRANCH}\""
       fi
 
       update_operation_state "${op}" "merge_status" '"verification_failed"'
@@ -932,8 +932,8 @@ process_merge() {
           echo "[$(date +%H:%M:%S)] Warning: Resolution succeeded but no merge_commit recorded"
           update_operation_state "${op}" "merge_error" '"No merge_commit in state after resolution"'
         else
-          echo "[$(date +%H:%M:%S)] Warning: Resolution succeeded but commit ${merge_commit:0:8} not on origin/${V0_DEVELOP_BRANCH}"
-          update_operation_state "${op}" "merge_error" "\"Commit ${merge_commit} not found on origin/${V0_DEVELOP_BRANCH} after resolution\""
+          echo "[$(date +%H:%M:%S)] Warning: Resolution succeeded but commit ${merge_commit:0:8} not on ${V0_GIT_REMOTE}/${V0_DEVELOP_BRANCH}"
+          update_operation_state "${op}" "merge_error" "\"Commit ${merge_commit} not found on ${V0_GIT_REMOTE}/${V0_DEVELOP_BRANCH} after resolution\""
         fi
 
         update_operation_state "${op}" "merge_status" '"verification_failed"'

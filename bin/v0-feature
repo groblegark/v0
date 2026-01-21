@@ -993,7 +993,7 @@ if [[ "${PHASE}" = "queued" ]] && [[ -z "${ENQUEUE_ONLY}" ]]; then
 
     FEATURE_ID=$(get_state epic_id)
 
-    M4_ARGS="-D EPIC_ID=${FEATURE_ID} -D PLAN_LABEL=plan:${NAME} -D HAS_PLAN=1"
+    M4_ARGS="-D EPIC_ID=${FEATURE_ID} -D PLAN_LABEL=plan:${NAME} -D HAS_PLAN=1 -D V0_GIT_REMOTE=${V0_GIT_REMOTE}"
     m4 ${M4_ARGS} "${V0_DIR}/lib/templates/claude.feature.m4" > "${TREE_DIR}/CLAUDE.md"
     emit_event "claude.md:created" "${TREE_DIR}/CLAUDE.md"
 

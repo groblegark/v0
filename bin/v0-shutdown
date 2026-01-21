@@ -291,7 +291,7 @@ if [[ -n "${remote_branches}" ]]; then
       echo "Would delete remote branch: ${branch_name}"
     else
       echo "Deleting remote branch: ${branch_name}"
-      git -C "${V0_ROOT}" push origin --delete "${branch_name}" 2>/dev/null || true
+      git -C "${V0_ROOT}" push "${V0_GIT_REMOTE}" --delete "${branch_name}" 2>/dev/null || true
     fi
   done <<< "${remote_branches}"
 fi

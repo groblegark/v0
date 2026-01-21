@@ -53,7 +53,7 @@ All created files must be inside the worktree.
 cd <repo-name>
 git status
 git add . && git commit -m "..."
-git push
+git push V0_GIT_REMOTE
 ```
 
 ## Session Close
@@ -66,7 +66,7 @@ cd <repo-name>
 git status
 git add <files>
 git commit -m "..."
-git push
+git push V0_GIT_REMOTE
 
 # 2. Exit the session
 ./done  # or ../done from repo dir

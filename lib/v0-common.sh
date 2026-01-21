@@ -127,6 +127,7 @@ v0_load_config() {
   V0_BUGFIX_BRANCH="fix/{id}"
   V0_CHORE_BRANCH="chore/{id}"
   V0_WORKTREE_INIT="${V0_WORKTREE_INIT:-}"  # Optional worktree init hook
+  V0_GIT_REMOTE="origin"                     # Git remote for push/fetch operations
 
   # Load project config (overrides defaults)
   source "${V0_ROOT}/.v0.rc"
@@ -160,6 +161,7 @@ v0_load_config() {
   export V0_BUILD_DIR V0_PLANS_DIR V0_DEVELOP_BRANCH V0_FEATURE_BRANCH V0_BUGFIX_BRANCH V0_CHORE_BRANCH
   # shellcheck disable=SC2090  # V0_WORKTREE_INIT is a shell command used with eval
   export V0_WORKTREE_INIT
+  export V0_GIT_REMOTE
 }
 
 # Load standalone configuration (no .v0.rc required)
@@ -273,6 +275,7 @@ ISSUE_PREFIX="${issue_prefix}"    # Issue IDs: ${issue_prefix}-abc123
 # V0_FEATURE_BRANCH="feature/{name}"
 # V0_BUGFIX_BRANCH="fix/{id}"
 # V0_CHORE_BRANCH="chore/{id}"
+# V0_GIT_REMOTE="origin"        # Git remote for push/fetch
 # DISABLE_NOTIFICATIONS=1       # Disable macOS notifications
 EOF
 
@@ -701,8 +704,8 @@ v0_verify_commit_on_branch() {
 
   # Optionally check remote
   if [[ "${require_remote}" = "true" ]]; then
-    git fetch origin "${branch}" --quiet 2>/dev/null || true
-    if ! git merge-base --is-ancestor "${commit}" "origin/${branch}" 2>/dev/null; then
+    git fetch "${V0_GIT_REMOTE}" "${branch}" --quiet 2>/dev/null || true
+    if ! git merge-base --is-ancestor "${commit}" "${V0_GIT_REMOTE}/${branch}" 2>/dev/null; then
       return 1
     fi
   fi

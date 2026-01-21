@@ -101,8 +101,8 @@ start_worker() {
   pwd > "${WORKER_TREE_DIR}/.worker-project-root"
 
   # Fast-forward worktree to latest develop branch
-  git -C "${WORKER_GIT_DIR}" fetch origin "${V0_DEVELOP_BRANCH}"
-  git -C "${WORKER_GIT_DIR}" reset --hard "origin/${V0_DEVELOP_BRANCH}"
+  git -C "${WORKER_GIT_DIR}" fetch "${V0_GIT_REMOTE}" "${V0_DEVELOP_BRANCH}"
+  git -C "${WORKER_GIT_DIR}" reset --hard "${V0_GIT_REMOTE}/${V0_DEVELOP_BRANCH}"
 
   # Link worktree to main repo's shared workspace
   # Remove any local .wok database first (if it exists)
@@ -199,7 +199,7 @@ if [[ "\$CURRENT_BRANCH" == fix/* ]]; then
 
     # Push current commits as fix/<id> branch
     echo "Pushing \$PREV_BRANCH..."
-    git push -u origin "HEAD:refs/heads/\$PREV_BRANCH"
+    git push -u "${V0_GIT_REMOTE}" "HEAD:refs/heads/\$PREV_BRANCH"
 
     # Update state file
     mkdir -p "\$PREV_STATE_DIR"
@@ -231,8 +231,8 @@ STATE_EOF
 fi
 
 # Reset worktree to latest develop branch
-git fetch origin "${V0_DEVELOP_BRANCH}"
-git reset --hard "origin/${V0_DEVELOP_BRANCH}"
+git fetch "${V0_GIT_REMOTE}" "${V0_DEVELOP_BRANCH}"
+git reset --hard "${V0_GIT_REMOTE}/${V0_DEVELOP_BRANCH}"
 
 # Record branch state for recovery
 mkdir -p "\$STATE_DIR"
@@ -276,7 +276,7 @@ COMMIT_MSG=\$(git log -1 --format=%s)
 
 # Push current commits as fix/<id> branch
 echo "Pushing \$BRANCH..."
-git push -u origin "HEAD:refs/heads/\$BRANCH"
+git push -u "${V0_GIT_REMOTE}" "HEAD:refs/heads/\$BRANCH"
 
 # Update state file
 mkdir -p "\$STATE_DIR"
@@ -304,8 +304,8 @@ echo "Closing \$BUG_ID..."
 
 # Reset worktree to latest develop branch
 echo "Resetting to latest ${V0_DEVELOP_BRANCH}..."
-git fetch origin "${V0_DEVELOP_BRANCH}"
-git reset --hard "origin/${V0_DEVELOP_BRANCH}"
+git fetch "${V0_GIT_REMOTE}" "${V0_DEVELOP_BRANCH}"
+git reset --hard "${V0_GIT_REMOTE}/${V0_DEVELOP_BRANCH}"
 
 echo ""
 echo "Completed \$BUG_ID"

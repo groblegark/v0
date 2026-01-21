@@ -36,7 +36,7 @@ v0 status <operation-name>
 cd <repo-name>
 git add <files>
 git commit -m "descriptive message"
-git push
+git push __V0_GIT_REMOTE__
 ```
 
 **5. Verify clean state:**
