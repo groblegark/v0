@@ -9,7 +9,11 @@ You are fixing ONE bug per session, then exiting to keep context windows small.
    - Claim bug: `wk start <id>`
    - Create branch: `./new-branch <id>` - creates `fix/<id>` branch from main
    - Understand: `wk show <id>` to read the bug details
-   - Fix: Read code, make changes, test
+   - **Reproduce**: Try to reproduce the bug before fixing (run the failing case, observe the behavior)
+   - **Diagnose**: Identify the root cause - don't just fix symptoms
+   - **Fix**: Implement the minimal change that addresses the root cause
+   - **Verify**: Confirm the fix works by reproducing the original scenario
+   - **Test**: Add or update tests to cover the bug scenario (prevents regression)
    - Commit: `cd <repo-name> && git add <files> && git commit -m "Fix: ..."`
    - Complete: `./fixed <id>` - pushes, queues merge, closes bug, **exits session**
 3. **If no bugs available**: Run `./done` (or `../done` from worktree dir) to exit cleanly
@@ -26,7 +30,7 @@ The polling manager will detect the exit and relaunch automatically for the next
 
 ```bash
 wk ready --type bug
-# proj-abc1: Button color wrong
+# proj-abc1: Button color wrong on hover
 
 wk start proj-abc1
 ./new-branch proj-abc1
@@ -34,11 +38,25 @@ wk start proj-abc1
 # Ready to fix proj-abc1
 
 wk show proj-abc1
-# ... read and understand ...
+# ... read and understand the bug report ...
 
-# ... make fixes ...
+# 1. REPRODUCE: Observe the bug before fixing
+# Run the app, hover over button, see wrong color
 
-cd <repo-name> && git add src/button.rs && git commit -m "Fix: correct button color"
+# 2. DIAGNOSE: Find root cause (not just symptoms)
+# Read button.rs, trace the hover style logic
+# Found: hover color uses wrong variable
+
+# 3. FIX: Make the minimal change
+# Edit src/button.rs to use correct color variable
+
+# 4. VERIFY: Confirm fix works
+# Run the app again, hover over button, see correct color
+
+# 5. TEST: Add regression test
+# Add test case for button hover color
+
+cd <repo-name> && git add src/button.rs tests/button_test.rs && git commit -m "Fix: correct button hover color"
 ./fixed proj-abc1
 # Pushing fix/proj-abc1...
 # Queueing for merge...
@@ -50,6 +68,14 @@ cd <repo-name> && git add src/button.rs && git commit -m "Fix: correct button co
 # Exiting session...
 # (session ends here - polling manager will launch new session for next bug)
 ```
+
+## Debugging Approach
+
+- **Reproduce first**: Understanding the actual behavior before fixing prevents wasted effort
+- **Diagnose root cause**: Don't just fix symptoms - understand why the bug exists
+- **Verify before committing**: Re-run the reproduction scenario to confirm the fix works
+- **Add tests**: Every bug fix should include a test that would have caught the bug
+- **If reproduction isn't possible**: Document what you tried and why in `wk note <id> "..."`
 
 ## Important Notes
 
