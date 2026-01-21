@@ -229,7 +229,7 @@ fi
 
 # Clean up v0/worker/* branches (local and remote)
 local_branches=$(git -C "${V0_ROOT}" branch --list 'v0/worker/*' 2>/dev/null | sed 's/^[* ]*//' || true)
-remote_branches=$(git -C "${V0_ROOT}" branch -r --list 'origin/v0/worker/*' 2>/dev/null | sed 's/^[* ]*//' || true)
+remote_branches=$(git -C "${V0_ROOT}" branch -r --list "${V0_GIT_REMOTE}/v0/worker/*" 2>/dev/null | sed 's/^[* ]*//' || true)
 
 # Track branches skipped due to unmerged commits
 skipped_branches=""
@@ -270,8 +270,8 @@ if [[ -n "${remote_branches}" ]]; then
   echo "Cleaning up remote v0/worker/* branches..."
   while IFS= read -r branch; do
     [[ -z "${branch}" ]] && continue
-    # Remove "origin/" prefix to get the branch name for deletion
-    branch_name="${branch#origin/}"
+    # Remove remote prefix to get the branch name for deletion
+    branch_name="${branch#"${V0_GIT_REMOTE}"/}"
 
     # Check if this is a chore or fix branch that needs merge verification
     if [[ "${branch_name}" == "v0/worker/chore" || "${branch_name}" == "v0/worker/fix" ]]; then

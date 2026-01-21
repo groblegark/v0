@@ -184,7 +184,7 @@ if [[ "\$CURRENT_BRANCH" == fix/* ]]; then
   PREV_BUG_ID="\${CURRENT_BRANCH#fix/}"
 
   # Check if there are commits beyond origin develop branch
-  COMMITS_AHEAD=\$(git rev-list --count "origin/${V0_DEVELOP_BRANCH}..HEAD" 2>/dev/null || echo "0")
+  COMMITS_AHEAD=\$(git rev-list --count "${V0_GIT_REMOTE}/${V0_DEVELOP_BRANCH}..HEAD" 2>/dev/null || echo "0")
 
   if [[ "\$COMMITS_AHEAD" -gt 0 ]]; then
     echo "Found uncommitted fix on branch \$CURRENT_BRANCH"

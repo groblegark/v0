@@ -93,3 +93,33 @@ EOF
     run grep "__V0_GIT_REMOTE__" "${prompt_file}"
     assert_success
 }
+
+# ============================================================================
+# Integration Tests - V0_GIT_REMOTE with V0_DEVELOP_BRANCH
+# ============================================================================
+
+@test "stop-feature.sh includes V0_GIT_REMOTE in error message" {
+    local hook_file="${PROJECT_ROOT}/lib/hooks/stop-feature.sh"
+
+    # Check that the hook uses V0_GIT_REMOTE
+    run grep "V0_GIT_REMOTE" "${hook_file}"
+    assert_success
+}
+
+@test "no hardcoded origin/ remote refs in bin scripts" {
+    # Check that bin scripts don't have hardcoded 'origin/' in git commands
+    # Exclude comments and documentation
+    local scripts=(
+        "${PROJECT_ROOT}/bin/v0-mergeq"
+        "${PROJECT_ROOT}/bin/v0-merge"
+        "${PROJECT_ROOT}/bin/v0-fix"
+        "${PROJECT_ROOT}/bin/v0-chore"
+        "${PROJECT_ROOT}/bin/v0-shutdown"
+    )
+
+    for script in "${scripts[@]}"; do
+        # Look for origin/ followed by variable or branch pattern (not in comments)
+        run bash -c "grep -n 'origin/' '$script' | grep -v '^[[:space:]]*#' | grep -v 'V0_GIT_REMOTE' || true"
+        assert_output ""
+    done
+}
