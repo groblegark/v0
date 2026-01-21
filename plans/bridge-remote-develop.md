@@ -1,5 +1,7 @@
 # Bridge Plan: V0_GIT_REMOTE and V0_DEVELOP_BRANCH Integration
 
+**Root Feature:** `v0-8eeb`
+
 ## Overview
 
 This plan addresses gaps discovered when reviewing commits `ccfb9cc` (V0_GIT_REMOTE) and `3133eec` (V0_DEVELOP_BRANCH) against their respective implementation plans. It ensures complete integration of both features.
