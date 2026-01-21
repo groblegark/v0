@@ -578,6 +578,9 @@ fi
 
 # List all operations (default behavior)
 if [[ -n "${LIST}" ]] || [[ -n "${BLOCKED}" ]]; then
+  # Batch tmux session check - single call to list all sessions (used by operations loop and workers)
+  all_sessions=$(tmux list-sessions -F '#{session_name}' 2>/dev/null || true)
+
   # Pre-check if operations directory exists and has state files
   has_operations=false
   if [[ -d "${BUILD_DIR}/operations" ]]; then
@@ -602,8 +605,6 @@ if [[ -n "${LIST}" ]] || [[ -n "${BLOCKED}" ]]; then
     fi
     echo ""
 
-  # Batch tmux session check - single call to list all sessions (used by operations loop and workers)
-  all_sessions=$(tmux list-sessions -F '#{session_name}' 2>/dev/null || true)
   local_machine=$(hostname -s)
 
   # Collect all state files (bash 3.2 compatible)
