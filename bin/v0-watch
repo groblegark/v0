@@ -83,8 +83,20 @@ show_header() {
   now=$(date '+%Y-%m-%d %H:%M:%S')
   version=$(cat "${SCRIPT_DIR}/../VERSION" 2>/dev/null || echo "unknown")
   project_name=$(basename "$(pwd)")
-  width=$(tput cols 2>/dev/null)
-  # Validate width is a positive integer; fall back to 80 if not
+  # Get terminal width: try multiple methods for portability
+  # 1. COLUMNS if explicitly set and valid
+  # 2. stty size via /dev/tty (queries terminal driver directly)
+  # 3. tput cols via /dev/tty
+  # 4. tput cols (may return default 80)
+  # 5. fallback to 80
+  width="${COLUMNS:-}"
+  if ! [[ "${width}" =~ ^[0-9]+$ ]] || [[ "${width}" -lt 1 ]]; then
+    width=$(stty size </dev/tty 2>/dev/null | cut -d' ' -f2) ||
+      width=$(tput cols </dev/tty 2>/dev/null) ||
+      width=$(tput cols 2>/dev/null) ||
+      width=80
+  fi
+  # Final validation
   if ! [[ "${width}" =~ ^[0-9]+$ ]] || [[ "${width}" -lt 1 ]]; then
     width=80
   fi

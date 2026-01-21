@@ -295,3 +295,25 @@ EOF
     '
     assert_output --partial "bar_length=80"
 }
+
+@test "watch header bar uses stty/tput fallback when COLUMNS unset" {
+    local project_dir
+    project_dir=$(setup_isolated_project)
+
+    # Unset COLUMNS entirely - should fall back to stty/tput or 80
+    run env -u PROJECT -u ISSUE_PREFIX -u V0_ROOT -u COLUMNS bash -c '
+        cd "'"$project_dir"'"
+        output=$("'"$PROJECT_ROOT"'/bin/v0-watch" --max-iterations 1 2>&1 || true)
+        # Extract the bar line
+        bar=$(echo "$output" | grep -E "^─+$" | head -1)
+        # Count characters - should be a positive integer (stty/tput result or 80 fallback)
+        char_count=$(printf "%s" "$bar" | wc -m | tr -d " ")
+        if [[ "$char_count" -ge 1 ]]; then
+            echo "bar_length_valid=true"
+            echo "bar_length=$char_count"
+        else
+            echo "bar_length_valid=false"
+        fi
+    '
+    assert_output --partial "bar_length_valid=true"
+}
