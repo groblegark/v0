@@ -269,22 +269,20 @@ get_merged_operations() {
     return
   fi
 
-  for state_file in "${BUILD_DIR}/operations"/*/state.json; do
-    [[ -f "${state_file}" ]] || continue
-    # Single jq call extracts all needed fields
-    local name merge_status merged_at
-    read -r name merge_status merged_at < <(
-      jq -r '[.name, (.merge_status // "null"), (.merged_at // "null")] | @tsv' "${state_file}" 2>/dev/null
-    )
-
-    if [[ "${merge_status}" = "merged" ]] && [[ -n "${merged_at}" ]]; then
+  # Phase 4 optimization: Single jq -s for all files instead of N separate calls
+  # Use compgen to check for glob matches (bash 3.2 compatible)
+  if compgen -G "${BUILD_DIR}/operations/*/state.json" > /dev/null 2>&1; then
+    jq -rs '.[] | select(.merge_status == "merged" and .merged_at != null) | "\(.name)|\(.merged_at)"' \
+      "${BUILD_DIR}"/operations/*/state.json 2>/dev/null | while IFS='|' read -r name merged_at; do
+      [[ -z "${name}" ]] && continue
+      # Timestamp filtering still in bash (macOS date compatibility)
       local merged_epoch
       merged_epoch=$(timestamp_to_epoch "${merged_at}")
       if [[ -n "${merged_epoch}" ]] && [[ "${merged_epoch}" -ge "${cutoff_time}" ]]; then
         echo "${name}|${merged_at}"
       fi
-    fi
-  done | sort -t'|' -k2 -r
+    done | sort -t'|' -k2 -r
+  fi
 }
 
 # Get recently completed bugs
@@ -614,33 +612,33 @@ if [[ -n "${LIST}" ]] || [[ -n "${BLOCKED}" ]]; then
   done
 
   found_any=""
-  # Calculate max name length for dynamic column width (with truncation for long names)
-  max_name_len=0
-  max_name_display=40  # Truncate names longer than this
-  if [[ ${#state_files[@]} -gt 0 ]]; then
-    while IFS= read -r name; do
-      [[ -z "${name}" ]] && continue
-      name_len=${#name}
-      # Account for the ":" suffix we add when displaying
-      ((name_len++))
-      # Truncate check: if name would be truncated, use truncated length
-      if [[ ${name_len} -gt ${max_name_display} ]]; then
-        name_len=${max_name_display}
-      fi
-      if [[ ${name_len} -gt ${max_name_len} ]]; then
-        max_name_len=${name_len}
-      fi
-    done < <(jq -rs '.[] | .name' "${state_files[@]}")
-  fi
-  # Ensure minimum width for readability
-  [[ ${max_name_len} -lt 8 ]] && max_name_len=8
+  # max_name_display is the truncation limit for long names
+  max_name_display=40
+  # max_name_len is calculated in jq below (Phase 3 optimization - single pass)
 
   # Merge queue file path for timestamp lookups (used in display loop)
   mergeq_file="${BUILD_DIR}/mergeq/queue.json"
 
+  # Pre-fetch queue data for O(1) lookups in loop (Phase 1 optimization)
+  # Format: operation\tstatus\tupdated_at
+  queue_cache=$(mktemp)
+  # shellcheck disable=SC2064  # Intentional: capture temp file path at trap time
+  trap "rm -f '${queue_cache}'" EXIT
+  if [[ -f "${mergeq_file}" ]]; then
+    jq -r '.entries[] | [.operation, .status, (.updated_at // "")] | @tsv' "${mergeq_file}" > "${queue_cache}" 2>/dev/null || true
+  fi
+
   # Process all state files in single jq -s invocation (one process instead of many)
+  # Phase 3 optimization: also calculates max_name_len in same pass (META line first)
+  max_name_len=8  # Default minimum
   if [[ ${#state_files[@]} -gt 0 ]]; then
     while IFS=$'\t' read -r name op_type phase created machine completed merge_queued merge_status merged_at completed_at after session worker_pid held held_at; do
+      # Handle META line for max name length (Phase 3)
+      if [[ "${name}" = "META" ]]; then
+        max_name_len="${op_type}"  # op_type field contains max_name_len for META
+        [[ ${max_name_len} -lt 8 ]] && max_name_len=8
+        continue
+      fi
       [[ -z "${name}" ]] && continue
     # If --blocked filter, skip non-blocked operations
     if [[ -n "${BLOCKED}" ]]; then
@@ -685,12 +683,10 @@ if [[ -n "${LIST}" ]] || [[ -n "${BLOCKED}" ]]; then
     fi
 
     # Get queue entry status for merge display (only needed when merge_queued)
+    # Uses pre-fetched queue_cache for O(1) lookup instead of jq per operation
     queue_entry_status=""
-    if [[ "${merge_queued}" = "true" ]]; then
-      queue_file="${BUILD_DIR}/mergeq/queue.json"
-      if [[ -f "${queue_file}" ]]; then
-        queue_entry_status=$(jq -r ".entries[] | select(.operation == \"${name}\") | .status" "${queue_file}" 2>/dev/null || true)
-      fi
+    if [[ "${merge_queued}" = "true" ]] && [[ -s "${queue_cache}" ]]; then
+      queue_entry_status=$(grep "^${name}"$'\t' "${queue_cache}" 2>/dev/null | cut -f2 || true)
     fi
 
     # Use shared helper for phase display formatting
@@ -760,31 +756,40 @@ if [[ -n "${LIST}" ]] || [[ -n "${BLOCKED}" ]]; then
     # Get the most relevant timestamp based on operation phase
     last_updated=$(get_last_updated_timestamp "${phase}" "${created}" "${completed_at}" "${merged_at}" "${held_at}")
     # Override with merge queue timestamp if available and operation is merged
-    if [[ "${phase}" == "merged" && -f "${mergeq_file}" ]]; then
-      mq_updated=$(jq -r ".entries[] | select(.operation == \"${name}\" and .status == \"completed\") | .updated_at // empty" "${mergeq_file}" 2>/dev/null || true)
+    # Uses pre-fetched queue_cache for O(1) lookup instead of jq per operation
+    if [[ "${phase}" == "merged" ]] && [[ -s "${queue_cache}" ]]; then
+      mq_updated=$(grep "^${name}"$'\t'"completed"$'\t' "${queue_cache}" 2>/dev/null | cut -f3 || true)
       if [[ -n "${mq_updated}" ]]; then
         last_updated="${mq_updated}"
       fi
     fi
     display_time=$(format_operation_time "${last_updated}")
     printf "  %-${max_name_len}s %b%b%b%b%b ${C_DIM}(%s)${C_RESET}\n" "${display_name}" "${display_phase}" "${status_icon}" "${after_icon}" "${hold_icon}" "${merge_icon}" "${display_time}"
-    done < <(jq -rs 'sort_by(.created_at) | .[] | [
-      .name,
-      (.type // "build"),
-      .phase,
-      .created_at,
-      (.machine // "unknown"),
-      (.completed | length),
-      (.merge_queued // false),
-      (.merge_status // "null"),
-      (.merged_at // "null"),
-      (.completed_at // "null"),
-      (.after // "null"),
-      (.tmux_session // "null"),
-      (.worker_pid // "null"),
-      (.held // false),
-      (.held_at // "null")
-    ] | @tsv' "${state_files[@]}")
+    done < <(jq -rs '
+      # Phase 3: Calculate max name length in same pass (output META line first)
+      # max_name_len = max of min(name_length + 1, 40) for all ops
+      (reduce .[] as $op (0; [., ([($op.name | length) + 1, 40] | min)] | max)) as $max_len |
+      # Output META line with max_name_len
+      (["META", $max_len] | @tsv),
+      # Then output all operation data
+      (sort_by(.created_at) | .[] | [
+        .name,
+        (.type // "build"),
+        .phase,
+        .created_at,
+        (.machine // "unknown"),
+        (.completed | length),
+        (.merge_queued // false),
+        (.merge_status // "null"),
+        (.merged_at // "null"),
+        (.completed_at // "null"),
+        (.after // "null"),
+        (.tmux_session // "null"),
+        (.worker_pid // "null"),
+        (.held // false),
+        (.held_at // "null")
+      ] | @tsv)
+    ' "${state_files[@]}")
   fi
 
   # For --blocked filter: show message if operations exist but none are blocked
@@ -810,9 +815,14 @@ if [[ -n "${LIST}" ]] || [[ -n "${BLOCKED}" ]]; then
     chores_in_progress=$(wk list --type chore --status in_progress 2>/dev/null || true)
     chores_open=$(wk list --type chore --status todo 2>/dev/null || true)
     mergeq_queue_file="${BUILD_DIR}/mergeq/queue.json"
+    # Single read for all merge queue data (Phase 2 optimization)
+    # Format: status\toperation - used for display and counts
+    mergeq_entries=""
     merges_pending=""
     if [[ -f "${mergeq_queue_file}" ]]; then
-      merges_pending=$(jq -r '.entries[] | select(.status == "pending" or .status == "processing") | .operation' "${mergeq_queue_file}" 2>/dev/null || true)
+      mergeq_entries=$(jq -r '.entries[] | select(.status == "pending" or .status == "processing") | "\(.status)\t\(.operation)"' "${mergeq_queue_file}" 2>/dev/null || true)
+      # Derive operation list for backwards compatibility with merges_empty check
+      merges_pending=$(echo "${mergeq_entries}" | cut -f2 | grep -v '^$' || true)
     fi
 
     bugs_empty=false
@@ -915,13 +925,9 @@ if [[ -n "${LIST}" ]] || [[ -n "${BLOCKED}" ]]; then
       # Merges section
       mergeq_pid_file="${BUILD_DIR}/mergeq/.daemon.pid"
       if [[ -f "${mergeq_pid_file}" ]] && kill -0 "$(cat "${mergeq_pid_file}" 2>/dev/null)" 2>/dev/null; then
-        # Single jq call extracts both processing and pending counts
-        read -r processing pending < <(
-          jq -r '[
-            ([.entries[] | select(.status == "processing")] | length),
-            ([.entries[] | select(.status == "pending")] | length)
-          ] | @tsv' "${mergeq_queue_file}" 2>/dev/null || echo "0	0"
-        )
+        # Derive counts from pre-fetched mergeq_entries (Phase 2 optimization)
+        processing=$(echo "${mergeq_entries}" | grep -c "^processing" 2>/dev/null || echo 0)
+        pending=$(echo "${mergeq_entries}" | grep -c "^pending" 2>/dev/null || echo 0)
         if [[ "${processing}" -gt 0 ]]; then
           echo -e "Merges: ${C_CYAN}Active${C_RESET}"
         elif [[ "${pending}" -gt 0 ]]; then
@@ -935,15 +941,18 @@ if [[ -n "${LIST}" ]] || [[ -n "${BLOCKED}" ]]; then
         echo -e "Merges: ${C_DIM}Stopped${C_RESET}"
       fi
       if [[ "${merges_empty}" != true ]]; then
-        total=$(echo "${merges_pending}" | wc -l | tr -d ' ')
+        # Use pre-fetched mergeq_entries (Phase 2 optimization)
+        total=$(echo "${mergeq_entries}" | grep -c '' 2>/dev/null || echo 0)
         if [[ "${total}" -le 3 ]]; then
-          jq -r '.entries[] | select(.status == "pending" or .status == "processing") | "\(.status)\t\(.operation)"' "${mergeq_queue_file}" 2>/dev/null | while IFS=$'\t' read -r status op; do
+          echo "${mergeq_entries}" | while IFS=$'\t' read -r status op; do
+            [[ -z "${status}" ]] && continue
             status_color="${C_CYAN}"
             [[ "${status}" = "pending" ]] && status_color=""
             printf "  ${status_color}%-12s${C_RESET} %s\n" "[${status}]" "${op}"
           done
         else
-          jq -r '.entries[] | select(.status == "pending" or .status == "processing") | "\(.status)\t\(.operation)"' "${mergeq_queue_file}" 2>/dev/null | head -n 3 | while IFS=$'\t' read -r status op; do
+          echo "${mergeq_entries}" | head -n 3 | while IFS=$'\t' read -r status op; do
+            [[ -z "${status}" ]] && continue
             status_color="${C_CYAN}"
             [[ "${status}" = "pending" ]] && status_color=""
             printf "  ${status_color}%-12s${C_RESET} %s\n" "[${status}]" "${op}"
@@ -994,15 +1003,17 @@ fi
 
 show_status() {
   # Batch read all state fields in single jq invocation (instead of 20+ separate calls)
+  # Phase 5 optimization: added merge_commit and merge_error to batch read
   local phase op_type feature_id machine session current_issue last_activity \
         merge_queued merge_status merged_at after eager worker_pid worker_log \
-        worker_started_at error_msg held held_at worktree
+        worker_started_at error_msg held held_at worktree merge_commit merge_error
   IFS=$'\t' read -r phase op_type feature_id machine session current_issue \
     last_activity merge_queued merge_status merged_at after eager worker_pid \
-    worker_log worker_started_at error_msg held held_at worktree <<< \
+    worker_log worker_started_at error_msg held held_at worktree merge_commit merge_error <<< \
     "$(sm_read_state_fields "${NAME}" phase type epic_id machine tmux_session \
        current_issue last_activity merge_queued merge_status merged_at \
-       after eager worker_pid worker_log worker_started_at error held held_at worktree)"
+       after eager worker_pid worker_log worker_started_at error held held_at worktree \
+       merge_commit merge_error)"
 
   # Handle defaults for fields that need them
   [[ -z "${op_type}" ]] && op_type="build"
@@ -1027,10 +1038,8 @@ show_status() {
   echo "Type: ${op_type}"
 
   # Show user-friendly status
-  # Helper to verify merged status using recorded merge_commit
+  # Helper to verify merged status using recorded merge_commit (read in batch above)
   local merge_verified=""
-  local merge_commit
-  merge_commit=$(sm_read_state "${NAME}" "merge_commit")
   if [[ -n "${merge_commit}" ]] && [[ "${merge_commit}" != "null" ]]; then
     if v0_verify_merge_by_op "${NAME}"; then
       merge_verified="yes"
@@ -1232,8 +1241,7 @@ show_status() {
           echo "  Resolve: v0 merge ${worktree} --resolve"
           ;;
         failed)
-          local merge_error
-          merge_error=$(sm_read_state "${NAME}" "merge_error")
+          # merge_error already read in batch above (Phase 5 optimization)
           echo "  Status: FAILED - ${merge_error}"
           ;;
         *)
