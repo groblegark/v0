@@ -6,77 +6,43 @@ This document describes the core state machine used by v0 operations (features, 
 
 Operations are work units tracked by v0. Each operation has a lifecycle managed by a state machine stored in `${BUILD_DIR}/operations/${name}/state.json`.
 
-## State Diagram (ASCII)
+## State Diagram
 
-```
-                                    ┌─────────────┐
-                                    │   (start)   │
-                                    └──────┬──────┘
-                                           │
-                                           ▼
-                              ┌────────────────────────┐
-                              │          init          │
-                              │  (planning not started)│
-                              └───────────┬────────────┘
-                                          │
-              ┌───────────────────────────┼───────────────────────────┐
-              │                           │                           │
-              │ --after (no --eager)      │ normal                    │ --after --eager
-              │                           │                           │
-              ▼                           ▼                           │
-    ┌─────────────────┐         ┌─────────────────┐                   │
-    │     blocked     │◄────────│     planned     │◄──────────────────┘
-    │ (waiting for op)│         │ (plan created)  │
-    └────────┬────────┘         └────────┬────────┘
-             │                           │
-             │ after op merged           │ decompose
-             │                           │
-             └──────────┬────────────────┘
-                        ▼
-              ┌─────────────────┐
-              │     queued      │
-              │ (issues created)│
-              └────────┬────────┘
-                       │
-                       │ --eager blocks here
-                       │
-        ┌──────────────┼──────────────┐
-        │              │              │
-        │ --enqueue    │              │ error
-        │              │              │
-        ▼              ▼              ▼
-   (stops here)  ┌───────────┐  ┌──────────┐
-                 │ executing │  │  failed  │
-                 │(agent runs)│  └──────────┘
-                 └─────┬─────┘
-                       │
-                       │ agent completes
-                       ▼
-              ┌─────────────────┐
-              │    completed    │
-              │(work finished)  │
-              └────────┬────────┘
-                       │
-       ┌───────────────┼───────────────┐
-       │               │               │
-       │ --no-merge    │ merge_queued  │ error
-       │               │               │
-       ▼               ▼               ▼
-  (stops here)  ┌──────────────┐  ┌──────────┐
-                │pending_merge │  │  failed  │
-                │(queued for   │  └──────────┘
-                │ merge)       │
-                └──────┬───────┘
-                       │
-        ┌──────────────┼──────────────┐
-        │              │              │
-        │ merge ok     │ conflict     │ merge error
-        │              │              │
-        ▼              ▼              ▼
-   ┌─────────┐  ┌──────────┐   ┌──────────┐
-   │ merged  │  │ conflict │   │  failed  │
-   │(success)│  │(needs fix)│  │          │
-   └─────────┘  └──────────┘   └──────────┘
+```mermaid
+flowchart TD
+    start((start)) --> init
+
+    init["init<br/>(planning not started)"]
+    init -->|"--after<br/>(no --eager)"| blocked
+    init -->|normal| planned
+    init -->|"--after --eager"| planned
+
+    blocked["blocked<br/>(waiting for op)"]
+    planned["planned<br/>(plan created)"]
+
+    blocked -->|"after op merged"| queued
+    planned -->|decompose| queued
+
+    queued["queued<br/>(issues created)"]
+    queued -->|"--enqueue"| stop1(("(stops)"))
+    queued -->|error| failed1[failed]
+    queued --> executing
+
+    executing["executing<br/>(agent runs)"]
+    executing -->|"agent completes"| completed
+
+    completed["completed<br/>(work finished)"]
+    completed -->|"--no-merge"| stop2(("(stops)"))
+    completed -->|error| failed2[failed]
+    completed -->|merge_queued| pending_merge
+
+    pending_merge["pending_merge<br/>(queued for merge)"]
+    pending_merge -->|"merge ok"| merged
+    pending_merge -->|conflict| conflict
+    pending_merge -->|"merge error"| failed3[failed]
+
+    merged["merged<br/>(success)"]
+    conflict["conflict<br/>(needs fix)"]
 ```
 
 ## State Definitions
