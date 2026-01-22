@@ -9,31 +9,31 @@ v0_load_config
 
 usage() {
   cat <<EOF
-Usage: v0 goal <name> "<goal description>" [options]
-       v0 goal <name> --resume [options]
-       v0 goal --status
+Usage: v0 roadmap <name> "<roadmap description>" [options]
+       v0 roadmap <name> --resume [options]
+       v0 roadmap --status
 
-Orchestrate autonomous work to achieve a stated goal.
+Orchestrate autonomous work using a roadmap.
 
-The goal command launches an agent that:
+The roadmap command launches an agent that:
 1. Explores the project/codebase
-2. Creates an outline of epics and milestones
+2. Creates a roadmap outline of epics and milestones
 3. Adds pre-checks and post-checks around milestones
 4. Sequentially queues all work using 'v0 feature --after'
 
 Options:
-  --resume         Resume an existing goal operation
-  --status         Show status of all goals
+  --resume         Resume an existing roadmap operation
+  --status         Show status of all roadmaps
   --dry-run        Show what would happen without executing
   --attach         Follow worker logs after launching
   --foreground     Run in foreground (blocking)
 
 Examples:
-  v0 goal rewrite "Rewrite the entire frontend in React"
-  v0 goal api "Build a comprehensive REST API"
-  v0 goal --status
-  v0 goal rewrite --resume
-  v0 goal api --resume --attach
+  v0 roadmap rewrite "Rewrite the entire frontend in React"
+  v0 roadmap api "Build a comprehensive REST API"
+  v0 roadmap --status
+  v0 roadmap rewrite --resume
+  v0 roadmap api --resume --attach
 EOF
   exit 1
 }
@@ -73,25 +73,25 @@ while [[ $# -gt 0 ]]; do
   esac
 done
 
-# Handle --status flag (list all goals)
+# Handle --status flag (list all roadmaps)
 if [[ -n "${STATUS}" ]]; then
-  GOALS_DIR="${BUILD_DIR}/goals"
-  if [[ ! -d "${GOALS_DIR}" ]]; then
-    echo "No goals found."
+  ROADMAPS_DIR="${BUILD_DIR}/roadmaps"
+  if [[ ! -d "${ROADMAPS_DIR}" ]]; then
+    echo "No roadmaps found."
     exit 0
   fi
 
-  echo "Goals:"
+  echo "Roadmaps:"
   echo ""
 
   found=0
-  for state_file in "${GOALS_DIR}"/*/state.json; do
+  for state_file in "${ROADMAPS_DIR}"/*/state.json; do
     [[ ! -f "${state_file}" ]] && continue
     found=1
 
     name=$(jq -r '.name' "${state_file}")
     phase=$(jq -r '.phase' "${state_file}")
-    desc=$(jq -r '.goal_description' "${state_file}")
+    desc=$(jq -r '.roadmap_description' "${state_file}")
     idea_id=$(jq -r '.idea_id // empty' "${state_file}")
     created=$(jq -r '.created_at' "${state_file}")
 
@@ -122,9 +122,9 @@ if [[ ! "${NAME}" =~ ^[a-zA-Z][a-zA-Z0-9-]*$ ]]; then
   exit 1
 fi
 
-# Goal state management (separate from operations)
-GOALS_DIR="${BUILD_DIR}/goals"
-STATE_DIR="${GOALS_DIR}/${NAME}"
+# Roadmap state management (separate from operations)
+ROADMAPS_DIR="${BUILD_DIR}/roadmaps"
+STATE_DIR="${ROADMAPS_DIR}/${NAME}"
 STATE_FILE="${STATE_DIR}/state.json"
 
 update_state() {
@@ -154,9 +154,9 @@ init_state() {
   cat > "${STATE_FILE}" <<EOF
 {
   "name": "${NAME}",
-  "type": "goal",
+  "type": "roadmap",
   "machine": "${machine}",
-  "goal_description": $(printf '%s' "${DESCRIPTION}" | jq -Rs .),
+  "roadmap_description": $(printf '%s' "${DESCRIPTION}" | jq -Rs .),
   "phase": "init",
   "idea_id": null,
   "epics": [],
@@ -175,11 +175,11 @@ create_idea_issue() {
   local desc="$1"
   local idea_id
 
-  # Create idea issue for the goal
-  idea_id=$(wk new idea "${desc}" --label "goal:${NAME}" 2>/dev/null | grep -oE "${ISSUE_PREFIX}-[a-z0-9]+" | head -1)
+  # Create idea issue for the roadmap
+  idea_id=$(wk new idea "${desc}" --label "roadmap:${NAME}" 2>/dev/null | grep -oE "${ISSUE_PREFIX}-[a-z0-9]+" | head -1)
 
   if [[ -z "${idea_id}" ]]; then
-    echo "Warning: Failed to create goal idea issue (wk may not be initialized)"
+    echo "Warning: Failed to create roadmap idea issue (wk may not be initialized)"
     return 1
   fi
 
@@ -189,14 +189,14 @@ create_idea_issue() {
 # Resume logic
 if [[ -n "${RESUME}" ]]; then
   if [[ ! -f "${STATE_FILE}" ]]; then
-    echo "Error: No goal found for '${NAME}'"
+    echo "Error: No roadmap found for '${NAME}'"
     exit 1
   fi
 
   PHASE=$(get_state phase)
-  DESCRIPTION=$(get_state goal_description)
+  DESCRIPTION=$(get_state roadmap_description)
 
-  echo "Resuming goal '${NAME}' from phase: ${PHASE}"
+  echo "Resuming roadmap '${NAME}' from phase: ${PHASE}"
 
   # Handle --attach flag
   if [[ -n "${ATTACH}" ]]; then
@@ -226,11 +226,11 @@ if [[ -n "${RESUME}" ]]; then
     echo "Background worker already running (PID: ${WORKER_PID})"
     echo ""
     echo "View logs:    tail -f ${WORKER_LOG}"
-    echo "Check status: v0 goal --status"
+    echo "Check status: v0 roadmap --status"
     echo ""
     echo "To force restart, first kill the worker:"
     echo "  kill ${WORKER_PID}"
-    echo "  v0 goal ${NAME} --resume"
+    echo "  v0 roadmap ${NAME} --resume"
     exit 0
   fi
 
@@ -241,18 +241,18 @@ if [[ -n "${RESUME}" ]]; then
 
   # Continue with phase execution below
 else
-  # New goal - check for existing operation
+  # New roadmap - check for existing operation
   if [[ -f "${STATE_FILE}" ]]; then
     PHASE=$(get_state phase)
-    echo "Error: Goal '${NAME}' already exists (phase: ${PHASE})"
-    echo "Use 'v0 goal ${NAME} --resume' to continue, or choose a different name"
+    echo "Error: Roadmap '${NAME}' already exists (phase: ${PHASE})"
+    echo "Use 'v0 roadmap ${NAME} --resume' to continue, or choose a different name"
     exit 1
   fi
 
-  # Initialize new goal
-  echo "Creating goal '${NAME}'..."
+  # Initialize new roadmap
+  echo "Creating roadmap '${NAME}'..."
   init_state
-  emit_event "goal:created" "Goal initialized: ${DESCRIPTION}"
+  emit_event "roadmap:created" "Roadmap initialized: ${DESCRIPTION}"
 
   # Create idea issue
   if idea_id=$(create_idea_issue "${DESCRIPTION}"); then
@@ -265,7 +265,7 @@ fi
 # Dry run stops here
 if [[ -n "${DRY_RUN}" ]]; then
   echo ""
-  echo "Dry run complete. Would launch goal worker for '${NAME}'."
+  echo "Dry run complete. Would launch roadmap worker for '${NAME}'."
   exit 0
 fi
 
@@ -274,20 +274,20 @@ if [[ -z "${FOREGROUND}" ]]; then
   WORKER_LOG="${STATE_DIR}/logs/worker.log"
   mkdir -p "${STATE_DIR}/logs"
 
-  nohup "${V0_DIR}/bin/v0-goal-worker" "${NAME}" > "${WORKER_LOG}" 2>&1 &
+  nohup "${V0_DIR}/bin/v0-roadmap-worker" "${NAME}" > "${WORKER_LOG}" 2>&1 &
   WORKER_PID=$!
 
   update_state "worker_pid" "${WORKER_PID}"
   update_state "worker_log" "\"${WORKER_LOG}\""
 
   echo ""
-  echo -e "${C_BOLD}${C_CYAN}=== Goal '${NAME}' launched ===${C_RESET}"
+  echo -e "${C_BOLD}${C_CYAN}=== Roadmap '${NAME}' launched ===${C_RESET}"
   echo -e "Worker PID: ${C_DIM}${WORKER_PID}${C_RESET}"
   echo ""
   echo "Commands:"
   echo "  View logs:     tail -f ${WORKER_LOG}"
-  echo "  Check status:  v0 goal --status"
-  echo "  Attach:        v0 goal ${NAME} --resume --attach"
+  echo "  Check status:  v0 roadmap --status"
+  echo "  Attach:        v0 roadmap ${NAME} --resume --attach"
   echo ""
 
   if [[ -n "${ATTACH}" ]]; then
@@ -301,5 +301,5 @@ if [[ -z "${FOREGROUND}" ]]; then
 fi
 
 # Foreground mode - run worker directly
-echo "Running goal in foreground..."
-exec "${V0_DIR}/bin/v0-goal-worker" "${NAME}"
+echo "Running roadmap in foreground..."
+exec "${V0_DIR}/bin/v0-roadmap-worker" "${NAME}"

@@ -1,6 +1,6 @@
-# Goal Orchestration
+# Roadmap Orchestration
 
-Decompose this goal into epics, milestones, and actionable features that can be queued for autonomous execution.
+Decompose this roadmap into epics, milestones, and actionable features that can be queued for autonomous execution.
 
 ## Step 1: Explore the Codebase
 
@@ -12,9 +12,9 @@ Before creating any work items, thoroughly explore:
 
 Use `ls`, `find`, `grep`, and file reads to understand the codebase. This exploration informs your planning.
 
-## Step 2: Create Outline
+## Step 2: Create Roadmap Outline
 
-Create an outline with:
+Create a roadmap outline with:
 
 ### Epics (1 line each)
 High-level areas of work. Format:
@@ -93,7 +93,7 @@ v0 feature <milestone-1-postcheck> "<description>" --after <milestone-1> --enque
 ```
 
 **Important:**
-- Add `--label goal:<goal-name>` to all features (use the goal name from CLAUDE.md)
+- Add `--label roadmap:<roadmap-name>` to all features (use the roadmap name from CLAUDE.md)
 - Use `--enqueue` to plan without immediately executing
 - Chain all features with `--after` to ensure sequential execution
 

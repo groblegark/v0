@@ -1,16 +1,16 @@
 #!/usr/bin/env bats
-# v0-goal.bats - Tests for v0-goal command
+# v0-roadmap.bats - Tests for v0-roadmap command
 
 load '../helpers/test_helper'
 
 # Path to the script under test
-V0_GOAL="${PROJECT_ROOT}/bin/v0-goal"
+V0_ROADMAP="${PROJECT_ROOT}/bin/v0-roadmap"
 
 setup() {
     TEST_TEMP_DIR="$(mktemp -d)"
     export TEST_TEMP_DIR
 
-    mkdir -p "${TEST_TEMP_DIR}/project/.v0/build/goals" "${TEST_TEMP_DIR}/state"
+    mkdir -p "${TEST_TEMP_DIR}/project/.v0/build/roadmaps" "${TEST_TEMP_DIR}/state"
 
     export REAL_HOME="${HOME}"
     export HOME="${TEST_TEMP_DIR}/home"
@@ -92,7 +92,7 @@ EOF
 echo "m4 $*" >> "$MOCK_CALLS_DIR/m4.calls" 2>/dev/null || true
 # Output a minimal CLAUDE.md
 echo "## Your Mission"
-echo "Test goal"
+echo "Test roadmap"
 exit 0
 EOF
     chmod +x "${TEST_TEMP_DIR}/mock-v0-bin/m4"
@@ -117,21 +117,21 @@ teardown() {
 # Help and Usage Tests
 # ============================================================================
 
-@test "v0-goal: --help shows usage" {
-    run "${V0_GOAL}" --help 2>&1 || true
-    assert_output --partial "Usage: v0 goal"
+@test "v0-roadmap: --help shows usage" {
+    run "${V0_ROADMAP}" --help 2>&1 || true
+    assert_output --partial "Usage: v0 roadmap"
 }
 
-@test "v0-goal: no arguments shows usage error" {
-    run "${V0_GOAL}" 2>&1 || true
+@test "v0-roadmap: no arguments shows usage error" {
+    run "${V0_ROADMAP}" 2>&1 || true
     assert_failure
-    assert_output --partial "Usage: v0 goal"
+    assert_output --partial "Usage: v0 roadmap"
 }
 
-@test "v0-goal: --status with no goals shows empty" {
-    run "${V0_GOAL}" --status
+@test "v0-roadmap: --status with no roadmaps shows empty" {
+    run "${V0_ROADMAP}" --status
     assert_success
-    # Output shows "Goals:" header and "(none)" when empty
+    # Output shows "Roadmaps:" header and "(none)" when empty
     assert_output --partial "(none)"
 }
 
@@ -139,31 +139,31 @@ teardown() {
 # Name Validation Tests
 # ============================================================================
 
-@test "v0-goal: rejects invalid name with spaces" {
-    run "${V0_GOAL}" "invalid name" "Description" 2>&1
+@test "v0-roadmap: rejects invalid name with spaces" {
+    run "${V0_ROADMAP}" "invalid name" "Description" 2>&1
     assert_failure
     assert_output --partial "must start with a letter"
 }
 
-@test "v0-goal: rejects name starting with number" {
-    run "${V0_GOAL}" "123goal" "Description" 2>&1
+@test "v0-roadmap: rejects name starting with number" {
+    run "${V0_ROADMAP}" "123roadmap" "Description" 2>&1
     assert_failure
     assert_output --partial "must start with a letter"
 }
 
-@test "v0-goal: rejects name starting with underscore" {
-    run "${V0_GOAL}" "_goal" "Description" 2>&1
+@test "v0-roadmap: rejects name starting with underscore" {
+    run "${V0_ROADMAP}" "_roadmap" "Description" 2>&1
     assert_failure
     assert_output --partial "must start with a letter"
 }
 
-@test "v0-goal: accepts valid name with letters and hyphens" {
-    run "${V0_GOAL}" "my-goal" "Test description" --dry-run
+@test "v0-roadmap: accepts valid name with letters and hyphens" {
+    run "${V0_ROADMAP}" "my-roadmap" "Test description" --dry-run
     assert_success
 }
 
-@test "v0-goal: accepts valid name with letters and numbers" {
-    run "${V0_GOAL}" "goal123" "Test description" --dry-run
+@test "v0-roadmap: accepts valid name with letters and numbers" {
+    run "${V0_ROADMAP}" "roadmap123" "Test description" --dry-run
     assert_success
 }
 
@@ -171,42 +171,42 @@ teardown() {
 # Dry Run Tests
 # ============================================================================
 
-@test "v0-goal: --dry-run creates state directory" {
-    run "${V0_GOAL}" test-goal "Test goal description" --dry-run
+@test "v0-roadmap: --dry-run creates state directory" {
+    run "${V0_ROADMAP}" test-roadmap "Test roadmap description" --dry-run
     assert_success
-    assert_output --partial "Creating goal"
-    assert [ -d "${TEST_TEMP_DIR}/project/.v0/build/goals/test-goal" ]
+    assert_output --partial "Creating roadmap"
+    assert [ -d "${TEST_TEMP_DIR}/project/.v0/build/roadmaps/test-roadmap" ]
 }
 
-@test "v0-goal: --dry-run creates state.json" {
-    run "${V0_GOAL}" test-goal "Test goal description" --dry-run
+@test "v0-roadmap: --dry-run creates state.json" {
+    run "${V0_ROADMAP}" test-roadmap "Test roadmap description" --dry-run
     assert_success
-    assert [ -f "${TEST_TEMP_DIR}/project/.v0/build/goals/test-goal/state.json" ]
+    assert [ -f "${TEST_TEMP_DIR}/project/.v0/build/roadmaps/test-roadmap/state.json" ]
 }
 
-@test "v0-goal: --dry-run state contains goal_description" {
-    run "${V0_GOAL}" test-goal "My amazing goal" --dry-run
+@test "v0-roadmap: --dry-run state contains roadmap_description" {
+    run "${V0_ROADMAP}" test-roadmap "My amazing roadmap" --dry-run
     assert_success
-    run jq -r '.goal_description' "${TEST_TEMP_DIR}/project/.v0/build/goals/test-goal/state.json"
-    assert_output "My amazing goal"
+    run jq -r '.roadmap_description' "${TEST_TEMP_DIR}/project/.v0/build/roadmaps/test-roadmap/state.json"
+    assert_output "My amazing roadmap"
 }
 
-@test "v0-goal: --dry-run state contains correct name" {
-    run "${V0_GOAL}" mygoal "Some description" --dry-run
+@test "v0-roadmap: --dry-run state contains correct name" {
+    run "${V0_ROADMAP}" myroadmap "Some description" --dry-run
     assert_success
-    run jq -r '.name' "${TEST_TEMP_DIR}/project/.v0/build/goals/mygoal/state.json"
-    assert_output "mygoal"
+    run jq -r '.name' "${TEST_TEMP_DIR}/project/.v0/build/roadmaps/myroadmap/state.json"
+    assert_output "myroadmap"
 }
 
-@test "v0-goal: --dry-run state has init phase" {
-    run "${V0_GOAL}" test-goal "Test" --dry-run
+@test "v0-roadmap: --dry-run state has init phase" {
+    run "${V0_ROADMAP}" test-roadmap "Test" --dry-run
     assert_success
-    run jq -r '.phase' "${TEST_TEMP_DIR}/project/.v0/build/goals/test-goal/state.json"
+    run jq -r '.phase' "${TEST_TEMP_DIR}/project/.v0/build/roadmaps/test-roadmap/state.json"
     assert_output "init"
 }
 
-@test "v0-goal: --dry-run does not launch worker" {
-    run "${V0_GOAL}" test-goal "Test goal" --dry-run
+@test "v0-roadmap: --dry-run does not launch worker" {
+    run "${V0_ROADMAP}" test-roadmap "Test roadmap" --dry-run
     assert_success
     assert_output --partial "Dry run complete"
     # No tmux calls should be made
@@ -214,16 +214,16 @@ teardown() {
 }
 
 # ============================================================================
-# Duplicate Goal Tests
+# Duplicate Roadmap Tests
 # ============================================================================
 
-@test "v0-goal: rejects duplicate goal name" {
-    # Create first goal
-    run "${V0_GOAL}" mygoal "First goal" --dry-run
+@test "v0-roadmap: rejects duplicate roadmap name" {
+    # Create first roadmap
+    run "${V0_ROADMAP}" myroadmap "First roadmap" --dry-run
     assert_success
 
-    # Try to create second goal with same name
-    run "${V0_GOAL}" mygoal "Second goal" --dry-run 2>&1
+    # Try to create second roadmap with same name
+    run "${V0_ROADMAP}" myroadmap "Second roadmap" --dry-run 2>&1
     assert_failure
     assert_output --partial "already exists"
 }
@@ -232,45 +232,45 @@ teardown() {
 # Resume Tests
 # ============================================================================
 
-@test "v0-goal: --resume fails for non-existent goal" {
-    run "${V0_GOAL}" nonexistent --resume 2>&1
+@test "v0-roadmap: --resume fails for non-existent roadmap" {
+    run "${V0_ROADMAP}" nonexistent --resume 2>&1
     assert_failure
-    assert_output --partial "No goal found"
+    assert_output --partial "No roadmap found"
 }
 
-@test "v0-goal: --resume works for existing goal" {
-    # Create goal first
-    run "${V0_GOAL}" mygoal "Test" --dry-run
+@test "v0-roadmap: --resume works for existing roadmap" {
+    # Create roadmap first
+    run "${V0_ROADMAP}" myroadmap "Test" --dry-run
     assert_success
 
-    # Now resume should work (in dry-run context we just check it finds the goal)
-    run "${V0_GOAL}" mygoal --resume 2>&1
-    # It should find the goal and try to resume
-    assert_output --partial "Resuming goal"
+    # Now resume should work (in dry-run context we just check it finds the roadmap)
+    run "${V0_ROADMAP}" myroadmap --resume 2>&1
+    # It should find the roadmap and try to resume
+    assert_output --partial "Resuming roadmap"
 }
 
 # ============================================================================
 # Status Display Tests
 # ============================================================================
 
-@test "v0-goal: --status shows existing goals" {
-    # Create a goal
-    run "${V0_GOAL}" mygoal "Test description" --dry-run
+@test "v0-roadmap: --status shows existing roadmaps" {
+    # Create a roadmap
+    run "${V0_ROADMAP}" myroadmap "Test description" --dry-run
     assert_success
 
     # Status should show it
-    run "${V0_GOAL}" --status
+    run "${V0_ROADMAP}" --status
     assert_success
-    assert_output --partial "mygoal"
+    assert_output --partial "myroadmap"
 }
 
-@test "v0-goal: --status shows goal phase" {
-    # Create a goal
-    run "${V0_GOAL}" mygoal "Test description" --dry-run
+@test "v0-roadmap: --status shows roadmap phase" {
+    # Create a roadmap
+    run "${V0_ROADMAP}" myroadmap "Test description" --dry-run
     assert_success
 
     # Status should show the phase
-    run "${V0_GOAL}" --status
+    run "${V0_ROADMAP}" --status
     assert_success
     assert_output --partial "init"
 }
@@ -279,8 +279,8 @@ teardown() {
 # wk Idea Integration Tests
 # ============================================================================
 
-@test "v0-goal: creates wk idea issue" {
-    run "${V0_GOAL}" mygoal "Test goal" --dry-run
+@test "v0-roadmap: creates wk idea issue" {
+    run "${V0_ROADMAP}" myroadmap "Test roadmap" --dry-run
     assert_success
 
     # Check that wk new idea was called
@@ -289,11 +289,11 @@ teardown() {
     assert_success
 }
 
-@test "v0-goal: idea label includes goal name" {
-    run "${V0_GOAL}" mygoal "Test goal" --dry-run
+@test "v0-roadmap: idea label includes roadmap name" {
+    run "${V0_ROADMAP}" myroadmap "Test roadmap" --dry-run
     assert_success
 
-    # Check that the goal label was included
-    run grep "goal:mygoal" "${MOCK_CALLS_DIR}/wk.calls"
+    # Check that the roadmap label was included
+    run grep "roadmap:myroadmap" "${MOCK_CALLS_DIR}/wk.calls"
     assert_success
 }

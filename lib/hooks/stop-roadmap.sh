@@ -1,7 +1,7 @@
 #!/bin/bash
 # SPDX-License-Identifier: MIT
 # Copyright (c) 2026 Alfred Jean LLC
-# Stop hook for v0 goal operations - verifies goal orchestration is complete
+# Stop hook for v0 roadmap operations - verifies roadmap orchestration is complete
 # Input: JSON on stdin with session_id, transcript_path, stop_hook_active, reason
 # Output: JSON with decision (block/allow) and reason
 
@@ -26,21 +26,21 @@ if [[ "${STOP_HOOK_ACTIVE}" = "true" ]]; then
   exit 0
 fi
 
-# Get goal context from environment (set by v0-goal-worker)
-GOAL_NAME="${V0_GOAL_NAME:-}"
+# Get roadmap context from environment (set by v0-roadmap-worker)
+ROADMAP_NAME="${V0_ROADMAP_NAME:-}"
 
-if [[ -z "${GOAL_NAME}" ]]; then
-  # No goal context - allow stop (likely not a v0 goal session)
+if [[ -z "${ROADMAP_NAME}" ]]; then
+  # No roadmap context - allow stop (likely not a v0 roadmap session)
   echo '{"decision": "approve"}'
   exit 0
 fi
 
-# Check if features have been queued for this goal
-QUEUED_COUNT=$(wk list --label "goal:${GOAL_NAME}" 2>/dev/null | wc -l | tr -d ' ')
+# Check if features have been queued for this roadmap
+QUEUED_COUNT=$(wk list --label "roadmap:${ROADMAP_NAME}" 2>/dev/null | wc -l | tr -d ' ')
 
 if [[ "${QUEUED_COUNT}" -eq 0 ]]; then
   # No features queued yet - block stop
-  echo "{\"decision\": \"block\", \"reason\": \"Goal orchestration incomplete: no features have been queued yet. Follow GOAL.md instructions to queue features with 'v0 feature --after --label goal:${GOAL_NAME}'.\"}"
+  echo "{\"decision\": \"block\", \"reason\": \"Roadmap orchestration incomplete: no features have been queued yet. Follow ROADMAP.md instructions to queue features with 'v0 feature --after --label roadmap:${ROADMAP_NAME}'.\"}"
   exit 0
 fi
 

@@ -1,29 +1,29 @@
 changequote(`[[', `]]')dnl
 ## Your Mission
 
-Orchestrate the goal: **GOAL_DESCRIPTION**
+Orchestrate the roadmap: **ROADMAP_DESCRIPTION**
 
-The goal idea is tracked as IDEA_ID.
+The roadmap idea is tracked as IDEA_ID.
 
 ## Finding Work
 
 ```bash
-# Check goal status
+# Check roadmap status
 wk show IDEA_ID
 
-# List queued features for this goal
-wk list --label goal:GOAL_NAME
+# List queued features for this roadmap
+wk list --label roadmap:ROADMAP_NAME
 ```
 
-## Goal Orchestration
+## Roadmap Orchestration
 
-Follow the instructions in GOAL.md to:
+Follow the instructions in ROADMAP.md to:
 1. Explore the codebase
-2. Create an outline of epics and milestones
+2. Create a roadmap outline of epics and milestones
 3. Add pre-checks and post-checks
-4. Queue all features with `v0 feature --after --label goal:GOAL_NAME`
+4. Queue all features with `v0 feature --after --label roadmap:ROADMAP_NAME`
 
-**Important:** Add `--label goal:GOAL_NAME` to ALL features you create so they are tracked with this goal.
+**Important:** Add `--label roadmap:ROADMAP_NAME` to ALL features you create so they are tracked with this roadmap.
 
 ## Git Worktree
 

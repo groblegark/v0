@@ -21,7 +21,7 @@ Types:
   chore            Attach to chore worker session
   mergeq           Attach to active merge resolution session
   feature <name>   Attach to feature session (auto-detects phase)
-  goal <name>      Attach to goal orchestration session
+  roadmap <name>   Attach to roadmap orchestration session
   <feature_name>   Shorthand for 'feature <name>'
 
 Options:
@@ -113,15 +113,15 @@ case "${1:-}" in
     SESSION=$(echo "${RESOLVE_SESSIONS}" | head -1)
     exec tmux attach -t "${SESSION}"
     ;;
-  goal)
+  roadmap)
     NAME="${2:-}"
-    [[ -z "${NAME}" ]] && { echo "Error: goal name required"; usage; }
+    [[ -z "${NAME}" ]] && { echo "Error: roadmap name required"; usage; }
 
-    STATE_FILE="${BUILD_DIR}/goals/${NAME}/state.json"
+    STATE_FILE="${BUILD_DIR}/roadmaps/${NAME}/state.json"
 
     if [[ ! -f "${STATE_FILE}" ]]; then
-      echo "Error: No state found for goal '${NAME}'"
-      echo "Check available goals with: v0 goal --status"
+      echo "Error: No state found for roadmap '${NAME}'"
+      echo "Check available roadmaps with: v0 roadmap --status"
       exit 1
     fi
 
@@ -130,10 +130,10 @@ case "${1:-}" in
 
     if [[ -z "${SESSION}" ]] || [[ "${SESSION}" = "null" ]]; then
       # Derive from name
-      SESSION=$(v0_session_name "${NAME}" "goal")
+      SESSION=$(v0_session_name "${NAME}" "roadmap")
     fi
 
-    attach_to_session "${SESSION}" "goal ${NAME}"
+    attach_to_session "${SESSION}" "roadmap ${NAME}"
     ;;
   feature)
     NAME="${2:-}"
@@ -171,10 +171,10 @@ case "${1:-}" in
     usage
     ;;
   *)
-    # Check if this is a feature or goal name (allow "v0 attach <name>" shorthand)
+    # Check if this is a feature or roadmap name (allow "v0 attach <name>" shorthand)
     NAME="$1"
     STATE_FILE="${BUILD_DIR}/operations/${NAME}/state.json"
-    GOAL_STATE_FILE="${BUILD_DIR}/goals/${NAME}/state.json"
+    ROADMAP_STATE_FILE="${BUILD_DIR}/roadmaps/${NAME}/state.json"
 
     if [[ -f "${STATE_FILE}" ]]; then
       # It's a feature operation
@@ -197,15 +197,15 @@ case "${1:-}" in
       fi
 
       attach_to_session "${SESSION}" "feature ${NAME}"
-    elif [[ -f "${GOAL_STATE_FILE}" ]]; then
-      # It's a goal operation
-      SESSION=$(jq -r '.planning_session // empty' "${GOAL_STATE_FILE}")
+    elif [[ -f "${ROADMAP_STATE_FILE}" ]]; then
+      # It's a roadmap operation
+      SESSION=$(jq -r '.planning_session // empty' "${ROADMAP_STATE_FILE}")
 
       if [[ -z "${SESSION}" ]] || [[ "${SESSION}" = "null" ]]; then
-        SESSION=$(v0_session_name "${NAME}" "goal")
+        SESSION=$(v0_session_name "${NAME}" "roadmap")
       fi
 
-      attach_to_session "${SESSION}" "goal ${NAME}"
+      attach_to_session "${SESSION}" "roadmap ${NAME}"
     else
       echo "Unknown type: $1"
       usage

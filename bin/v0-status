@@ -213,17 +213,17 @@ format_operation_time() {
   fi
 }
 
-# Show active goals (only planning/orchestrating phases)
-# Returns: 0 if goals were displayed, 1 if no active goals
-show_active_goals() {
-  local goal_dir="${BUILD_DIR}/goals"
-  [[ ! -d "${goal_dir}" ]] && return 1
+# Show active roadmaps (only planning/orchestrating phases)
+# Returns: 0 if roadmaps were displayed, 1 if no active roadmaps
+show_active_roadmaps() {
+  local roadmap_dir="${BUILD_DIR}/roadmaps"
+  [[ ! -d "${roadmap_dir}" ]] && return 1
 
-  local active_goals=()
+  local active_roadmaps=()
   local local_machine
   local_machine=$(hostname -s)
 
-  for state_file in "${goal_dir}"/*/state.json; do
+  for state_file in "${roadmap_dir}"/*/state.json; do
     [[ ! -f "${state_file}" ]] && continue
 
     local phase name desc idea_id worker_pid machine session
@@ -232,7 +232,7 @@ show_active_goals() {
     # Only show during planning/orchestrating phases
     if [[ "${phase}" = "planning" ]] || [[ "${phase}" = "orchestrating" ]] || [[ "${phase}" = "init" ]]; then
       name=$(jq -r '.name // empty' "${state_file}")
-      desc=$(jq -r '.goal_description // empty' "${state_file}")
+      desc=$(jq -r '.roadmap_description // empty' "${state_file}")
       idea_id=$(jq -r '.idea_id // empty' "${state_file}")
       worker_pid=$(jq -r '.worker_pid // empty' "${state_file}")
       machine=$(jq -r '.machine // empty' "${state_file}")
@@ -252,18 +252,18 @@ show_active_goals() {
         fi
       fi
 
-      active_goals+=("${name}|${phase}|${desc_short}|${idea_id}|${status_icon}")
+      active_roadmaps+=("${name}|${phase}|${desc_short}|${idea_id}|${status_icon}")
     fi
   done
 
-  if [[ ${#active_goals[@]} -eq 0 ]]; then
+  if [[ ${#active_roadmaps[@]} -eq 0 ]]; then
     return 1
   fi
 
   echo ""
-  echo "Goals:"
-  for goal_data in "${active_goals[@]}"; do
-    IFS='|' read -r name phase desc idea_id status_icon <<< "${goal_data}"
+  echo "Roadmaps:"
+  for roadmap_data in "${active_roadmaps[@]}"; do
+    IFS='|' read -r name phase desc idea_id status_icon <<< "${roadmap_data}"
     local phase_color=""
     case "${phase}" in
       planning) phase_color="${C_YELLOW}" ;;
@@ -864,9 +864,9 @@ if [[ -n "${LIST}" ]] || [[ -n "${BLOCKED}" ]]; then
   fi
   fi  # end: has_operations = true
 
-  # Show active goals (only during planning/orchestrating phases)
+  # Show active roadmaps (only during planning/orchestrating phases)
   if [[ -z "${BLOCKED}" ]]; then
-    show_active_goals || true
+    show_active_roadmaps || true
   fi
 
   # Show fix, chore, and merge worker status in default list (not blocked view)

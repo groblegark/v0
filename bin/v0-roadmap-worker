@@ -1,16 +1,16 @@
 #!/bin/bash
 # SPDX-License-Identifier: MIT
 # Copyright (c) 2026 Alfred Jean LLC
-# v0-goal-worker - Background worker for v0 goal orchestration
+# v0-roadmap-worker - Background worker for v0 roadmap orchestration
 #
-# This script runs the goal orchestration pipeline:
+# This script runs the roadmap orchestration pipeline:
 # - Sets up working environment (worktree, CLAUDE.md, hooks)
-# - Launches Claude agent to decompose the goal into epics/milestones
+# - Launches Claude agent to decompose the roadmap into epics/milestones
 # - Agent queues all features with v0 feature --after
 #
 # Key responsibilities:
-# - Create worktree for goal orchestration
-# - Generate CLAUDE.md from goal template
+# - Create worktree for roadmap orchestration
+# - Generate CLAUDE.md from roadmap template
 # - Configure hooks for completion detection
 # - Launch Claude agent in tmux
 # - Handle errors and interruptions gracefully
@@ -23,13 +23,13 @@ v0_load_config
 
 usage() {
   cat <<EOF
-Usage: v0-goal-worker <name>
+Usage: v0-roadmap-worker <name>
 
-Background worker for v0 goal orchestration.
-This script is launched by v0-goal and should not be called directly.
+Background worker for v0 roadmap orchestration.
+This script is launched by v0-roadmap and should not be called directly.
 
 Arguments:
-  name    Name of the goal to orchestrate
+  name    Name of the roadmap to orchestrate
 EOF
   exit 1
 }
@@ -37,14 +37,14 @@ EOF
 NAME="$1"
 [[ -z "${NAME}" ]] && usage
 
-# Goal state is stored in goals/ directory (separate from operations)
-GOALS_DIR="${BUILD_DIR}/goals"
-STATE_DIR="${GOALS_DIR}/${NAME}"
+# Roadmap state is stored in roadmaps/ directory (separate from operations)
+ROADMAPS_DIR="${BUILD_DIR}/roadmaps"
+STATE_DIR="${ROADMAPS_DIR}/${NAME}"
 STATE_FILE="${STATE_DIR}/state.json"
 LOG_FILE="${STATE_DIR}/logs/worker.log"
 
 if [[ ! -f "${STATE_FILE}" ]]; then
-  echo "Error: No goal found for '${NAME}'"
+  echo "Error: No roadmap found for '${NAME}'"
   exit 1
 fi
 
@@ -100,19 +100,19 @@ trap cleanup EXIT
 
 create_done_script() {
   local target_dir="$1"
-  local goal_name="$2"
+  local roadmap_name="$2"
   local idea_id="$3"
 
   cat > "${target_dir}/done" <<DONE_SCRIPT
 #!/bin/bash
-# Mark goal as completed and add completion note to idea
+# Mark roadmap as completed and add completion note to idea
 
-GOAL_NAME="${goal_name}"
+ROADMAP_NAME="${roadmap_name}"
 IDEA_ID="${idea_id}"
 
 # Add completion note to idea issue if we have one
 if [[ -n "\${IDEA_ID}" ]] && [[ "\${IDEA_ID}" != "null" ]]; then
-  QUEUED_COUNT=\$(wk list --label "goal:\${GOAL_NAME}" 2>/dev/null | wc -l | tr -d ' ')
+  QUEUED_COUNT=\$(wk list --label "roadmap:\${ROADMAP_NAME}" 2>/dev/null | wc -l | tr -d ' ')
   wk note "\${IDEA_ID}" "Orchestration complete. \${QUEUED_COUNT} features queued." 2>/dev/null || true
 fi
 
@@ -138,14 +138,14 @@ DONE_SCRIPT
 
 create_incomplete_script() {
   local target_dir="$1"
-  local goal_name="$2"
+  local roadmap_name="$2"
 
   cat > "${target_dir}/incomplete" <<INCOMPLETE_SCRIPT
 #!/bin/bash
-# Exit session marking goal as incomplete
+# Exit session marking roadmap as incomplete
 
-echo "Goal orchestration incomplete."
-echo "Resume with: v0 goal ${goal_name} --resume"
+echo "Roadmap orchestration incomplete."
+echo "Resume with: v0 roadmap ${roadmap_name} --resume"
 
 find_claude() {
   local pid=\$1
@@ -171,27 +171,27 @@ run_orchestration_phase() {
   log "Starting orchestration phase"
 
   local DESCRIPTION
-  DESCRIPTION=$(get_state goal_description)
+  DESCRIPTION=$(get_state roadmap_description)
   local IDEA_ID
   IDEA_ID=$(get_state idea_id)
 
-  emit_event "orchestrate:starting" "Setting up goal orchestration environment"
+  emit_event "orchestrate:starting" "Setting up roadmap orchestration environment"
 
-  # Create worktree for goal orchestration
-  # Use a goal-specific branch pattern
-  GOAL_BRANCH="goal/${NAME}"
-  if ! tree_output=$("${V0_DIR}/bin/v0-tree" "${GOAL_BRANCH}"); then
-    ERROR_MSG="Failed to create worktree for ${GOAL_BRANCH}"
+  # Create worktree for roadmap orchestration
+  # Use a roadmap-specific branch pattern
+  ROADMAP_BRANCH="roadmap/${NAME}"
+  if ! tree_output=$("${V0_DIR}/bin/v0-tree" "${ROADMAP_BRANCH}"); then
+    ERROR_MSG="Failed to create worktree for ${ROADMAP_BRANCH}"
     return 1
   fi
   { read -r TREE_DIR; read -r WORKTREE; } <<< "${tree_output}"
 
   update_state "worktree" "\"${WORKTREE}\""
 
-  SESSION=$(v0_session_name "${NAME}" "goal")
+  SESSION=$(v0_session_name "${NAME}" "roadmap")
 
   if tmux has-session -t "${SESSION}" 2>/dev/null; then
-    log "Goal session '${SESSION}' already running, waiting for completion..."
+    log "Roadmap session '${SESSION}' already running, waiting for completion..."
     # Just wait for it to complete
     while tmux has-session -t "${SESSION}" 2>/dev/null; do
       sleep 5
@@ -201,19 +201,19 @@ run_orchestration_phase() {
 
   emit_event "orchestrate:setup" "Creating CLAUDE.md and hooks"
 
-  # Create CLAUDE.md from goal template
-  M4_ARGS="-D GOAL_NAME=${NAME} -D GOAL_DESCRIPTION=$(printf '%s' "${DESCRIPTION}" | sed 's/"/\\"/g') -D IDEA_ID=${IDEA_ID:-none} -D V0_GIT_REMOTE=${V0_GIT_REMOTE}"
-  m4 ${M4_ARGS} "${V0_DIR}/lib/templates/claude.goal.m4" > "${TREE_DIR}/CLAUDE.md"
+  # Create CLAUDE.md from roadmap template
+  M4_ARGS="-D ROADMAP_NAME=${NAME} -D ROADMAP_DESCRIPTION=$(printf '%s' "${DESCRIPTION}" | sed 's/"/\\"/g') -D IDEA_ID=${IDEA_ID:-none} -D V0_GIT_REMOTE=${V0_GIT_REMOTE}"
+  m4 ${M4_ARGS} "${V0_DIR}/lib/templates/claude.roadmap.m4" > "${TREE_DIR}/CLAUDE.md"
   emit_event "claude.md:created" "${TREE_DIR}/CLAUDE.md"
 
-  # Copy goal prompt as GOAL.md
-  if [[ -f "${V0_DIR}/lib/prompts/goal.md" ]]; then
-    /bin/cp "${V0_DIR}/lib/prompts/goal.md" "${TREE_DIR}/GOAL.md"
-    emit_event "goal.md:copied" "Copied goal orchestration instructions"
+  # Copy roadmap prompt as ROADMAP.md
+  if [[ -f "${V0_DIR}/lib/prompts/roadmap.md" ]]; then
+    /bin/cp "${V0_DIR}/lib/prompts/roadmap.md" "${TREE_DIR}/ROADMAP.md"
+    emit_event "roadmap.md:copied" "Copied roadmap orchestration instructions"
   fi
 
   # Configure hooks
-  HOOK_SCRIPT="${V0_DIR}/lib/hooks/stop-goal.sh"
+  HOOK_SCRIPT="${V0_DIR}/lib/hooks/stop-roadmap.sh"
   mkdir -p "${TREE_DIR}/.claude"
   cat > "${TREE_DIR}/.claude/settings.local.json" <<SETTINGS_EOF
 {
@@ -262,23 +262,23 @@ SETTINGS_EOF
   cat > "${TREE_DIR}/.claude/on-complete.sh" <<WRAPPER
 #!/bin/bash
 STATE_FILE="${STATE_FILE}"
-GOAL_NAME="${NAME}"
+ROADMAP_NAME="${NAME}"
 
 # Count queued features
-QUEUED_COUNT=\$(wk list --label "goal:\${GOAL_NAME}" 2>/dev/null | wc -l | tr -d ' ')
+QUEUED_COUNT=\$(wk list --label "roadmap:\${ROADMAP_NAME}" 2>/dev/null | wc -l | tr -d ' ')
 
 # Get list of queued feature names
-QUEUED_FEATURES=\$(wk list --label "goal:\${GOAL_NAME}" 2>/dev/null | grep -oE '[a-zA-Z]+-[a-z0-9]+' | tr '\n' ' ')
+QUEUED_FEATURES=\$(wk list --label "roadmap:\${ROADMAP_NAME}" 2>/dev/null | grep -oE '[a-zA-Z]+-[a-z0-9]+' | tr '\n' ' ')
 
 # Update state with queued features
 tmp=\$(mktemp)
 jq ".features_queued = [\$(echo \${QUEUED_FEATURES} | tr ' ' '\n' | grep -v '^$' | sed 's/.*/"&"/' | paste -sd, -)] | .phase = \"completed\" | .completed_at = \"$(date -u +%Y-%m-%dT%H:%M:%SZ)\"" "\${STATE_FILE}" > "\${tmp}" && mv "\${tmp}" "\${STATE_FILE}"
 
 echo ""
-echo "=== Goal Orchestration Complete ==="
+echo "=== Roadmap Orchestration Complete ==="
 echo "Features queued: \${QUEUED_COUNT}"
 echo ""
-echo "View queued work: wk list --label goal:${NAME}"
+echo "View queued work: wk list --label roadmap:${NAME}"
 echo "Start first feature: v0 feature <first-feature-name> --resume"
 WRAPPER
   chmod +x "${TREE_DIR}/.claude/on-complete.sh"
@@ -293,12 +293,12 @@ WRAPPER
   CLAUDE_ARGS="--model opus --dangerously-skip-permissions --allow-dangerously-skip-permissions"
 
   tmux new-session -d -s "${SESSION}" -c "${TREE_DIR}" \
-    "V0_GOAL_NAME='${NAME}' V0_IDEA_ID='${IDEA_ID}' V0_ROOT='${V0_ROOT}' claude ${CLAUDE_ARGS} 'Orchestrate the goal. Follow instructions in CLAUDE.md and GOAL.md.'; \
+    "V0_ROADMAP_NAME='${NAME}' V0_IDEA_ID='${IDEA_ID}' V0_ROOT='${V0_ROOT}' claude ${CLAUDE_ARGS} 'Orchestrate the roadmap. Follow instructions in CLAUDE.md and ROADMAP.md.'; \
      '${TREE_DIR}/.claude/on-complete.sh'; \
      echo ''; echo 'Session complete. Closing in 5 seconds...'; sleep 5"
 
   log "Orchestration phase started: tmux session ${SESSION}"
-  log "Watch live: v0 attach goal ${NAME}"
+  log "Watch live: v0 attach roadmap ${NAME}"
 
   # Wait for session to complete
   while tmux has-session -t "${SESSION}" 2>/dev/null; do
@@ -306,19 +306,19 @@ WRAPPER
   done
 
   # Check if we successfully queued features
-  QUEUED_COUNT=$(wk list --label "goal:${NAME}" 2>/dev/null | wc -l | tr -d ' ')
+  QUEUED_COUNT=$(wk list --label "roadmap:${NAME}" 2>/dev/null | wc -l | tr -d ' ')
   if [[ "${QUEUED_COUNT}" -gt 0 ]]; then
-    emit_event "orchestrate:complete" "${QUEUED_COUNT} features queued for goal"
+    emit_event "orchestrate:complete" "${QUEUED_COUNT} features queued for roadmap"
     update_state "phase" '"orchestrating"'
-    log "Goal orchestration complete. ${QUEUED_COUNT} features queued."
+    log "Roadmap orchestration complete. ${QUEUED_COUNT} features queued."
   else
     emit_event "orchestrate:warning" "No features were queued"
-    log "Warning: No features were queued for this goal"
+    log "Warning: No features were queued for this roadmap"
   fi
 }
 
 main() {
-  log "Starting background worker for goal: ${NAME}"
+  log "Starting background worker for roadmap: ${NAME}"
 
   PHASE=$(get_state phase)
   log "Current phase: ${PHASE}"
@@ -328,10 +328,10 @@ main() {
       run_orchestration_phase || exit 1
       ;;
     orchestrating)
-      log "Goal is already orchestrating (features have been queued)"
+      log "Roadmap is already orchestrating (features have been queued)"
       ;;
     completed)
-      log "Goal orchestration already completed"
+      log "Roadmap orchestration already completed"
       ;;
     failed|interrupted)
       log "Recovering from ${PHASE} state"
