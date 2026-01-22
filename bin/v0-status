@@ -213,6 +213,70 @@ format_operation_time() {
   fi
 }
 
+# Show active goals (only planning/orchestrating phases)
+# Returns: 0 if goals were displayed, 1 if no active goals
+show_active_goals() {
+  local goal_dir="${BUILD_DIR}/goals"
+  [[ ! -d "${goal_dir}" ]] && return 1
+
+  local active_goals=()
+  local local_machine
+  local_machine=$(hostname -s)
+
+  for state_file in "${goal_dir}"/*/state.json; do
+    [[ ! -f "${state_file}" ]] && continue
+
+    local phase name desc idea_id worker_pid machine session
+    phase=$(jq -r '.phase // empty' "${state_file}")
+
+    # Only show during planning/orchestrating phases
+    if [[ "${phase}" = "planning" ]] || [[ "${phase}" = "orchestrating" ]] || [[ "${phase}" = "init" ]]; then
+      name=$(jq -r '.name // empty' "${state_file}")
+      desc=$(jq -r '.goal_description // empty' "${state_file}")
+      idea_id=$(jq -r '.idea_id // empty' "${state_file}")
+      worker_pid=$(jq -r '.worker_pid // empty' "${state_file}")
+      machine=$(jq -r '.machine // empty' "${state_file}")
+      session=$(jq -r '.planning_session // empty' "${state_file}")
+
+      # Truncate description for display
+      local desc_short="${desc:0:40}"
+      [[ ${#desc} -gt 40 ]] && desc_short="${desc_short}..."
+
+      # Check if session is running
+      local status_icon=""
+      if [[ -n "${session}" ]] && [[ "${session}" != "null" ]] && tmux has-session -t "${session}" 2>/dev/null; then
+        status_icon=" ${C_CYAN}(active)${C_RESET}"
+      elif [[ -n "${worker_pid}" ]] && [[ "${worker_pid}" != "null" ]]; then
+        if [[ "${machine}" = "${local_machine}" ]] && kill -0 "${worker_pid}" 2>/dev/null; then
+          status_icon=" ${C_CYAN}(bg-worker)${C_RESET}"
+        fi
+      fi
+
+      active_goals+=("${name}|${phase}|${desc_short}|${idea_id}|${status_icon}")
+    fi
+  done
+
+  if [[ ${#active_goals[@]} -eq 0 ]]; then
+    return 1
+  fi
+
+  echo ""
+  echo "Goals:"
+  for goal_data in "${active_goals[@]}"; do
+    IFS='|' read -r name phase desc idea_id status_icon <<< "${goal_data}"
+    local phase_color=""
+    case "${phase}" in
+      planning) phase_color="${C_YELLOW}" ;;
+      orchestrating) phase_color="${C_CYAN}" ;;
+      init) phase_color="${C_DIM}" ;;
+    esac
+    printf "  %-20s ${phase_color}%-15s${C_RESET}%b  %s\n" "${name}:" "${phase}" "${status_icon}" "${C_DIM}(${desc})${C_RESET}"
+    [[ -n "${idea_id}" ]] && [[ "${idea_id}" != "null" ]] && printf "  %-20s %s\n" "" "${C_DIM}[${idea_id}]${C_RESET}"
+  done
+
+  return 0
+}
+
 # Get the most relevant timestamp for display based on current state
 # Arguments: phase, created_at, completed_at, merged_at, held_at
 # Output: The most appropriate timestamp for display
@@ -797,6 +861,11 @@ if [[ -n "${LIST}" ]] || [[ -n "${BLOCKED}" ]]; then
     echo -e "  ${C_DIM}(no waiting operations)${C_RESET}"
   fi
   fi  # end: has_operations = true
+
+  # Show active goals (only during planning/orchestrating phases)
+  if [[ -z "${BLOCKED}" ]]; then
+    show_active_goals || true
+  fi
 
   # Show fix, chore, and merge worker status in default list (not blocked view)
   if [[ -z "${BLOCKED}" ]]; then
