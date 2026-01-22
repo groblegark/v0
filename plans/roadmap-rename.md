@@ -1,5 +1,7 @@
 # Implementation Plan: Rename 'goal' Command to 'roadmap'
 
+**Root Feature:** `v0-ddf4`
+
 ## Overview
 
 Rename the `v0 goal` command and all associated components to `v0 roadmap`. This includes updating scripts, templates, prompts, hooks, tests, and ensuring the prompt refers to the "outline" as a "roadmap outline".
