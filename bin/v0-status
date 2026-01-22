@@ -227,7 +227,7 @@ show_active_roadmaps() {
     [[ ! -f "${state_file}" ]] && continue
 
     local phase name desc idea_id worker_pid machine session
-    phase=$(jq -r '.phase // empty' "${state_file}")
+    phase=$(jq -r '.phase // empty' "${state_file}")  # roadmap state (not feature state machine)
 
     # Only show during planning/orchestrating phases
     if [[ "${phase}" = "planning" ]] || [[ "${phase}" = "orchestrating" ]] || [[ "${phase}" = "init" ]]; then

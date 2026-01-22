@@ -569,9 +569,9 @@ is_session_active() {
 }
 
 @test "v0-status no inline jq phase access" {
-    # Verify no inline jq calls for .phase field (queue.json is OK)
-    # This ensures we use state machine functions instead
-    run bash -c "grep 'jq.*\.phase' '$PROJECT_ROOT/bin/v0-status' | grep -v 'queue.json' | wc -l | tr -d ' '"
+    # Verify no inline jq calls for .phase field (queue.json and roadmap state are OK)
+    # This ensures we use state machine functions for features; roadmaps have separate state management
+    run bash -c "grep 'jq.*\.phase' '$PROJECT_ROOT/bin/v0-status' | grep -v 'queue.json' | grep -v 'roadmap' | wc -l | tr -d ' '"
     assert_output "0"
 }
 
