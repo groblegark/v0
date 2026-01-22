@@ -84,13 +84,17 @@ show_header() {
   version=$(cat "${SCRIPT_DIR}/../VERSION" 2>/dev/null || echo "unknown")
   project_name=$(basename "$(pwd)")
   # Get terminal width: try multiple methods for portability
-  # 1. COLUMNS if explicitly set and valid
-  # 2. stty size via /dev/tty (queries terminal driver directly)
-  # 3. tput cols via /dev/tty
-  # 4. tput cols (may return default 80)
-  # 5. fallback to 80
-  width="${COLUMNS:-}"
-  if ! [[ "${width}" =~ ^[0-9]+$ ]] || [[ "${width}" -lt 1 ]]; then
+  # 1. COLUMNS if explicitly set and valid → use it
+  # 2. COLUMNS is explicitly set but invalid → fallback to 80
+  # 3. COLUMNS is unset → try stty/tput, then fallback to 80
+  if [[ -n "${COLUMNS+set}" ]]; then
+    # COLUMNS is explicitly set - use it if valid, otherwise 80
+    width="${COLUMNS}"
+    if ! [[ "${width}" =~ ^[0-9]+$ ]] || [[ "${width}" -lt 1 ]]; then
+      width=80
+    fi
+  else
+    # COLUMNS is unset - try stty/tput fallback chain
     # Try stty first (most reliable with actual terminal)
     # Use subshell to suppress bash's input redirection errors
     width=$( { stty size </dev/tty | awk '{print $2}'; } 2>/dev/null ) || width=""
