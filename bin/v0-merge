@@ -76,9 +76,17 @@ if [[ "${INPUT}" != /* ]] && [[ "${INPUT}" != .* ]]; then
   # Tree dir is the parent of the worktree
   TREE_DIR="$(dirname "${WORKTREE}")"
 else
-  # Input is a path
-  TREE_DIR="${INPUT}"
-  WORKTREE="${TREE_DIR}/${REPO_NAME}"
+  # Input is a path - could be tree_dir or worktree path
+  # Check if input is already a git worktree (has .git file/dir)
+  if git -C "${INPUT}" rev-parse --git-dir &>/dev/null; then
+    # Input is already a worktree path
+    WORKTREE="${INPUT}"
+    TREE_DIR="$(dirname "${WORKTREE}")"
+  else
+    # Input is a tree dir, append REPO_NAME to get worktree
+    TREE_DIR="${INPUT}"
+    WORKTREE="${TREE_DIR}/${REPO_NAME}"
+  fi
 fi
 
 if [[ ! -d "${TREE_DIR}" ]]; then
