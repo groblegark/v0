@@ -1,5 +1,7 @@
 # Limit Operations in v0 Status List
 
+**Root Feature:** `v0-3f7a`
+
 ## Overview
 
 Limit the `v0 status` operations list to 15 entries with intelligent pruning. When more than 15 operations exist, prioritize "open" operations (actively working, new, failed) over "blocked" and "completed" operations. This optimization avoids expensive per-operation checks (tmux sessions, worker PIDs) for operations that won't be displayed.
