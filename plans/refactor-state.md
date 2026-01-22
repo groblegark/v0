@@ -1,5 +1,7 @@
 # Plan: Split lib/state-machine.sh into smaller files
 
+**Root Feature:** `v0-539c`
+
 ## Problem
 - `lib/state-machine.sh` is 1255 lines - too big to maintain and for Claude to read effectively
 - No separation between pure business logic and code that calls external commands
