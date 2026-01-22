@@ -1096,8 +1096,23 @@ process_watch() {
             found_ready=true  # Don't sleep, check next immediately
             continue
           else
+            # Already auto-resumed once - won't auto-resume again, needs manual intervention
+            echo "[$(date +%H:%M:%S)] Skipping ${op}: open issues after auto-resume (${open_count} open, ${in_progress_count} in progress) - needs manual merge or issue resolution"
+            echo "[$(date -u +%Y-%m-%dT%H:%M:%SZ)] skip-open-issues: ${op} (${open_count} open, already resumed)" >> "${MERGEQ_DIR}/logs/merges.log"
             ready_check="open issues (${open_count} open, ${in_progress_count} in progress) - already resumed once"
           fi
+        elif [[ "${ready_check}" == "worktree:missing" ]]; then
+          # Worktree is missing - mark in state for status display
+          local state_file="${BUILD_DIR}/operations/${op}/state.json"
+          local already_marked
+          already_marked=$(jq -r '.worktree_missing // false' "${state_file}" 2>/dev/null)
+
+          if [[ "${already_marked}" != "true" ]]; then
+            echo "[$(date +%H:%M:%S)] Skipping ${op}: worktree missing - needs manual recovery (v0 feature ${op} --resume)"
+            echo "[$(date -u +%Y-%m-%dT%H:%M:%SZ)] skip-no-worktree: ${op}" >> "${MERGEQ_DIR}/logs/merges.log"
+            update_operation_state "${op}" "worktree_missing" "true"
+          fi
+          ready_check="worktree missing - needs manual recovery"
         fi
 
         # Collect not-ready reasons for status display

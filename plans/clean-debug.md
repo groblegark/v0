@@ -1,5 +1,7 @@
 # Implementation Plan: Remove tmux capture from log output
 
+**Root Feature:** `v0-9062`
+
 ## Overview
 
 Remove all `tmux capture-pane` usage from the idle detection loops in v0-feature and v0-feature-worker. This functionality captures terminal output to detect when Claude agents go idle, but it's noisy and never provides useful debugging information. Replace with simpler file modification time-based idle detection.

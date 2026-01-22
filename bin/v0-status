@@ -696,7 +696,7 @@ if [[ -n "${LIST}" ]] || [[ -n "${BLOCKED}" ]]; then
   # Phase 3 optimization: also calculates max_name_len in same pass (META line first)
   max_name_len=8  # Default minimum
   if [[ ${#state_files[@]} -gt 0 ]]; then
-    while IFS=$'\t' read -r name op_type phase created machine completed merge_queued merge_status merged_at completed_at after session worker_pid held held_at; do
+    while IFS=$'\t' read -r name op_type phase created machine completed merge_queued merge_status merged_at completed_at after session worker_pid held held_at merge_resumed worktree_missing; do
       # Handle META line for max name length (Phase 3)
       if [[ "${name}" = "META" ]]; then
         max_name_len="${op_type}"  # op_type field contains max_name_len for META
@@ -755,7 +755,7 @@ if [[ -n "${LIST}" ]] || [[ -n "${BLOCKED}" ]]; then
 
     # Use shared helper for phase display formatting
     IFS='|' read -r raw_display raw_merge_icon <<< \
-      "$(_sm_format_phase_display "${phase}" "${op_type}" "${merge_queued}" "${merge_status}" "${merged_at}" "${queue_entry_status}")"
+      "$(_sm_format_phase_display "${phase}" "${op_type}" "${merge_queued}" "${merge_status}" "${merged_at}" "${queue_entry_status}" "${merge_resumed}" "${worktree_missing}")"
 
     # Get colors for display
     phase_color=$(_sm_get_phase_color "${raw_display}" "${raw_merge_icon}")
@@ -851,7 +851,9 @@ if [[ -n "${LIST}" ]] || [[ -n "${BLOCKED}" ]]; then
         (.tmux_session // "null"),
         (.worker_pid // "null"),
         (.held // false),
-        (.held_at // "null")
+        (.held_at // "null"),
+        (.merge_resumed // false),
+        (.worktree_missing // false)
       ] | @tsv)
     ' "${state_files[@]}")
   fi

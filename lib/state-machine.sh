@@ -950,7 +950,7 @@ sm_should_auto_merge() {
 # Status Display Helpers
 # ============================================================================
 
-# _sm_format_phase_display <phase> <op_type> <merge_queued> <merge_status> <merged_at> <queue_entry_status>
+# _sm_format_phase_display <phase> <op_type> <merge_queued> <merge_status> <merged_at> <queue_entry_status> [<merge_resumed>] [<worktree_missing>]
 # Format phase for display (shared logic for v0-status list view and sm_get_display_status)
 # This is a pure formatting function - no file I/O, works with pre-read values
 # Returns: display_phase|merge_icon
@@ -962,6 +962,8 @@ _sm_format_phase_display() {
   local merge_status="$4"
   local merged_at="$5"
   local queue_entry_status="$6"
+  local merge_resumed="${7:-false}"
+  local worktree_missing="${8:-false}"
 
   local display_phase="${phase}"
   local merge_icon=""
@@ -981,7 +983,14 @@ _sm_format_phase_display() {
         # Check queue status first (most authoritative)
         case "${queue_entry_status}" in
           pending|processing)
-            merge_icon="(merging...)"
+            # Check for blocking conditions in priority order
+            if [[ "${worktree_missing}" = "true" ]]; then
+              merge_icon="(== NO WORKTREE ==)"
+            elif [[ "${merge_resumed}" = "true" ]]; then
+              merge_icon="(== OPEN ISSUES ==)"
+            else
+              merge_icon="(merging...)"
+            fi
             ;;
           completed)
             merge_icon="[merged]"
@@ -1082,10 +1091,10 @@ _sm_get_merge_icon_color() {
     "(merging...)"*|"(resumed)"*|"(in queue)"*)
       echo "cyan"
       ;;
-    "[merge pending]"*|"(== NEEDS MERGE ==)"*)
+    "[merge pending]"*|"(== NEEDS MERGE ==)"*|"(== OPEN ISSUES =="*)
       echo "yellow"
       ;;
-    "(== MERGE FAILED =="*|"(== CONFLICT =="*)
+    "(== MERGE FAILED =="*|"(== CONFLICT =="*|"(== NO WORKTREE =="*)
       echo "red"
       ;;
     *)
