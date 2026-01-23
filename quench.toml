@@ -1,0 +1,15 @@
+version = 1
+
+[project]
+name = "v0"
+source = ["bin/*", "lib/**/*.sh", "scripts/*"]
+tests = ["tests/**/*.bats", "tests/**/*_test.sh"]
+ignore = ["tests/bats/bats-*/**"]
+
+# Shell suppress: allow with justification comment
+[shell.suppress]
+check = "comment"
+
+# These shellcheck codes are allowed without comment
+[shell.suppress.source]
+allow = ["SC2012", "SC2090"]
