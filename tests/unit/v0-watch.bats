@@ -322,7 +322,7 @@ EOF
 # Terminal title tests
 # ============================================================================
 
-@test "watch sets terminal title with project name" {
+@test "watch sets terminal title" {
     local project_dir
     project_dir=$(setup_isolated_project)
 
@@ -337,8 +337,8 @@ EOF
         cat -v "'"$output_file"'"
     '
     # Should contain OSC title escape sequence
-    # ^[]0;Watch: project/^G (cat -v representation)
-    assert_output --partial "Watch: project/"
+    # ^[]0;Watch^G (cat -v representation)
+    assert_output --partial "]0;Watch"
 }
 
 @test "watch skips terminal title with dumb TERM" {

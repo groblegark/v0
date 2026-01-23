@@ -124,9 +124,7 @@ show_header() {
 trap 'echo; exit 0' INT TERM
 
 # Set terminal title for easy identification
-# Format: "Watch: projectdir/"
-project_name=$(basename "$(pwd)")
-v0_set_terminal_title "Watch: ${project_name}/"
+v0_set_terminal_title "Watch"
 
 iteration=0
 while true; do
