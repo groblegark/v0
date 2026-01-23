@@ -13,6 +13,9 @@ source "${V0_DIR}/lib/nudge-common.sh"
 # Source worker utilities for done/incomplete scripts
 source "${V0_DIR}/lib/worker-common.sh"
 
+# Source feature utilities (init, session monitoring, on-complete)
+source "${V0_DIR}/lib/feature/feature.sh"
+
 usage() {
   cat <<EOF
 Usage: v0 feature <name> <prompt> [options]
@@ -244,23 +247,12 @@ init_state() {
 EOF
 }
 
-update_state() {
-  local key="$1"
-  local value="$2"
-  local tmp
-  tmp=$(mktemp)
-  jq ".${key} = ${value}" "${STATE_FILE}" > "${tmp}" && mv "${tmp}" "${STATE_FILE}"
-}
-
-get_state() {
-  jq -r ".$1 // empty" "${STATE_FILE}"
-}
-
+# Thin wrappers over sm_* functions (use centralized state machine)
+update_state() { sm_update_state "${NAME}" "$@"; }
+get_state() { sm_read_state "${NAME}" "$@"; }
 emit_event() {
-  local event="$1"
-  local details="$2"
-  echo "[$(date +%H:%M:%S)] ${event}: ${details}"
-  echo "[$(date -u +%Y-%m-%dT%H:%M:%SZ)] ${event}: ${details}" >> "${STATE_DIR}/logs/events.log"
+  echo "[$(date +%H:%M:%S)] $1: ${2:-}"
+  sm_emit_event "${NAME}" "$@"
 }
 
 is_after_op_merged() {
@@ -662,60 +654,27 @@ EOF
     update_state "tmux_session" "\"${PLAN_SESSION}\""
     update_state "working_dir" "\"${V0_ROOT}\""
 
-    IDLE_COUNT=0
-    IDLE_THRESHOLD=6
-    LAST_MTIME=""
-    while tmux has-session -t "${PLAN_SESSION}" 2>/dev/null; do
-      if [[ -f "${STATE_DIR}/logs/plan.exit" ]]; then
-        tmux kill-session -t "${PLAN_SESSION}" 2>/dev/null || true
-        break
-      fi
-      sleep 2
-      # Find which plan file exists for mtime check
-      PLAN_FILE=""
-      if [[ -f "${TREE_DIR}/${V0_PLANS_DIR}/${NAME}.md" ]]; then
-        PLAN_FILE="${TREE_DIR}/${V0_PLANS_DIR}/${NAME}.md"
-      elif [[ -f "${WORKTREE}/${V0_PLANS_DIR}/${NAME}.md" ]]; then
-        PLAN_FILE="${WORKTREE}/${V0_PLANS_DIR}/${NAME}.md"
-      elif [[ -f "${PLANS_DIR}/${NAME}.md" ]]; then
-        PLAN_FILE="${PLANS_DIR}/${NAME}.md"
-      fi
-      if [[ -n "${PLAN_FILE}" ]]; then
-        CURRENT_MTIME=$(stat -f %m "${PLAN_FILE}" 2>/dev/null || stat -c %Y "${PLAN_FILE}" 2>/dev/null || echo "0")
-        if [[ "${CURRENT_MTIME}" = "${LAST_MTIME}" ]]; then
-          IDLE_COUNT=$((IDLE_COUNT + 1))
-          if [[ ${IDLE_COUNT} -ge ${IDLE_THRESHOLD} ]]; then
-            emit_event "plan:idle_complete" "Plan file exists and agent idle, terminating session"
-            tmux kill-session -t "${PLAN_SESSION}" 2>/dev/null || true
-            echo "0" > "${STATE_DIR}/logs/plan.exit"
-            break
-          fi
-        else
-          IDLE_COUNT=0
-        fi
-        LAST_MTIME="${CURRENT_MTIME}"
-      fi
-    done
+    # Monitor session until plan file created and agent idle
+    PLAN_LOCATIONS="${TREE_DIR}/${V0_PLANS_DIR}/${NAME}.md:${WORKTREE}/${V0_PLANS_DIR}/${NAME}.md:${PLANS_DIR}/${NAME}.md"
+    monitor_plan_session "${PLAN_SESSION}" "${STATE_DIR}/logs/plan.exit" "${PLAN_LOCATIONS}" "plan:idle_complete"
+    PLAN_FOUND="${FOUND_FILE}"
 
     # Clean ANSI escape sequences from plan.log
     v0_clean_log_file "${STATE_DIR}/logs/plan.log"
 
-    if [[ -f "${STATE_DIR}/logs/plan.exit" ]]; then
-      PLAN_EXIT=$(cat "${STATE_DIR}/logs/plan.exit")
-      rm -f "${STATE_DIR}/logs/plan.exit"
-    else
-      PLAN_EXIT=1
-    fi
+    PLAN_EXIT=$(get_session_exit_code "${STATE_DIR}/logs/plan.exit")
     set -e
 
+    # Check all locations if FOUND_FILE wasn't set
     mkdir -p "${PLANS_DIR}"
-    PLAN_FOUND=""
-    if [[ -f "${TREE_DIR}/${V0_PLANS_DIR}/${NAME}.md" ]]; then
-      PLAN_FOUND="${TREE_DIR}/${V0_PLANS_DIR}/${NAME}.md"
-    elif [[ -f "${WORKTREE}/${V0_PLANS_DIR}/${NAME}.md" ]]; then
-      PLAN_FOUND="${WORKTREE}/${V0_PLANS_DIR}/${NAME}.md"
-    elif [[ -f "${PLANS_DIR}/${NAME}.md" ]]; then
-      PLAN_FOUND="${PLANS_DIR}/${NAME}.md"
+    if [[ -z "${PLAN_FOUND}" ]]; then
+      if [[ -f "${TREE_DIR}/${V0_PLANS_DIR}/${NAME}.md" ]]; then
+        PLAN_FOUND="${TREE_DIR}/${V0_PLANS_DIR}/${NAME}.md"
+      elif [[ -f "${WORKTREE}/${V0_PLANS_DIR}/${NAME}.md" ]]; then
+        PLAN_FOUND="${WORKTREE}/${V0_PLANS_DIR}/${NAME}.md"
+      elif [[ -f "${PLANS_DIR}/${NAME}.md" ]]; then
+        PLAN_FOUND="${PLANS_DIR}/${NAME}.md"
+      fi
     fi
 
     if [[ ${PLAN_EXIT} -ne 0 ]]; then
@@ -821,51 +780,14 @@ EOF
     update_state "tmux_session" "\"${FEATURE_SESSION}\""
     update_state "working_dir" "\"${V0_ROOT}\""
 
-    PLAN_MTIME_BEFORE=$(stat -f %m "${PLAN_FILE}" 2>/dev/null || stat -c %Y "${PLAN_FILE}" 2>/dev/null)
-
-    IDLE_COUNT=0
-    IDLE_THRESHOLD=6
-    LAST_MTIME=""
+    # Monitor session until feature ID appears in plan and agent idle
     ISSUE_PATTERN=$(v0_issue_pattern)
-    PLAN_HAS_FEATURE=""
-    grep -qE "\`${ISSUE_PATTERN}\`" "${PLAN_FILE}" 2>/dev/null && PLAN_HAS_FEATURE=1
-    while tmux has-session -t "${FEATURE_SESSION}" 2>/dev/null; do
-      if [[ -f "${STATE_DIR}/logs/feature.exit" ]]; then
-        tmux kill-session -t "${FEATURE_SESSION}" 2>/dev/null || true
-        break
-      fi
-      sleep 2
-      PLAN_MTIME_NOW=$(stat -f %m "${PLAN_FILE}" 2>/dev/null || stat -c %Y "${PLAN_FILE}" 2>/dev/null)
-      if [[ "${PLAN_MTIME_NOW}" != "${PLAN_MTIME_BEFORE}" ]] || [[ -n "${PLAN_HAS_FEATURE}" ]]; then
-        if grep -qE "\`${ISSUE_PATTERN}\`" "${PLAN_FILE}" 2>/dev/null; then
-          CURRENT_MTIME=$(stat -f %m "${PLAN_FILE}" 2>/dev/null || stat -c %Y "${PLAN_FILE}" 2>/dev/null || echo "0")
-          if [[ "${CURRENT_MTIME}" = "${LAST_MTIME}" ]]; then
-            IDLE_COUNT=$((IDLE_COUNT + 1))
-            if [[ ${IDLE_COUNT} -ge ${IDLE_THRESHOLD} ]]; then
-              emit_event "feature:idle_complete" "Plan has feature ID and agent idle, terminating session"
-              tmux kill-session -t "${FEATURE_SESSION}" 2>/dev/null || true
-              echo "0" > "${STATE_DIR}/logs/feature.exit"
-              break
-            fi
-          else
-            IDLE_COUNT=0
-          fi
-          LAST_MTIME="${CURRENT_MTIME}"
-        fi
-      fi
-    done
+    monitor_decompose_session "${FEATURE_SESSION}" "${STATE_DIR}/logs/feature.exit" "${PLAN_FILE}" "${ISSUE_PATTERN}" "feature:idle_complete"
 
     # Clean ANSI escape sequences from feature.log
     v0_clean_log_file "${STATE_DIR}/logs/feature.log"
 
-    if [[ -f "${STATE_DIR}/logs/feature.exit" ]]; then
-      FEATURE_EXIT=$(cat "${STATE_DIR}/logs/feature.exit")
-      rm -f "${STATE_DIR}/logs/feature.exit"
-    else
-      FEATURE_EXIT=1
-    fi
-
-    ISSUE_PATTERN=$(v0_issue_pattern)
+    FEATURE_EXIT=$(get_session_exit_code "${STATE_DIR}/logs/feature.exit")
     FEATURE_ID=$(grep -oE "\`${ISSUE_PATTERN}\`" "${PLAN_FILE}" | head -1 | tr -d '`' || true)
     ISSUES_CREATED=$(wk list --label "plan:${NAME}" 2>/dev/null | wc -l | tr -d ' ')
 
@@ -978,45 +900,7 @@ if [[ "${PHASE}" = "queued" ]] && [[ -z "${ENQUEUE_ONLY}" ]]; then
     m4 ${M4_ARGS} "${V0_DIR}/lib/templates/claude.feature.m4" > "${TREE_DIR}/CLAUDE.md"
     emit_event "claude.md:created" "${TREE_DIR}/CLAUDE.md"
 
-    HOOK_SCRIPT="${V0_DIR}/lib/hooks/stop-feature.sh"
-    cat > "${TREE_DIR}/.claude/settings.local.json" <<SETTINGS_EOF
-{
-  "hooks": {
-    "Stop": [
-      {
-        "hooks": [
-          {
-            "type": "command",
-            "command": "${HOOK_SCRIPT}"
-          }
-        ]
-      }
-    ],
-    "PreCompact": [
-      {
-        "matcher": "",
-        "hooks": [
-          {
-            "type": "command",
-            "command": "wk prime"
-          }
-        ]
-      }
-    ],
-    "SessionStart": [
-      {
-        "matcher": "",
-        "hooks": [
-          {
-            "type": "command",
-            "command": "wk prime"
-          }
-        ]
-      }
-    ]
-  }
-}
-SETTINGS_EOF
+    feature_create_settings "${TREE_DIR}" "${V0_DIR}"
 
     PLAN_FILE="${PLANS_DIR}/${NAME}.md"
     if [[ -f "${PLAN_FILE}" ]]; then
@@ -1032,48 +916,7 @@ SETTINGS_EOF
     CLAUDE_ARGS="--model opus --dangerously-skip-permissions --allow-dangerously-skip-permissions"
     [[ -n "${SAFE}" ]] && CLAUDE_ARGS="--model opus --permission-mode acceptEdits"
 
-    cat > "${TREE_DIR}/.claude/on-complete.sh" <<WRAPPER
-#!/bin/bash
-STATE_FILE="${STATE_FILE}"
-BUILD_ROOT="${V0_ROOT}"
-OP_NAME="${NAME}"
-V0_DIR="${V0_DIR}"
-PROJECT="${PROJECT}"
-
-# Safety net: Close any remaining open issues (handles bypassed stop hooks)
-OPEN_IDS=\$(wk list --label "plan:\${OP_NAME}" --status todo 2>/dev/null | grep -oE '[a-zA-Z]+-[a-z0-9]+' || true)
-IN_PROGRESS_IDS=\$(wk list --label "plan:\${OP_NAME}" --status in_progress 2>/dev/null | grep -oE '[a-zA-Z]+-[a-z0-9]+' || true)
-ALL_OPEN_IDS="\${OPEN_IDS} \${IN_PROGRESS_IDS}"
-ALL_OPEN_IDS=\$(echo "\${ALL_OPEN_IDS}" | xargs)  # Trim whitespace
-if [[ -n "\${ALL_OPEN_IDS}" ]]; then
-  echo "Closing remaining issues: \${ALL_OPEN_IDS}"
-  read -ra IDS_ARRAY <<< "\${ALL_OPEN_IDS}"
-  wk done "\${IDS_ARRAY[@]}" --reason "Auto-closed by on-complete handler" 2>/dev/null || true
-fi
-
-COMPLETED_JSON=\$(wk list --format json --label "plan:\${OP_NAME}" --status done 2>/dev/null | jq '[.issues[].id]' || echo '[]')
-if [[ "\${COMPLETED_JSON}" != "[]" ]]; then
-  tmp=\$(mktemp)
-  jq ".completed = \${COMPLETED_JSON}" "\${STATE_FILE}" > "\${tmp}" && mv "\${tmp}" "\${STATE_FILE}"
-fi
-
-tmp=\$(mktemp)
-jq '.phase = "completed" | .completed_at = "'\$(date -u +%Y-%m-%dT%H:%M:%SZ)'"' "\${STATE_FILE}" > "\${tmp}" && mv "\${tmp}" "\${STATE_FILE}"
-
-if [[ "\$(jq -r '.merge_queued // false' "\${STATE_FILE}")" = "true" ]]; then
-  echo "=== Merge queued, preparing for merge ==="
-  tmp=\$(mktemp)
-  jq '.phase = "pending_merge"' "\${STATE_FILE}" > "\${tmp}" && mv "\${tmp}" "\${STATE_FILE}"
-
-  if "\${V0_DIR}/bin/v0-mergeq" --enqueue "\${OP_NAME}"; then
-    echo "Operation '\${OP_NAME}' added to merge queue"
-  else
-    echo "Warning: Failed to enqueue for merge"
-    echo "Run manually: v0 startup mergeq"
-  fi
-fi
-WRAPPER
-    chmod +x "${TREE_DIR}/.claude/on-complete.sh"
+    feature_create_on_complete "${TREE_DIR}" "${STATE_FILE}" "${NAME}" "${V0_DIR}" "${V0_ROOT}"
 
     # Ensure nudge worker is running and write session marker
     ensure_nudge_running

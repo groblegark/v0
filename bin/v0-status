@@ -19,6 +19,12 @@ source "${V0_DIR}/lib/status/timestamps.sh"
 # Source queue display utilities
 source "${V0_DIR}/lib/status/queue-display.sh"
 
+# Source worker status utilities
+source "${V0_DIR}/lib/status/worker-status.sh"
+
+# Source recently completed display utilities
+source "${V0_DIR}/lib/status/recent-display.sh"
+
 usage() {
   cat <<EOF
 Usage: v0 status [name] [options]
@@ -153,156 +159,6 @@ get_queue_completed_timestamp() {
   done <<< "${cache_data}"
 }
 
-# Get recently merged operations (features/builds)
-# Args: $1 = hours to look back (default: 72)
-# Output: name|merged_at (one per line, sorted most recent first)
-get_merged_operations() {
-  local since_hours="${1:-72}"
-  local cutoff_time
-  cutoff_time=$(date -v-"${since_hours}"H +%s 2>/dev/null || date -d "${since_hours} hours ago" +%s 2>/dev/null || echo 0)
-
-  if [[ ! -d "${BUILD_DIR}/operations" ]]; then
-    return
-  fi
-
-  # Phase 4 optimization: Single jq -s for all files instead of N separate calls
-  # Use compgen to check for glob matches (bash 3.2 compatible)
-  if compgen -G "${BUILD_DIR}/operations/*/state.json" > /dev/null 2>&1; then
-    jq -rs '.[] | select(.merge_status == "merged" and .merged_at != null) | "\(.name)|\(.merged_at)"' \
-      "${BUILD_DIR}"/operations/*/state.json 2>/dev/null | while IFS='|' read -r name merged_at; do
-      [[ -z "${name}" ]] && continue
-      # Timestamp filtering still in bash (macOS date compatibility)
-      local merged_epoch
-      merged_epoch=$(timestamp_to_epoch "${merged_at}")
-      if [[ -n "${merged_epoch}" ]] && [[ "${merged_epoch}" -ge "${cutoff_time}" ]]; then
-        echo "${name}|${merged_at}"
-      fi
-    done | sort -t'|' -k2 -r
-  fi
-}
-
-# Get recently completed bugs
-# Args: $1 = hours to look back (default: 72), $2 = max results (optional)
-# Output: id|title|updated_at (one per line, filtered by recency)
-get_completed_bugs() {
-  local since_hours="${1:-72}"
-  local limit="${2:-}"
-
-  local json_output limit_arg=""
-  [[ -n "${limit}" ]] && limit_arg="--limit ${limit}"
-  # Use wk list filter to efficiently get only recently updated bugs
-  json_output=$(wk list --type bug --status "done" --format json -q "updated < ${since_hours}h" ${limit_arg:+"${limit_arg}"} 2>/dev/null) || return
-  [[ -z "${json_output}" ]] && return
-
-  # wk list --format json doesn't include updated_at, so we fetch from wk show for display
-  echo "${json_output}" | jq -r '.issues[] | .id' 2>/dev/null | while read -r id; do
-    [[ -z "${id}" ]] && continue
-    local issue_json title updated_at
-    issue_json=$(wk show "${id}" --format json 2>/dev/null) || continue
-    title=$(echo "${issue_json}" | jq -r '.title // .summary // "Untitled"' 2>/dev/null)
-    updated_at=$(echo "${issue_json}" | jq -r '.updated_at // .closed_at // ""' 2>/dev/null)
-    echo "${id}|${title}|${updated_at}"
-  done
-}
-
-# Get recently completed chores
-# Args: $1 = hours to look back (default: 72), $2 = max results (optional)
-# Output: id|title|updated_at (one per line, filtered by recency)
-get_completed_chores() {
-  local since_hours="${1:-72}"
-  local limit="${2:-}"
-
-  local json_output limit_arg=""
-  [[ -n "${limit}" ]] && limit_arg="--limit ${limit}"
-  # Use wk list filter to efficiently get only recently updated chores
-  json_output=$(wk list --type chore --status "done" --format json -q "updated < ${since_hours}h" ${limit_arg:+"${limit_arg}"} 2>/dev/null) || return
-  [[ -z "${json_output}" ]] && return
-
-  # wk list --format json doesn't include updated_at, so we fetch from wk show for display
-  echo "${json_output}" | jq -r '.issues[] | .id' 2>/dev/null | while read -r id; do
-    [[ -z "${id}" ]] && continue
-    local issue_json title updated_at
-    issue_json=$(wk show "${id}" --format json 2>/dev/null) || continue
-    title=$(echo "${issue_json}" | jq -r '.title // .summary // "Untitled"' 2>/dev/null)
-    updated_at=$(echo "${issue_json}" | jq -r '.updated_at // .closed_at // ""' 2>/dev/null)
-    echo "${id}|${title}|${updated_at}"
-  done
-}
-
-# Show recently completed section in status output
-# Args: $1 = max items per category (default: 5)
-show_recently_completed() {
-  local max_items="${1:-5}"
-  local completed_bugs completed_chores
-
-  # Fetch data first to check if there's anything to show
-  completed_bugs=$(get_completed_bugs 72 $((max_items + 1)))
-  completed_chores=$(get_completed_chores 72 $((max_items + 1)))
-
-  # If nothing to show, omit the entire section
-  if [[ -z "${completed_bugs}" ]] && [[ -z "${completed_chores}" ]]; then
-    return
-  fi
-
-  echo ""
-  echo "Recently Completed:"
-
-  # Show completed bugs
-  if [[ -n "${completed_bugs}" ]]; then
-    echo "  Bugs:"
-    echo "${completed_bugs}" | head -n "${max_items}" | while IFS='|' read -r id title updated_at; do
-      local display_title="${title:0:50}"
-      [[ ${#title} -gt 50 ]] && display_title="${display_title}..."
-      if [[ -n "${updated_at}" ]]; then
-        local now_epoch updated_epoch elapsed_sec elapsed
-        now_epoch=$(date +%s)
-        updated_epoch=$(timestamp_to_epoch "${updated_at}")
-        if [[ -n "${updated_epoch}" ]] && [[ "${updated_epoch}" -gt 0 ]]; then
-          elapsed_sec=$((now_epoch - updated_epoch))
-          elapsed=$(format_elapsed "${elapsed_sec}")
-          echo "    - ${id}: ${display_title} (${elapsed})"
-        else
-          echo "    - ${id}: ${display_title}"
-        fi
-      else
-        echo "    - ${id}: ${display_title}"
-      fi
-    done
-    local total
-    total=$(echo "${completed_bugs}" | wc -l | tr -d ' ')
-    if [[ "${total}" -gt "${max_items}" ]]; then
-      echo "    ... and more"
-    fi
-  fi
-
-  # Show completed chores
-  if [[ -n "${completed_chores}" ]]; then
-    echo "  Chores:"
-    echo "${completed_chores}" | head -n "${max_items}" | while IFS='|' read -r id title updated_at; do
-      local display_title="${title:0:50}"
-      [[ ${#title} -gt 50 ]] && display_title="${display_title}..."
-      if [[ -n "${updated_at}" ]]; then
-        local now_epoch updated_epoch elapsed_sec elapsed
-        now_epoch=$(date +%s)
-        updated_epoch=$(timestamp_to_epoch "${updated_at}")
-        if [[ -n "${updated_epoch}" ]] && [[ "${updated_epoch}" -gt 0 ]]; then
-          elapsed_sec=$((now_epoch - updated_epoch))
-          elapsed=$(format_elapsed "${elapsed_sec}")
-          echo "    - ${id}: ${display_title} (${elapsed})"
-        else
-          echo "    - ${id}: ${display_title}"
-        fi
-      else
-        echo "    - ${id}: ${display_title}"
-      fi
-    done
-    local total
-    total=$(echo "${completed_chores}" | wc -l | tr -d ' ')
-    if [[ "${total}" -gt "${max_items}" ]]; then
-      echo "    ... and more"
-    fi
-  fi
-}
 
 NAME=""
 LIST=""
@@ -349,119 +205,13 @@ fi
 
 # Show fix status (condensed view)
 if [[ -n "${FIX}" ]]; then
-  # Use namespaced session names based on PROJECT
-  fix_session="v0-${PROJECT}-worker-fix"
-  fix_polling_log="/tmp/v0-${PROJECT}-fix-polling.log"
-
-  # Check worker and polling daemon status
-  fix_worker_running=false
-  fix_polling_pid=""
-
-  tmux has-session -t "${fix_session}" 2>/dev/null && fix_worker_running=true
-  [[ -f "${fix_polling_log}" ]] && fix_polling_pid=$(pgrep -f "while true.*${fix_session}" 2>/dev/null || true)
-
-  if [[ "${fix_worker_running}" = true ]]; then
-    echo -e "Fix Worker: ${C_CYAN}Active${C_RESET} ${C_DIM}[tmux: ${fix_session}] Attach with: v0 attach fix${C_RESET}"
-  elif [[ -n "${fix_polling_pid}" ]]; then
-    echo -e "Fix Worker: ${C_YELLOW}Polling${C_RESET} ${C_DIM}[pid: ${fix_polling_pid}]${C_RESET}"
-  else
-    echo -e "Fix Worker: ${C_DIM}Stopped${C_RESET}"
-  fi
-
-  in_progress_bugs=$(wk list --type bug --status in_progress 2>/dev/null || true)
-  open_bugs=$(wk list --type bug --status todo 2>/dev/null || true)
-
-  if [[ -z "${in_progress_bugs}" ]] && [[ -z "${open_bugs}" ]]; then
-    echo ""
-    echo "No bugs available"
-  else
-    shown=3
-
-    if [[ -n "${in_progress_bugs}" ]]; then
-      echo ""
-      echo -e "${C_DIM}In Progress:${C_RESET}"
-      count=$(echo "${in_progress_bugs}" | wc -l | tr -d ' ')
-      if [[ "${count}" -le "${shown}" ]]; then
-        echo "${in_progress_bugs}" | sed 's/^/  /'
-      else
-        echo "${in_progress_bugs}" | head -n "${shown}" | sed 's/^/  /'
-        remaining=$((count - shown))
-        echo "  ... and ${remaining} more"
-      fi
-    fi
-
-    if [[ -n "${open_bugs}" ]]; then
-      echo ""
-      echo -e "${C_DIM}Queued:${C_RESET}"
-      count=$(echo "${open_bugs}" | wc -l | tr -d ' ')
-      if [[ "${count}" -le "${shown}" ]]; then
-        echo "${open_bugs}" | sed 's/^/  /'
-      else
-        echo "${open_bugs}" | head -n "${shown}" | sed 's/^/  /'
-        remaining=$((count - shown))
-        echo "  ... and ${remaining} more"
-      fi
-    fi
-  fi
+  show_standalone_worker_status "fix"
   exit 0
 fi
 
 # Show chore status (condensed view)
 if [[ -n "${CHORE}" ]]; then
-  # Use namespaced session names based on PROJECT
-  chore_session="v0-${PROJECT}-worker-chore"
-  chore_polling_log="/tmp/v0-${PROJECT}-chore-polling.log"
-
-  # Check worker and polling daemon status
-  chore_worker_running=false
-  chore_polling_pid=""
-
-  tmux has-session -t "${chore_session}" 2>/dev/null && chore_worker_running=true
-  [[ -f "${chore_polling_log}" ]] && chore_polling_pid=$(pgrep -f "while true.*${chore_session}" 2>/dev/null || true)
-
-  if [[ "${chore_worker_running}" = true ]]; then
-    echo -e "Chore Worker: ${C_CYAN}Active${C_RESET} ${C_DIM}[tmux: ${chore_session}] Attach with: v0 attach chore${C_RESET}"
-  elif [[ -n "${chore_polling_pid}" ]]; then
-    echo -e "Chore Worker: ${C_YELLOW}Polling${C_RESET} ${C_DIM}[pid: ${chore_polling_pid}]${C_RESET}"
-  else
-    echo -e "Chore Worker: ${C_DIM}Stopped${C_RESET}"
-  fi
-
-  in_progress_chores=$(wk list --type chore --status in_progress 2>/dev/null || true)
-  open_chores=$(wk list --type chore --status todo 2>/dev/null || true)
-
-  if [[ -z "${in_progress_chores}" ]] && [[ -z "${open_chores}" ]]; then
-    echo ""
-    echo "No chores available"
-  else
-    shown=3
-
-    if [[ -n "${in_progress_chores}" ]]; then
-      echo ""
-      echo -e "${C_DIM}In Progress:${C_RESET}"
-      count=$(echo "${in_progress_chores}" | wc -l | tr -d ' ')
-      if [[ "${count}" -le "${shown}" ]]; then
-        echo "${in_progress_chores}" | sed 's/^/  /'
-      else
-        echo "${in_progress_chores}" | head -n "${shown}" | sed 's/^/  /'
-        remaining=$((count - shown))
-        echo "  ... and ${remaining} more"
-      fi
-    fi
-
-    if [[ -n "${open_chores}" ]]; then
-      echo ""
-      echo -e "${C_DIM}Queued:${C_RESET}"
-      count=$(echo "${open_chores}" | wc -l | tr -d ' ')
-      if [[ "${count}" -le "${shown}" ]]; then
-        echo "${open_chores}" | sed 's/^/  /'
-      else
-        echo "${open_chores}" | head -n "${shown}" | sed 's/^/  /'
-        remaining=$((count - shown))
-        echo "  ... and ${remaining} more"
-      fi
-    fi
-  fi
+  show_standalone_worker_status "chore"
   exit 0
 fi
 
@@ -803,12 +553,6 @@ if [[ -n "${LIST}" ]] || [[ -n "${BLOCKED}" ]]; then
 
   # Show fix, chore, and merge worker status in default list (not blocked view)
   if [[ -z "${BLOCKED}" ]]; then
-    # Use namespaced session names based on PROJECT
-    fix_session="v0-${PROJECT}-worker-fix"
-    fix_polling_log="/tmp/v0-${PROJECT}-fix-polling.log"
-    chore_session="v0-${PROJECT}-worker-chore"
-    chore_polling_log="/tmp/v0-${PROJECT}-chore-polling.log"
-
     # Batch pgrep for all polling daemons - single call
     all_polling=$(pgrep -af "while true.*v0-${PROJECT}" 2>/dev/null || true)
 
@@ -846,83 +590,15 @@ if [[ -n "${LIST}" ]] || [[ -n "${BLOCKED}" ]]; then
       echo ""
 
       # Bugfix section
-      fix_worker_running=false
-      fix_polling_pid=""
-      [[ "${all_sessions}" == *"${fix_session}"* ]] && fix_worker_running=true
-      [[ -f "${fix_polling_log}" ]] && fix_polling_pid=$(echo "${all_polling}" | grep "worker-fix" | awk '{print $1}')
-      if [[ "${fix_worker_running}" = true ]]; then
-        echo -e "Bugfix: ${C_CYAN}Active${C_RESET}"
-      elif [[ -n "${fix_polling_pid}" ]]; then
-        echo -e "Bugfix: ${C_YELLOW}Polling${C_RESET}"
-      elif [[ "${bugs_empty}" = true ]]; then
-        echo -e "Bugfix: ${C_DIM}None${C_RESET}"
-      else
-        echo -e "Bugfix: ${C_RED}Stopped${C_RESET}"
-      fi
-      if [[ "${bugs_empty}" != true ]]; then
-        if [[ -n "${bugs_in_progress}" ]]; then
-          count=$(echo "${bugs_in_progress}" | wc -l | tr -d ' ')
-          echo -e "  ${C_DIM}In progress:${C_RESET}"
-          if [[ "${count}" -le 3 ]]; then
-            echo "${bugs_in_progress}" | sed 's/^/    /'
-          else
-            echo "${bugs_in_progress}" | head -n 3 | sed 's/^/    /'
-            remaining=$((count - 3))
-            echo -e "    ${C_DIM}... and ${remaining} more${C_RESET}"
-          fi
-        fi
-        if [[ -n "${bugs_open}" ]]; then
-          count=$(echo "${bugs_open}" | wc -l | tr -d ' ')
-          echo -e "  ${C_DIM}Queued:${C_RESET}"
-          if [[ "${count}" -le 3 ]]; then
-            echo "${bugs_open}" | sed 's/^/    /'
-          else
-            echo "${bugs_open}" | head -n 3 | sed 's/^/    /'
-            remaining=$((count - 3))
-            echo -e "    ${C_DIM}... and ${remaining} more${C_RESET}"
-          fi
-        fi
-      fi
+      fix_status=$(get_worker_status "fix" "${all_sessions}" "${all_polling}")
+      show_worker_header_compact "Bugfix" "${fix_status}" "${bugs_empty}"
+      [[ "${bugs_empty}" != true ]] && show_worker_items_inline "${bugs_in_progress}" "${bugs_open}" 3
       [[ "${bugs_empty}" != true ]] && echo ""
 
       # Chores section
-      chore_worker_running=false
-      chore_polling_pid=""
-      [[ "${all_sessions}" == *"${chore_session}"* ]] && chore_worker_running=true
-      [[ -f "${chore_polling_log}" ]] && chore_polling_pid=$(echo "${all_polling}" | grep "worker-chore" | awk '{print $1}')
-      if [[ "${chore_worker_running}" = true ]]; then
-        echo -e "Chores: ${C_CYAN}Active${C_RESET}"
-      elif [[ -n "${chore_polling_pid}" ]]; then
-        echo -e "Chores: ${C_YELLOW}Polling${C_RESET}"
-      elif [[ "${chores_empty}" = true ]]; then
-        echo -e "Chores: ${C_DIM}None${C_RESET}"
-      else
-        echo -e "Chores: ${C_RED}Stopped${C_RESET}"
-      fi
-      if [[ "${chores_empty}" != true ]]; then
-        if [[ -n "${chores_in_progress}" ]]; then
-          count=$(echo "${chores_in_progress}" | wc -l | tr -d ' ')
-          echo -e "  ${C_DIM}In progress:${C_RESET}"
-          if [[ "${count}" -le 3 ]]; then
-            echo "${chores_in_progress}" | sed 's/^/    /'
-          else
-            echo "${chores_in_progress}" | head -n 3 | sed 's/^/    /'
-            remaining=$((count - 3))
-            echo -e "    ${C_DIM}... and ${remaining} more${C_RESET}"
-          fi
-        fi
-        if [[ -n "${chores_open}" ]]; then
-          count=$(echo "${chores_open}" | wc -l | tr -d ' ')
-          echo -e "  ${C_DIM}Queued:${C_RESET}"
-          if [[ "${count}" -le 3 ]]; then
-            echo "${chores_open}" | sed 's/^/    /'
-          else
-            echo "${chores_open}" | head -n 3 | sed 's/^/    /'
-            remaining=$((count - 3))
-            echo -e "    ${C_DIM}... and ${remaining} more${C_RESET}"
-          fi
-        fi
-      fi
+      chore_status=$(get_worker_status "chore" "${all_sessions}" "${all_polling}")
+      show_worker_header_compact "Chores" "${chore_status}" "${chores_empty}"
+      [[ "${chores_empty}" != true ]] && show_worker_items_inline "${chores_in_progress}" "${chores_open}" 3
       [[ "${chores_empty}" != true ]] && echo ""
 
       # Merges section
