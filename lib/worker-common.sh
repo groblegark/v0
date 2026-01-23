@@ -465,6 +465,114 @@ generic_stop_worker() {
   echo "Worker stopped"
 }
 
+# Create done script for feature workers (with optional exit file)
+# Args: $1 = target_dir, $2 = exit_file (optional)
+# This is different from create_done_script() which is for background workers
+create_feature_done_script() {
+  local target_dir="$1"
+  local exit_file="${2:-}"
+
+  if [[ -n "${exit_file}" ]]; then
+    cat > "${target_dir}/done" <<DONE_SCRIPT
+#!/bin/bash
+echo "0" > '${exit_file}'
+find_claude() {
+  local pid=\$1
+  while [[ -n "\${pid}" ]] && [[ "\${pid}" != "1" ]]; do
+    local cmd=\$(ps -o comm= -p \${pid} 2>/dev/null)
+    if [[ "\${cmd}" == *"claude"* ]]; then
+      echo "\${pid}"
+      return
+    fi
+    pid=\$(ps -o ppid= -p \${pid} 2>/dev/null | tr -d ' ')
+  done
+}
+CLAUDE_PID=\$(find_claude \$\$)
+if [[ -n "\${CLAUDE_PID}" ]]; then
+  kill -TERM "\${CLAUDE_PID}" 2>/dev/null || true
+fi
+exit 0
+DONE_SCRIPT
+  else
+    cat > "${target_dir}/done" <<'DONE_SCRIPT'
+#!/bin/bash
+# Signal session completion - issues are closed by on-complete.sh
+
+find_claude() {
+  local pid=$1
+  while [[ -n "${pid}" ]] && [[ "${pid}" != "1" ]]; do
+    local cmd=$(ps -o comm= -p ${pid} 2>/dev/null)
+    if [[ "${cmd}" == *"claude"* ]]; then
+      echo "${pid}"
+      return
+    fi
+    pid=$(ps -o ppid= -p ${pid} 2>/dev/null | tr -d ' ')
+  done
+}
+CLAUDE_PID=$(find_claude $$)
+if [[ -n "${CLAUDE_PID}" ]]; then
+  kill -TERM "${CLAUDE_PID}" 2>/dev/null || true
+fi
+exit 0
+DONE_SCRIPT
+  fi
+  chmod +x "${target_dir}/done"
+}
+
+# Create incomplete script for feature workers
+# Args: $1 = target_dir, $2 = op_name, $3 = v0_root (toolkit root)
+create_incomplete_script() {
+  local target_dir="$1"
+  local op_name="${2:-}"
+  local v0_root="${3:-}"
+
+  cat > "${target_dir}/incomplete" <<INCOMPLETE_SCRIPT
+#!/bin/bash
+# Exit session marking work as incomplete - generates debug report
+
+echo "Generating debug report..."
+
+# Generate debug report if v0 is available
+if [[ -n "${v0_root}" ]] && [[ -x "${v0_root}/bin/v0" ]]; then
+  "${v0_root}/bin/v0" self debug "${op_name}" 2>/dev/null || true
+fi
+
+# Log incomplete status
+if [[ -n "\${V0_PLAN_LABEL}" ]]; then
+  # Count remaining work for the note
+  OPEN_COUNT=\$(wk list --label "\${V0_PLAN_LABEL}" -s todo 2>/dev/null | wc -l | tr -d ' ')
+  IN_PROGRESS_COUNT=\$(wk list --label "\${V0_PLAN_LABEL}" -s in_progress 2>/dev/null | wc -l | tr -d ' ')
+
+  # Add note to any in-progress issues
+  IN_PROGRESS_IDS=\$(wk list --label "\${V0_PLAN_LABEL}" -s in_progress 2>/dev/null | grep -oE '[a-zA-Z]+-[a-z0-9]+')
+  for id in \${IN_PROGRESS_IDS}; do
+    wk note "\${id}" "Session ended incomplete. \${OPEN_COUNT} todo, \${IN_PROGRESS_COUNT} in progress remaining." 2>/dev/null || true
+  done
+fi
+
+echo "Debug report generated. Session ending as incomplete."
+echo "Resume with: v0 feature ${op_name} --resume"
+
+find_claude() {
+  local pid=\$1
+  while [[ -n "\${pid}" ]] && [[ "\${pid}" != "1" ]]; do
+    local cmd=\$(ps -o comm= -p \${pid} 2>/dev/null)
+    if [[ "\${cmd}" == *"claude"* ]]; then
+      echo "\${pid}"
+      return
+    fi
+    pid=\$(ps -o ppid= -p \${pid} 2>/dev/null | tr -d ' ')
+  done
+}
+CLAUDE_PID=\$(find_claude \$\$)
+if [[ -n "\${CLAUDE_PID}" ]]; then
+  kill -TERM "\${CLAUDE_PID}" 2>/dev/null || true
+fi
+exit 1
+INCOMPLETE_SCRIPT
+  chmod +x "${target_dir}/incomplete"
+}
+
 # Detect if a bug has a note but no fix commits
 # This indicates the worker documented why they couldn't fix it
 # Args: $1 = bug_id, $2 = git_dir (optional, defaults to pwd)

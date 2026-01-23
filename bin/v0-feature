@@ -10,6 +10,9 @@ v0_load_config
 # Source nudge functions for idle session monitoring
 source "${V0_DIR}/lib/nudge-common.sh"
 
+# Source worker utilities for done/incomplete scripts
+source "${V0_DIR}/lib/worker-common.sh"
+
 usage() {
   cat <<EOF
 Usage: v0 feature <name> <prompt> [options]
@@ -272,109 +275,6 @@ get_blocker_phase() {
   local phase
   phase=$(sm_get_phase "${op}")
   echo "${phase:-unknown}"
-}
-
-create_done_script() {
-  local target_dir="$1"
-  local exit_file="${2:-}"
-
-  if [[ -n "${exit_file}" ]]; then
-    cat > "${target_dir}/done" <<DONE_SCRIPT
-#!/bin/bash
-echo "0" > '${exit_file}'
-find_claude() {
-  local pid=\$1
-  while [[ -n "\${pid}" ]] && [[ "\${pid}" != "1" ]]; do
-    local cmd=\$(ps -o comm= -p \${pid} 2>/dev/null)
-    if [[ "\${cmd}" == *"claude"* ]]; then
-      echo "\${pid}"
-      return
-    fi
-    pid=\$(ps -o ppid= -p \${pid} 2>/dev/null | tr -d ' ')
-  done
-}
-CLAUDE_PID=\$(find_claude \$\$)
-if [[ -n "\${CLAUDE_PID}" ]]; then
-  kill -TERM "\${CLAUDE_PID}" 2>/dev/null || true
-fi
-exit 0
-DONE_SCRIPT
-  else
-    cat > "${target_dir}/done" <<'DONE_SCRIPT'
-#!/bin/bash
-# Signal session completion - issues are closed by on-complete.sh
-
-find_claude() {
-  local pid=$1
-  while [[ -n "${pid}" ]] && [[ "${pid}" != "1" ]]; do
-    local cmd=$(ps -o comm= -p ${pid} 2>/dev/null)
-    if [[ "${cmd}" == *"claude"* ]]; then
-      echo "${pid}"
-      return
-    fi
-    pid=$(ps -o ppid= -p ${pid} 2>/dev/null | tr -d ' ')
-  done
-}
-CLAUDE_PID=$(find_claude $$)
-if [[ -n "${CLAUDE_PID}" ]]; then
-  kill -TERM "${CLAUDE_PID}" 2>/dev/null || true
-fi
-exit 0
-DONE_SCRIPT
-  fi
-  chmod +x "${target_dir}/done"
-}
-
-create_incomplete_script() {
-  local target_dir="$1"
-  local op_name="${2:-}"
-  local v0_root="${3:-}"
-
-  cat > "${target_dir}/incomplete" <<INCOMPLETE_SCRIPT
-#!/bin/bash
-# Exit session marking work as incomplete - generates debug report
-
-echo "Generating debug report..."
-
-# Generate debug report if v0 is available
-if [[ -n "${v0_root}" ]] && [[ -x "${v0_root}/bin/v0" ]]; then
-  "${v0_root}/bin/v0" self debug "${op_name}" 2>/dev/null || true
-fi
-
-# Log incomplete status
-if [[ -n "\${V0_PLAN_LABEL}" ]]; then
-  # Count remaining work for the note
-  OPEN_COUNT=\$(wk list --label "\${V0_PLAN_LABEL}" -s todo 2>/dev/null | wc -l | tr -d ' ')
-  IN_PROGRESS_COUNT=\$(wk list --label "\${V0_PLAN_LABEL}" -s in_progress 2>/dev/null | wc -l | tr -d ' ')
-
-  # Add note to any in-progress issues
-  IN_PROGRESS_IDS=\$(wk list --label "\${V0_PLAN_LABEL}" -s in_progress 2>/dev/null | grep -oE '[a-zA-Z]+-[a-z0-9]+')
-  for id in \${IN_PROGRESS_IDS}; do
-    wk note "\${id}" "Session ended incomplete. \${OPEN_COUNT} todo, \${IN_PROGRESS_COUNT} in progress remaining." 2>/dev/null || true
-  done
-fi
-
-echo "Debug report generated. Session ending as incomplete."
-echo "Resume with: v0 feature ${op_name} --resume"
-
-find_claude() {
-  local pid=\$1
-  while [[ -n "\${pid}" ]] && [[ "\${pid}" != "1" ]]; do
-    local cmd=\$(ps -o comm= -p \${pid} 2>/dev/null)
-    if [[ "\${cmd}" == *"claude"* ]]; then
-      echo "\${pid}"
-      return
-    fi
-    pid=\$(ps -o ppid= -p \${pid} 2>/dev/null | tr -d ' ')
-  done
-}
-CLAUDE_PID=\$(find_claude \$\$)
-if [[ -n "\${CLAUDE_PID}" ]]; then
-  kill -TERM "\${CLAUDE_PID}" 2>/dev/null || true
-fi
-exit 1
-INCOMPLETE_SCRIPT
-  chmod +x "${target_dir}/incomplete"
 }
 
 # Resume logic
@@ -740,7 +640,7 @@ if [[ "${PHASE}" = "init" ]]; then
       echo ""
 
       printf '%s' "${PROMPT}" > "${STATE_DIR}/prompt.txt"
-      create_done_script "${STATE_DIR}" "${STATE_DIR}/logs/plan.exit"
+      create_feature_done_script "${STATE_DIR}" "${STATE_DIR}/logs/plan.exit"
 
       V0_SAFE_EXPORT=""
       [[ -n "${SAFE}" ]] && V0_SAFE_EXPORT="export V0_SAFE=1"
@@ -900,7 +800,7 @@ if [[ "${PHASE}" = "planned" ]]; then
       echo -e "  ${C_DIM}(Ctrl-B D to detach)${C_RESET}"
       echo ""
 
-      [[ ! -f "${TREE_DIR}/done" ]] && create_done_script "${TREE_DIR}" "${STATE_DIR}/logs/feature.exit"
+      [[ ! -f "${TREE_DIR}/done" ]] && create_feature_done_script "${TREE_DIR}" "${STATE_DIR}/logs/feature.exit"
       [[ ! -f "${TREE_DIR}/incomplete" ]] && create_incomplete_script "${TREE_DIR}" "${NAME}" "${V0_DIR}"
 
       V0_SAFE_EXPORT=""
@@ -1124,7 +1024,7 @@ SETTINGS_EOF
       emit_event "plan:copied" "PLAN.md"
     fi
 
-    create_done_script "${TREE_DIR}"
+    create_feature_done_script "${TREE_DIR}"
     create_incomplete_script "${TREE_DIR}" "${NAME}" "${V0_DIR}"
 
     SAFE_FROM_STATE=$(get_state safe)
