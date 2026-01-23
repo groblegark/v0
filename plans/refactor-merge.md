@@ -1,6 +1,6 @@
 # Plan: Refactor v0-merge and v0-mergeq into smaller, testable modules
 
-**Root Feature:** `refactor-merge`
+**Root Feature:** `v0-25bc`
 
 ## Overview
 
