@@ -890,8 +890,16 @@ EOF
 @test "status list prioritizes blocked over completed" {
     local ops_dir="$BUILD_DIR/operations"
 
-    # Create 20 completed operations
-    create_numbered_operations 20 "completed" "completed"
+    # Create 20 truly completed operations (with merge_status: merged)
+    for i in $(seq 1 20); do
+        mkdir -p "$ops_dir/completed${i}"
+        local ts
+        ts=$(TZ=UTC date -j -v+${i}S -f "%Y-%m-%dT%H:%M:%SZ" "2026-01-01T10:00:00Z" +%Y-%m-%dT%H:%M:%SZ 2>/dev/null || \
+             TZ=UTC date -d "2026-01-01 10:00:00 +${i} seconds" +%Y-%m-%dT%H:%M:%SZ 2>/dev/null)
+        cat > "$ops_dir/completed${i}/state.json" <<EOF
+{"name": "completed${i}", "type": "feature", "phase": "completed", "created_at": "$ts", "merge_status": "merged"}
+EOF
+    done
 
     # Create 5 blocked operations (has after field, not executing)
     for i in $(seq 1 5); do

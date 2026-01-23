@@ -254,26 +254,26 @@ EOF
 @test "v0-mergeq enqueue_merge function exists and calls ensure_daemon_running" {
     create_v0rc "testproj" "tp"
 
-    # Just verify the enqueue command doesn't crash on a simple operation
-    # (without actually starting daemon in test environment)
-    run grep -q "ensure_daemon_running" "$PROJECT_ROOT/bin/v0-mergeq"
+    # mq_enqueue in processing.sh calls mq_ensure_daemon_running
+    run grep -q "mq_ensure_daemon_running" "$PROJECT_ROOT/lib/mergeq/processing.sh"
     assert_success
 }
 
 @test "v0-mergeq has ensure_daemon_running function" {
     create_v0rc "testproj" "tp"
 
-    run grep -q "ensure_daemon_running()" "$PROJECT_ROOT/bin/v0-mergeq"
+    # mq_ensure_daemon_running is defined in daemon.sh
+    run grep -q "mq_ensure_daemon_running()" "$PROJECT_ROOT/lib/mergeq/daemon.sh"
     assert_success
 }
 
 @test "v0-mergeq enqueue calls ensure_daemon_running after adding to queue" {
     create_v0rc "testproj" "tp"
 
-    # Verify the call is in the right place - after queue operations
-    run grep -A 5 "# Auto-start daemon" "$PROJECT_ROOT/bin/v0-mergeq"
+    # Verify mq_enqueue calls mq_ensure_daemon_running after queue operations
+    run grep -A 2 "# Auto-start daemon" "$PROJECT_ROOT/lib/mergeq/processing.sh"
     assert_success
-    assert_output --partial "ensure_daemon_running"
+    assert_output --partial "mq_ensure_daemon_running"
 }
 
 # ============================================================================
