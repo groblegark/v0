@@ -224,7 +224,7 @@ link_to_workspace() {
 }
 
 # Reset worktree to latest develop branch
-# Tries to fetch from remote first, falls back to local branch if remote doesn't exist
+# Tries to fetch from remote first, falls back to local branch, then creates from main
 # Args: $1 = git_dir (path to run git commands in, optional - uses cwd if not provided)
 v0_reset_to_develop() {
   local git_dir="${1:-}"
@@ -233,10 +233,18 @@ v0_reset_to_develop() {
     git_cmd=(git -C "${git_dir}")
   fi
 
+  # Try remote develop branch first
   if "${git_cmd[@]}" fetch "${V0_GIT_REMOTE}" "${V0_DEVELOP_BRANCH}" 2>/dev/null; then
     "${git_cmd[@]}" reset --hard "${V0_GIT_REMOTE}/${V0_DEVELOP_BRANCH}"
-  else
+  # Try local develop branch
+  elif "${git_cmd[@]}" rev-parse --verify "${V0_DEVELOP_BRANCH}" 2>/dev/null; then
     echo "Note: Remote branch '${V0_DEVELOP_BRANCH}' not found, using local" >&2
+    "${git_cmd[@]}" reset --hard "${V0_DEVELOP_BRANCH}"
+  # Create develop branch from main and reset to it
+  else
+    echo "Note: Branch '${V0_DEVELOP_BRANCH}' not found, creating from main" >&2
+    "${git_cmd[@]}" fetch "${V0_GIT_REMOTE}" main 2>/dev/null || true
+    "${git_cmd[@]}" branch -f "${V0_DEVELOP_BRANCH}" "${V0_GIT_REMOTE}/main" 2>/dev/null || true
     "${git_cmd[@]}" reset --hard "${V0_DEVELOP_BRANCH}"
   fi
 }

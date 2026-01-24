@@ -523,3 +523,117 @@ EOF
     run detect_note_without_fix "testp-1234" "$TEST_TEMP_DIR"
     assert_failure
 }
+
+# ============================================================================
+# v0_reset_to_develop() tests
+# ============================================================================
+
+@test "v0_reset_to_develop resets to remote branch when available" {
+    # Create a bare "remote" repo
+    mkdir -p "$TEST_TEMP_DIR/remote.git"
+    git -C "$TEST_TEMP_DIR/remote.git" init --bare --quiet --initial-branch=main
+
+    # Create local repo with origin
+    mkdir -p "$TEST_TEMP_DIR/repo"
+    (
+        cd "$TEST_TEMP_DIR/repo"
+        git init --quiet --initial-branch=main
+        git config user.email "test@example.com"
+        git config user.name "Test User"
+        echo "initial" > file.txt
+        git add file.txt
+        git commit --quiet -m "Initial"
+        git remote add origin "$TEST_TEMP_DIR/remote.git"
+        git push --quiet -u origin main
+        # Create agent branch on remote
+        git checkout -b agent
+        echo "agent content" > file.txt
+        git add file.txt
+        git commit --quiet -m "Agent commit"
+        git push --quiet -u origin agent
+        git checkout main
+    )
+
+    # Source the function
+    source "$BATS_TEST_DIRNAME/../../lib/worker-common.sh"
+    export V0_GIT_REMOTE="origin"
+    export V0_DEVELOP_BRANCH="agent"
+
+    run v0_reset_to_develop "$TEST_TEMP_DIR/repo"
+    assert_success
+
+    # Verify we're at the agent commit
+    run git -C "$TEST_TEMP_DIR/repo" log -1 --format=%s
+    assert_output "Agent commit"
+}
+
+@test "v0_reset_to_develop falls back to local branch when remote missing" {
+    # Create local repo without remote
+    mkdir -p "$TEST_TEMP_DIR/repo"
+    (
+        cd "$TEST_TEMP_DIR/repo"
+        git init --quiet --initial-branch=main
+        git config user.email "test@example.com"
+        git config user.name "Test User"
+        echo "initial" > file.txt
+        git add file.txt
+        git commit --quiet -m "Initial on main"
+        # Create local agent branch
+        git branch agent
+        git checkout agent
+        echo "agent local" > file.txt
+        git add file.txt
+        git commit --quiet -m "Local agent commit"
+        git checkout main
+    )
+
+    # Source the function
+    source "$BATS_TEST_DIRNAME/../../lib/worker-common.sh"
+    export V0_GIT_REMOTE="origin"
+    export V0_DEVELOP_BRANCH="agent"
+
+    run v0_reset_to_develop "$TEST_TEMP_DIR/repo"
+    assert_success
+    assert_output --partial "using local"
+
+    # Verify we're at the local agent commit
+    run git -C "$TEST_TEMP_DIR/repo" log -1 --format=%s
+    assert_output "Local agent commit"
+}
+
+@test "v0_reset_to_develop creates branch from main when missing everywhere" {
+    # Create a bare "remote" repo with only main
+    mkdir -p "$TEST_TEMP_DIR/remote.git"
+    git -C "$TEST_TEMP_DIR/remote.git" init --bare --quiet --initial-branch=main
+
+    # Create local repo
+    mkdir -p "$TEST_TEMP_DIR/repo"
+    (
+        cd "$TEST_TEMP_DIR/repo"
+        git init --quiet --initial-branch=main
+        git config user.email "test@example.com"
+        git config user.name "Test User"
+        echo "main content" > file.txt
+        git add file.txt
+        git commit --quiet -m "Main commit"
+        git remote add origin "$TEST_TEMP_DIR/remote.git"
+        git push --quiet -u origin main
+    )
+
+    # Source the function
+    source "$BATS_TEST_DIRNAME/../../lib/worker-common.sh"
+    export V0_GIT_REMOTE="origin"
+    export V0_DEVELOP_BRANCH="agent"
+
+    run v0_reset_to_develop "$TEST_TEMP_DIR/repo"
+    assert_success
+    assert_output --partial "creating from main"
+
+    # Verify agent branch was created
+    run git -C "$TEST_TEMP_DIR/repo" branch --list agent
+    assert_output --partial "agent"
+
+    # Verify we're at the main commit content
+    run git -C "$TEST_TEMP_DIR/repo" log -1 --format=%s
+    assert_output "Main commit"
+}
