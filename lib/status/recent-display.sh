@@ -49,10 +49,11 @@ get_completed_bugs() {
   # wk list --format json doesn't include updated_at, so we fetch from wk show for display
   echo "${json_output}" | jq -r '.issues[] | .id' 2>/dev/null | while read -r id; do
     [[ -z "${id}" ]] && continue
-    local issue_json title updated_at
+    local issue_json title updated_at _fields
     issue_json=$(wk show "${id}" --format json 2>/dev/null) || continue
-    title=$(echo "${issue_json}" | jq -r '.title // .summary // "Untitled"' 2>/dev/null)
-    updated_at=$(echo "${issue_json}" | jq -r '.updated_at // .closed_at // ""' 2>/dev/null)
+    # Batch read title and updated_at in single jq call
+    _fields=$(echo "${issue_json}" | jq -r '[.title // .summary // "Untitled", .updated_at // .closed_at // ""] | join("|")' 2>/dev/null)
+    IFS='|' read -r title updated_at <<< "${_fields}"
     echo "${id}|${title}|${updated_at}"
   done
 }
@@ -73,10 +74,11 @@ get_completed_chores() {
   # wk list --format json doesn't include updated_at, so we fetch from wk show for display
   echo "${json_output}" | jq -r '.issues[] | .id' 2>/dev/null | while read -r id; do
     [[ -z "${id}" ]] && continue
-    local issue_json title updated_at
+    local issue_json title updated_at _fields
     issue_json=$(wk show "${id}" --format json 2>/dev/null) || continue
-    title=$(echo "${issue_json}" | jq -r '.title // .summary // "Untitled"' 2>/dev/null)
-    updated_at=$(echo "${issue_json}" | jq -r '.updated_at // .closed_at // ""' 2>/dev/null)
+    # Batch read title and updated_at in single jq call
+    _fields=$(echo "${issue_json}" | jq -r '[.title // .summary // "Untitled", .updated_at // .closed_at // ""] | join("|")' 2>/dev/null)
+    IFS='|' read -r title updated_at <<< "${_fields}"
     echo "${id}|${title}|${updated_at}"
   done
 }

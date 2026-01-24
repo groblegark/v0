@@ -29,24 +29,10 @@ create_isolated_operation() {
 }
 
 setup() {
-    TEST_TEMP_DIR="$(mktemp -d)"
-    export TEST_TEMP_DIR
-    export REAL_HOME="${HOME}"
-    export HOME="${TEST_TEMP_DIR}/home"
-    mkdir -p "${HOME}/.local/state/v0"
-    export V0_TEST_MODE=1
-    export V0_NO_NOTIFICATIONS=1
-    export ORIGINAL_PATH="${PATH}"
+    _base_setup
+    # v0-hold needs mock-bin in PATH
     export PATH="${TESTS_DIR}/helpers/mock-bin:${PATH}"
     mkdir -p "${TEST_TEMP_DIR}/mock-v0-bin"
-}
-
-teardown() {
-    export HOME="${REAL_HOME}"
-    export PATH="${ORIGINAL_PATH}"
-    if [[ -n "${TEST_TEMP_DIR}" ]] && [[ -d "${TEST_TEMP_DIR}" ]]; then
-        rm -rf "${TEST_TEMP_DIR}"
-    fi
 }
 
 # ============================================================================

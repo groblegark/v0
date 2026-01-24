@@ -5,41 +5,9 @@ load '../helpers/test_helper'
 
 # Setup for worker tests
 setup() {
-    TEST_TEMP_DIR="$(mktemp -d)"
-    export TEST_TEMP_DIR
-
-    mkdir -p "$TEST_TEMP_DIR/project"
-    mkdir -p "$TEST_TEMP_DIR/project/.v0/build/operations"
-    mkdir -p "$TEST_TEMP_DIR/state"
-
-    export REAL_HOME="$HOME"
-    export HOME="$TEST_TEMP_DIR/home"
-    mkdir -p "$HOME/.local/state/v0"
-
-    # Disable OS notifications during tests
-    export V0_TEST_MODE=1
-
-    cd "$TEST_TEMP_DIR/project"
-    export ORIGINAL_PATH="$PATH"
-
-    # Create valid v0 config
-    create_v0rc "testproject" "testp"
-
-    # Export paths
-    export V0_ROOT="$TEST_TEMP_DIR/project"
-    export PROJECT="testproject"
-    export ISSUE_PREFIX="testp"
-    export BUILD_DIR="$TEST_TEMP_DIR/project/.v0/build"
+    _base_setup
+    setup_v0_env
     export WORKER_SESSION="v0-testproject-worker-fix"
-}
-
-teardown() {
-    export HOME="$REAL_HOME"
-    export PATH="$ORIGINAL_PATH"
-
-    if [ -n "$TEST_TEMP_DIR" ] && [ -d "$TEST_TEMP_DIR" ]; then
-        rm -rf "$TEST_TEMP_DIR"
-    fi
 }
 
 # ============================================================================
@@ -301,7 +269,7 @@ EOF
 @test "backoff sequence follows exponential pattern" {
     local expected_sequence=(5 10 20 40 80 160 300 300 300)
 
-    for i in $(seq 1 9); do
+    for i in {1..9}; do
         local expected="${expected_sequence[$((i-1))]}"
         local actual
         actual=$(calculate_backoff $i)

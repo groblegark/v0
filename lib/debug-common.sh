@@ -49,9 +49,9 @@ generate_summary() {
     echo ""
 
     if [[ -f "${state_file}" ]]; then
-        local status phase
-        status=$(jq -r '.status // "unknown"' "${state_file}")
-        phase=$(jq -r '.phase // "unknown"' "${state_file}")
+        local status phase _fields
+        _fields=$(jq -r '[.status // "unknown", .phase // "unknown"] | join("|")' "${state_file}")
+        IFS='|' read -r status phase <<< "${_fields}"
         echo "Operation **${op_name}** is in phase \`${phase}\` with status \`${status}\`."
     else
         echo "Debug report for \`${op_name}\`."
@@ -271,14 +271,12 @@ find_most_recent_by_type() {
     for state_file in "${ops_dir}"/*/state.json; do
         [[ -f "${state_file}" ]] || continue
 
-        local op_type
-        op_type=$(jq -r '.type // "unknown"' "${state_file}")
-        [[ "${op_type}" != "${type}" ]] && continue
+        # Batch read type, created_at, name in single jq call
+        local op_type created op_name _fields
+        _fields=$(jq -r '[.type // "unknown", .created_at // "", .name // ""] | join("|")' "${state_file}")
+        IFS='|' read -r op_type created op_name <<< "${_fields}"
 
-        local created
-        created=$(jq -r '.created_at // ""' "${state_file}")
-        local op_name
-        op_name=$(jq -r '.name' "${state_file}")
+        [[ "${op_type}" != "${type}" ]] && continue
 
         if [[ -z "${latest_time}" ]] || [[ "${created}" > "${latest_time}" ]]; then
             latest_time="${created}"
@@ -303,16 +301,13 @@ find_most_recent_by_phase() {
     for state_file in "${ops_dir}"/*/state.json; do
         [[ -f "${state_file}" ]] || continue
 
-        local op_phase blocked_phase
-        op_phase=$(jq -r '.phase // ""' "${state_file}")
-        blocked_phase=$(jq -r '.blocked_phase // ""' "${state_file}")
+        # Batch read phase, blocked_phase, created_at, name in single jq call
+        # Use | join with delimiter that won't appear in data (bash read collapses consecutive tabs)
+        local op_phase blocked_phase created op_name _fields
+        _fields=$(jq -r '[.phase // "", .blocked_phase // "", .created_at // "", .name // ""] | join("|")' "${state_file}")
+        IFS='|' read -r op_phase blocked_phase created op_name <<< "${_fields}"
 
         [[ "${op_phase}" != "${phase}" && "${blocked_phase}" != "${phase}" ]] && continue
-
-        local created
-        created=$(jq -r '.created_at // ""' "${state_file}")
-        local op_name
-        op_name=$(jq -r '.name' "${state_file}")
 
         if [[ -z "${latest_time}" ]] || [[ "${created}" > "${latest_time}" ]]; then
             latest_time="${created}"

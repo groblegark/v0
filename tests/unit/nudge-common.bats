@@ -8,42 +8,11 @@ load '../helpers/test_helper'
 # ============================================================================
 
 setup() {
-    # Call parent setup
-    export TEST_TEMP_DIR
-    TEST_TEMP_DIR="$(mktemp -d)"
-    mkdir -p "$TEST_TEMP_DIR/project"
-    mkdir -p "$TEST_TEMP_DIR/project/.v0/build"
-    mkdir -p "$TEST_TEMP_DIR/state"
-
-    export REAL_HOME="$HOME"
-    export HOME="$TEST_TEMP_DIR/home"
-    mkdir -p "$HOME/.local/state/v0"
+    _base_setup
+    setup_v0_env
+    # nudge-common needs claude projects directory
     mkdir -p "$HOME/.claude/projects"
-
-    export V0_TEST_MODE=1
-    export V0_NO_NOTIFICATIONS=1
     export DISABLE_NOTIFICATIONS=1
-
-    unset V0_ROOT
-    unset PROJECT
-    unset ISSUE_PREFIX
-    unset BUILD_DIR
-    unset PLANS_DIR
-    unset V0_STATE_DIR
-
-    export ORIGINAL_PATH="$PATH"
-    cd "$TEST_TEMP_DIR/project"
-
-    # Set V0_STATE_DIR for tests
-    export V0_STATE_DIR="$HOME/.local/state/v0"
-}
-
-teardown() {
-    export HOME="$REAL_HOME"
-    export PATH="$ORIGINAL_PATH"
-    if [ -n "$TEST_TEMP_DIR" ] && [ -d "$TEST_TEMP_DIR" ]; then
-        rm -rf "$TEST_TEMP_DIR"
-    fi
 }
 
 # ============================================================================

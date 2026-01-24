@@ -66,15 +66,23 @@ _cleanup_template() {
 
 # Batch cleanup all deferred directories
 _cleanup_deferred() {
+    local dir
     for dir in "${_CLEANUP_DIRS[@]}"; do
-        rm -rf "$dir" &
+        [[ -n "$dir" && -d "$dir" ]] && /bin/rm -rf "$dir"
     done
-    wait
     _CLEANUP_DIRS=()
 }
 
-# Create isolated test environment
-setup() {
+# Default teardown_file - clean up cached template and deferred directories
+# Test files can override this, but should call these cleanup functions
+teardown_file() {
+    _cleanup_deferred
+    _cleanup_template
+}
+
+# Base setup function - creates isolated test environment
+# Call this from custom setup() functions to get the standard environment
+_base_setup() {
     _create_cached_template
 
     # Create unique temp directory for each test
@@ -113,21 +121,57 @@ setup() {
     export ORIGINAL_PATH="$PATH"
 }
 
-teardown() {
-    # Restore HOME
-    export HOME="$REAL_HOME"
+# Default setup - calls _base_setup
+# Override this in test files, but call _base_setup first for the standard environment
+setup() {
+    _base_setup
+}
 
-    # Restore PATH
-    export PATH="$ORIGINAL_PATH"
+teardown() {
+    # Restore HOME (only if REAL_HOME was set)
+    [[ -n "${REAL_HOME:-}" ]] && export HOME="$REAL_HOME"
+
+    # Restore PATH (only if ORIGINAL_PATH was set)
+    [[ -n "${ORIGINAL_PATH:-}" ]] && export PATH="$ORIGINAL_PATH"
 
     # Clean up temp directory
-    if [ -n "$TEST_TEMP_DIR" ] && [ -d "$TEST_TEMP_DIR" ]; then
+    if [[ -n "${TEST_TEMP_DIR:-}" && -d "$TEST_TEMP_DIR" ]]; then
         if [[ -n "${BATS_FAST_CLEANUP:-}" ]]; then
             # Defer cleanup - batch at end of test file for better performance
             _CLEANUP_DIRS+=("$TEST_TEMP_DIR")
         else
-            rm -rf "$TEST_TEMP_DIR"
+            /bin/rm -rf "$TEST_TEMP_DIR"
         fi
+    fi
+}
+
+# ============================================================================
+# Standard V0 Environment Setup
+# ============================================================================
+# Call this helper in tests that need V0_ROOT, BUILD_DIR, etc. set up
+# Usage: Add to your test's setup() after calling the base setup, or use
+#        setup_v0_env directly if you have a custom setup
+
+# Set standard V0 environment variables
+# Usage: setup_v0_env [project_name] [issue_prefix]
+# This sets V0_ROOT, PROJECT, BUILD_DIR, etc. based on TEST_TEMP_DIR
+setup_v0_env() {
+    local project="${1:-testproject}"
+    local prefix="${2:-testp}"
+
+    export V0_ROOT="$TEST_TEMP_DIR/project"
+    export PROJECT="$project"
+    export ISSUE_PREFIX="$prefix"
+    export BUILD_DIR="$TEST_TEMP_DIR/project/.v0/build"
+    export V0_DIR="${PROJECT_ROOT}"
+    export V0_STATE_DIR="$HOME/.local/state/v0"
+    export MERGEQ_DIR="${BUILD_DIR}/mergeq"
+    export QUEUE_FILE="${MERGEQ_DIR}/queue.json"
+    export QUEUE_LOCK="${MERGEQ_DIR}/.queue.lock"
+
+    # Create v0rc if it doesn't exist
+    if [[ ! -f "$TEST_TEMP_DIR/project/.v0.rc" ]]; then
+        create_v0rc "$project" "$prefix"
     fi
 }
 

@@ -3,40 +3,10 @@
 
 load '../helpers/test_helper'
 
-# Setup for status tests
+# Setup for status tests - uses base setup + v0 env
 setup() {
-    TEST_TEMP_DIR="$(mktemp -d)"
-    export TEST_TEMP_DIR
-
-    mkdir -p "$TEST_TEMP_DIR/project"
-    mkdir -p "$TEST_TEMP_DIR/project/.v0/build/operations"
-
-    export REAL_HOME="$HOME"
-    export HOME="$TEST_TEMP_DIR/home"
-    mkdir -p "$HOME/.local/state/v0"
-
-    # Disable OS notifications during tests
-    export V0_TEST_MODE=1
-
-    cd "$TEST_TEMP_DIR/project"
-    export ORIGINAL_PATH="$PATH"
-
-    # Create valid v0 config
-    create_v0rc "testproject" "testp"
-
-    # Export paths
-    export V0_ROOT="$TEST_TEMP_DIR/project"
-    export PROJECT="testproject"
-    export BUILD_DIR="$TEST_TEMP_DIR/project/.v0/build"
-}
-
-teardown() {
-    export HOME="$REAL_HOME"
-    export PATH="$ORIGINAL_PATH"
-
-    if [ -n "$TEST_TEMP_DIR" ] && [ -d "$TEST_TEMP_DIR" ]; then
-        rm -rf "$TEST_TEMP_DIR"
-    fi
+    _base_setup
+    setup_v0_env
 }
 
 # ============================================================================
@@ -817,7 +787,7 @@ create_numbered_operations() {
     local after="${4:-}"
     local ops_dir="$BUILD_DIR/operations"
 
-    for i in $(seq 1 "$count"); do
+    for ((i=1; i<=count; i++)); do
         mkdir -p "$ops_dir/${prefix}${i}"
         # Use sequential timestamps to ensure ordering
         local ts
@@ -874,7 +844,7 @@ EOF
     create_numbered_operations 10 "completed" "completed"
 
     # Create 10 blocked operations (medium priority) - has after field
-    for i in $(seq 1 10); do
+    for i in {1..10}; do
         mkdir -p "$ops_dir/blocked${i}"
         local ts
         ts=$(TZ=UTC date -j -v+$((i+10))S -f "%Y-%m-%dT%H:%M:%SZ" "2026-01-01T10:00:00Z" +%Y-%m-%dT%H:%M:%SZ 2>/dev/null || \
@@ -885,7 +855,7 @@ EOF
     done
 
     # Create 5 open operations (high priority)
-    for i in $(seq 1 5); do
+    for i in {1..5}; do
         mkdir -p "$ops_dir/open${i}"
         local ts
         ts=$(TZ=UTC date -j -v+$((i+20))S -f "%Y-%m-%dT%H:%M:%SZ" "2026-01-01T10:00:00Z" +%Y-%m-%dT%H:%M:%SZ 2>/dev/null || \
@@ -899,7 +869,7 @@ EOF
 
     assert_success
     # All 5 open operations should be shown
-    for i in $(seq 1 5); do
+    for i in {1..5}; do
         [[ "$output" == *"open${i}:"* ]]
     done
 }
@@ -908,7 +878,7 @@ EOF
     local ops_dir="$BUILD_DIR/operations"
 
     # Create 20 truly completed operations (with merge_status: merged)
-    for i in $(seq 1 20); do
+    for i in {1..20}; do
         mkdir -p "$ops_dir/completed${i}"
         local ts
         ts=$(TZ=UTC date -j -v+${i}S -f "%Y-%m-%dT%H:%M:%SZ" "2026-01-01T10:00:00Z" +%Y-%m-%dT%H:%M:%SZ 2>/dev/null || \
@@ -919,7 +889,7 @@ EOF
     done
 
     # Create 5 blocked operations (has after field, not executing)
-    for i in $(seq 1 5); do
+    for i in {1..5}; do
         mkdir -p "$ops_dir/blocked${i}"
         local ts
         ts=$(TZ=UTC date -j -v+$((i+20))S -f "%Y-%m-%dT%H:%M:%SZ" "2026-01-01T10:00:00Z" +%Y-%m-%dT%H:%M:%SZ 2>/dev/null || \
@@ -933,7 +903,7 @@ EOF
 
     assert_success
     # All 5 blocked operations should be shown
-    for i in $(seq 1 5); do
+    for i in {1..5}; do
         [[ "$output" == *"blocked${i}:"* ]]
     done
 }

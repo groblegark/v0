@@ -78,8 +78,8 @@ test-fixtures:
 	fi
 
 # Run all tests
-test: test-init
-	BATS_LIB_PATH="$(BATS_LIB_PATH)" $(BATS) --timing --print-output-on-failure tests/unit/
+test: test-init test-fixtures
+	BATS_LIB_PATH="$(BATS_LIB_PATH)" BATS_FAST_CLEANUP=1 $(BATS) --timing --print-output-on-failure tests/unit/
 
 # Run a specific test file
 test-file: test-init

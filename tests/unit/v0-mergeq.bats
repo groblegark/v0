@@ -3,54 +3,12 @@
 
 load '../helpers/test_helper'
 
-# Setup for mergeq tests
+# Setup for mergeq tests - uses base setup + v0 env + queue file
 setup() {
-    # Call parent setup
-    local temp_dir
-    temp_dir="$(mktemp -d)"
-    TEST_TEMP_DIR="${temp_dir}"
-    export TEST_TEMP_DIR
-
-    mkdir -p "${TEST_TEMP_DIR}/project"
-    mkdir -p "${TEST_TEMP_DIR}/project/.v0/build/operations"
-    mkdir -p "${TEST_TEMP_DIR}/state"
-
-    export REAL_HOME="${HOME}"
-    export HOME="${TEST_TEMP_DIR}/home"
-    mkdir -p "${HOME}/.local/state/v0"
-
-    # Disable OS notifications during tests
-    export V0_TEST_MODE=1
-
-    cd "${TEST_TEMP_DIR}/project" || return 1
-    export ORIGINAL_PATH="${PATH}"
-
-    # Create valid v0 config
-    create_v0rc "testproject" "testp"
-
-    # Setup mergeq directories
-    mkdir -p "${TEST_TEMP_DIR}/project/.v0/build/mergeq/logs"
-
-    # Export paths for mergeq
-    export V0_ROOT="${TEST_TEMP_DIR}/project"
-    export PROJECT="testproject"
-    export ISSUE_PREFIX="testp"
-    export BUILD_DIR="${TEST_TEMP_DIR}/project/.v0/build"
-    export MERGEQ_DIR="${BUILD_DIR}/mergeq"
-    export QUEUE_FILE="${MERGEQ_DIR}/queue.json"
-    export QUEUE_LOCK="${MERGEQ_DIR}/.queue.lock"
-
-    # Create empty queue
+    _base_setup
+    setup_v0_env
+    # Create empty queue for mergeq tests
     echo '{"version":1,"entries":[]}' > "${QUEUE_FILE}"
-}
-
-teardown() {
-    export HOME="${REAL_HOME}"
-    export PATH="${ORIGINAL_PATH}"
-
-    if [ -n "${TEST_TEMP_DIR}" ] && [ -d "${TEST_TEMP_DIR}" ]; then
-        rm -rf "${TEST_TEMP_DIR}"
-    fi
 }
 
 # Helper to source mergeq functions

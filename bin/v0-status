@@ -68,17 +68,14 @@ show_active_roadmaps() {
   for state_file in "${roadmap_dir}"/*/state.json; do
     [[ ! -f "${state_file}" ]] && continue
 
+    # Batch read all fields in single jq call (7 fields -> 1 subprocess)
     local phase name desc idea_id worker_pid machine session
-    phase=$(jq -r '.phase // empty' "${state_file}")  # roadmap state (not feature state machine)
+    local _fields
+    _fields=$(jq -r '[.phase, .name, .roadmap_description, .idea_id, .worker_pid, .machine, .planning_session] | map(. // "") | join("|")' "${state_file}")
+    IFS='|' read -r phase name desc idea_id worker_pid machine session <<< "${_fields}"
 
     # Only show during planning/orchestrating phases
     if [[ "${phase}" = "planning" ]] || [[ "${phase}" = "orchestrating" ]] || [[ "${phase}" = "init" ]]; then
-      name=$(jq -r '.name // empty' "${state_file}")
-      desc=$(jq -r '.roadmap_description // empty' "${state_file}")
-      idea_id=$(jq -r '.idea_id // empty' "${state_file}")
-      worker_pid=$(jq -r '.worker_pid // empty' "${state_file}")
-      machine=$(jq -r '.machine // empty' "${state_file}")
-      session=$(jq -r '.planning_session // empty' "${state_file}")
 
       # Truncate description for display
       local desc_short="${desc:0:40}"
