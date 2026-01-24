@@ -17,7 +17,19 @@ brew install alfredjeanlab/tap/v0
 
 ### Linux / Manual
 
+macOS:
 ```bash
+brew install flock tmux jq
+```
+
+Ubuntu:
+```bash
+sudo apt install flock tmux jq
+```
+
+Then install wok and v0:
+```bash
+curl -fsSL https://github.com/alfredjeanlab/wok/releases/latest/download/install.sh | bash
 curl -fsSL https://github.com/alfredjeanlab/v0/releases/latest/download/install.sh | bash
 ```
 
@@ -41,9 +53,9 @@ v0 init --develop staging --remote upstream
 
 ### Requirements
 
-- [wk](https://github.com/alfredjeanlab/wok) - Issue tracking
+- [wok](https://github.com/alfredjeanlab/wok) - Issue tracking
 - [claude](https://claude.ai/claude-code) - Claude Code CLI
-- git, tmux, jq, [flock](https://github.com/discoteq/flock) (macOS: `brew install flock tmux jq`)
+- git, tmux, jq, flock
 
 > ⚠️ _**Run at your own risk**_ ⚠️
 >
