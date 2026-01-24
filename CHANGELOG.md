@@ -4,6 +4,18 @@ All notable changes to this project will be documented in this file.
 
 ## [Unreleased]
 
+## [0.4.0] - 2026-01-24
+
+### Changed
+
+- **Default branch**: Changed from `main` to `agent`.
+
+- **CI**: Split into parallel shellcheck, quench, and test jobs.
+
+### Fixed
+
+- `wk` command flags updated from `-f/--format` to `-o/--output`.
+
 ## [0.2.2] - 2026-01-24
 
 ### Added
