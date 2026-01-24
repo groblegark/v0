@@ -1,5 +1,7 @@
 # Plan: Default Branch to 'agent'
 
+**Root Feature:** `v0-c1f7`
+
 ## Overview
 
 Change the default development branch from 'main' to 'agent'. When `v0 init` is run without specifying a branch, the system will:
