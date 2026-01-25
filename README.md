@@ -19,12 +19,12 @@ brew install alfredjeanlab/tap/v0
 
 macOS:
 ```bash
-brew install flock tmux jq
+brew install flock tmux jq ripgrep
 ```
 
 Ubuntu:
 ```bash
-sudo apt install flock tmux jq
+sudo apt install flock tmux jq ripgrep
 ```
 
 Then install wok and v0:
@@ -56,6 +56,7 @@ v0 init --develop staging --remote upstream
 - [wok](https://github.com/alfredjeanlab/wok) - Issue tracking
 - [claude](https://claude.ai/claude-code) - Claude Code CLI
 - git, tmux, jq, flock
+- ripgrep (optional, recommended for performance)
 
 > ⚠️ _**Run at your own risk**_ ⚠️
 >

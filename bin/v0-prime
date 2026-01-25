@@ -19,7 +19,7 @@ v0 attach fix                       # Watch progress
 
 **Run a feature pipeline:**
 ```bash
-v0 feature auth "Add JWT auth"      # Full pipeline: plan → decompose → execute → merge
+v0 feature auth "Add JWT auth"      # Full pipeline: plan → execute → merge
 v0 status                           # Check progress
 v0 attach feature/auth              # Watch specific feature
 ```
@@ -27,7 +27,7 @@ v0 attach feature/auth              # Watch specific feature
 **Just create a plan:**
 ```bash
 v0 plan api "Build REST API"        # Create plan only
-v0 decompose api                    # Then decompose to issues
+v0 build api                        # Then execute the plan
 ```
 
 **Process chores:**

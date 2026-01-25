@@ -574,7 +574,7 @@ else
   fi
 
   # Background execution (default for new operations)
-  # The worker (v0-build-worker) runs plan -> decompose -> build in background.
+  # The worker (v0-build-worker) runs plan -> build in background.
   # This allows the user to queue features and continue with other work.
   # Use --foreground to preserve the old blocking behavior.
   if [[ -z "${FOREGROUND}" ]] && [[ -z "${DRY_RUN}" ]]; then

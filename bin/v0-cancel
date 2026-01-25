@@ -12,7 +12,7 @@ usage() {
   cat <<'EOF'
 Usage: v0 cancel <operation>...
 
-Cancel one or more running operations (feature, plan, decompose, or build).
+Cancel one or more running operations (feature, plan, or build).
 
 This stops any running sessions or workers associated with the operations
 and marks them as cancelled. Operations can be cleaned up with 'v0 prune'.

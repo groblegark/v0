@@ -5,7 +5,7 @@
 #
 # This script runs the roadmap orchestration pipeline:
 # - Sets up working environment (worktree, CLAUDE.md, hooks)
-# - Launches Claude agent to decompose the roadmap into epics/milestones
+# - Launches Claude agent to break down the roadmap into epics/milestones
 # - Agent queues all features with v0 feature --after
 #
 # Key responsibilities:

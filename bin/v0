@@ -16,7 +16,7 @@ done
 V0_DIR="$(cd -P "$(dirname "${SOURCE}")/.." && pwd)"
 
 # Commands that require a project (.v0.rc)
-PROJECT_COMMANDS="plan tree decompose merge mergeq status build feature resume fix attach cancel shutdown startup hold roadmap pull push archive"
+PROJECT_COMMANDS="plan tree merge mergeq status build feature resume fix attach cancel shutdown startup hold roadmap pull push archive"
 
 # Commands that work in standalone mode (no .v0.rc needed)
 STANDALONE_COMMANDS="chore"
@@ -75,10 +75,9 @@ Commands:
 
   fix           Sequential bug fixing worker
   chore         Sequential chore processing worker
-  build         Full pipeline: plan -> decompose -> execute -> merge
+  build         Full pipeline: plan -> execute -> merge
   roadmap       Orchestrate autonomous work using a roadmap
   plan          Create implementation plan from prompt
-  decomp[ose]   Convert plan to issues
   merge         Merge worktree branch to main
   mergeq        Merge queue daemon
   pull          Pull agent branch changes into current branch
@@ -204,7 +203,7 @@ shift
 
 case "${CMD}" in
   # Project-required commands
-  plan|tree|decompose|merge|mergeq|status|watch|build|fix|attach|cancel|shutdown|startup|prune|monitor|hold|roadmap|pull|push|archive)
+  plan|tree|merge|mergeq|status|watch|build|fix|attach|cancel|shutdown|startup|prune|monitor|hold|roadmap|pull|push|archive)
     # Check if we're in a project - if not, show error
     if ! v0_find_project_root >/dev/null 2>&1; then
         v0_check_standalone_mode "${CMD}"
@@ -235,9 +234,6 @@ case "${CMD}" in
     ;;
   resume)
     exec "${V0_DIR}/bin/v0-build" --resume "$@"
-    ;;
-  decomp)
-    exec "${V0_DIR}/bin/v0-decompose" "$@"
     ;;
   bug|bugfix)
     exec "${V0_DIR}/bin/v0-fix" "$@"

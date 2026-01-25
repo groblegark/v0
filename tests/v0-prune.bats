@@ -422,7 +422,7 @@ EOF
     assert_output "1"
 }
 
-@test "v0_prune_mergeq called by v0 prune command" {
+@test "v0_prune_mergeq called by v0 prune command (dry-run)" {
     mkdir -p "${BUILD_DIR}/mergeq"
     local old_ts
     old_ts=$(get_timestamp_hours_ago 8)
@@ -433,8 +433,9 @@ EOF
 ]}
 EOF
 
-    run "${PROJECT_ROOT}/bin/v0-prune"
+    # Use --dry-run to get synchronous output (background mode is tested elsewhere)
+    run "${PROJECT_ROOT}/bin/v0-prune" --dry-run
     assert_success
     [[ "${output}" == *"Pruning old mergeq entries"* ]]
-    [[ "${output}" == *"Pruned 1 mergeq entries"* ]]
+    [[ "${output}" == *"Would prune 1 mergeq entries"* ]]
 }

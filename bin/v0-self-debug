@@ -425,7 +425,7 @@ generate_worker_state() {
     # Parse backoff from polling log (look for most recent backoff line)
     if [[ -f "${polling_log}" ]]; then
         local backoff_line
-        backoff_line=$(grep -E "Backing off for [0-9]+s" "${polling_log}" 2>/dev/null | tail -1)
+        backoff_line=$(v0_grep "Backing off for [0-9]+s" "${polling_log}" 2>/dev/null | tail -1)
         if [[ -n "${backoff_line}" ]]; then
             echo "Last backoff: ${backoff_line}"
         else
@@ -635,7 +635,7 @@ generate_nudge_state() {
     echo '```'
     local sessions=""
     if command -v tmux &>/dev/null; then
-        sessions=$(tmux list-sessions 2>/dev/null | grep -E "^v0-${PROJECT}" || true)
+        sessions=$(tmux list-sessions 2>/dev/null | v0_grep "^v0-${PROJECT}" || true)
         if [[ -n "${sessions}" ]]; then
             echo "${sessions}"
         else
@@ -750,7 +750,7 @@ generate_v0_log_context() {
 
     # Filter log entries mentioning this operation
     local filtered
-    filtered=$(grep -E "(^|\s)${op_name}(\s|$|:)" "${v0_log}" 2>/dev/null | tail -50)
+    filtered=$(v0_grep "(^|\s)${op_name}(\s|$|:)" "${v0_log}" 2>/dev/null | tail -50)
 
     if [[ -n "${filtered}" ]]; then
         echo "Log entries mentioning \`${op_name}\` (last 50):"
