@@ -1,5 +1,7 @@
 # Plan: Rename "v0 feature" to "v0 build"
 
+**Root Feature:** `v0-e159`
+
 ## Overview
 
 Rename the primary command `v0 feature` to `v0 build` while maintaining full backward compatibility with the existing `feature` and `feat` aliases. Update all user-facing documentation (README, help text) to use "build" as the primary term, while the old command names continue to work silently.
