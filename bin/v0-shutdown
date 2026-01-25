@@ -332,6 +332,15 @@ if prune_daemon_running; then
   fi
 fi
 
+# Check if nudge daemon is running
+if nudge_running; then
+  found_anything=1
+  if [[ -n "${DRY_RUN}" ]]; then
+    echo ""
+    echo "Would stop nudge daemon (pid: $(nudge_pid))"
+  fi
+fi
+
 if [[ -z "${found_anything}" ]]; then
   echo "No v0 sessions running for project: ${PROJECT}"
   exit 0
