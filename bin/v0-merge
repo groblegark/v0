@@ -175,21 +175,7 @@ if mg_has_conflicts "${BRANCH}"; then
                 mg_cleanup_worktree "${WORKTREE}" "${TREE_DIR}" "${BRANCH}"
             fi
 
-            if mg_push_and_verify "${merge_commit}"; then
-                op_to_update=$(mg_resolve_op_name "${OP_NAME}" "${BRANCH}")
-                if [[ -n "${op_to_update}" ]]; then
-                    mg_record_merge_commit "${op_to_update}" "${merge_commit}"
-                fi
-
-                mg_update_operation_state "${BRANCH}"
-                if [[ -z "${V0_MERGEQ_CALLER:-}" ]]; then
-                    mg_update_queue_entry "${OP_NAME}" "${BRANCH}"
-                fi
-
-                mg_trigger_dependents "${BRANCH}"
-                mg_notify_merge "${PROJECT}" "${BRANCH}" "(after resolution)"
-                mg_delete_remote_branch "${BRANCH}"
-            fi
+            mg_finalize_merge "${merge_commit}" "${OP_NAME}" "${BRANCH}" "${PROJECT}" "(after resolution)"
         fi
     else
         echo
@@ -208,44 +194,14 @@ else
         if mg_do_merge "${WORKTREE}" "${BRANCH}"; then
             merge_commit=$(mg_get_merge_commit)
             mg_cleanup_worktree "${WORKTREE}" "${TREE_DIR}" "${BRANCH}"
-
-            if mg_push_and_verify "${merge_commit}"; then
-                op_to_update=$(mg_resolve_op_name "${OP_NAME}" "${BRANCH}")
-                if [[ -n "${op_to_update}" ]]; then
-                    mg_record_merge_commit "${op_to_update}" "${merge_commit}"
-                fi
-
-                mg_update_operation_state "${BRANCH}"
-                if [[ -z "${V0_MERGEQ_CALLER:-}" ]]; then
-                    mg_update_queue_entry "${OP_NAME}" "${BRANCH}"
-                fi
-
-                mg_trigger_dependents "${BRANCH}"
-                mg_notify_merge "${PROJECT}" "${BRANCH}"
-                mg_delete_remote_branch "${BRANCH}"
-            fi
+            mg_finalize_merge "${merge_commit}" "${OP_NAME}" "${BRANCH}" "${PROJECT}"
         fi
     else
         # Without worktree - use fast-forward merge
         if mg_do_merge_without_worktree "${BRANCH}"; then
             merge_commit=$(mg_get_merge_commit)
             mg_cleanup_branch_only "${BRANCH}"
-
-            if mg_push_and_verify "${merge_commit}"; then
-                op_to_update=$(mg_resolve_op_name "${OP_NAME}" "${BRANCH}")
-                if [[ -n "${op_to_update}" ]]; then
-                    mg_record_merge_commit "${op_to_update}" "${merge_commit}"
-                fi
-
-                mg_update_operation_state "${BRANCH}"
-                if [[ -z "${V0_MERGEQ_CALLER:-}" ]]; then
-                    mg_update_queue_entry "${OP_NAME}" "${BRANCH}"
-                fi
-
-                mg_trigger_dependents "${BRANCH}"
-                mg_notify_merge "${PROJECT}" "${BRANCH}"
-                mg_delete_remote_branch "${BRANCH}"
-            fi
+            mg_finalize_merge "${merge_commit}" "${OP_NAME}" "${BRANCH}" "${PROJECT}"
         else
             # Fast-forward failed - need worktree for rebase
             if [[ "${RESOLVE}" = true ]]; then
@@ -259,22 +215,7 @@ else
                     merge_commit=$(mg_get_merge_commit)
                     mg_cleanup_temp_worktree
                     mg_cleanup_branch_only "${BRANCH}"
-
-                    if mg_push_and_verify "${merge_commit}"; then
-                        op_to_update=$(mg_resolve_op_name "${OP_NAME}" "${BRANCH}")
-                        if [[ -n "${op_to_update}" ]]; then
-                            mg_record_merge_commit "${op_to_update}" "${merge_commit}"
-                        fi
-
-                        mg_update_operation_state "${BRANCH}"
-                        if [[ -z "${V0_MERGEQ_CALLER:-}" ]]; then
-                            mg_update_queue_entry "${OP_NAME}" "${BRANCH}"
-                        fi
-
-                        mg_trigger_dependents "${BRANCH}"
-                        mg_notify_merge "${PROJECT}" "${BRANCH}" "(after rebase)"
-                        mg_delete_remote_branch "${BRANCH}"
-                    fi
+                    mg_finalize_merge "${merge_commit}" "${OP_NAME}" "${BRANCH}" "${PROJECT}" "(after rebase)"
                 else
                     mg_cleanup_temp_worktree
                     exit 1
