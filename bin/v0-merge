@@ -59,39 +59,53 @@ else
     mg_resolve_operation_to_worktree "${INPUT}"
 fi
 
-WORKTREE="${MG_WORKTREE}"
-TREE_DIR="${MG_TREE_DIR}"
+HAS_WORKTREE="${MG_HAS_WORKTREE:-true}"
 OP_NAME="${MG_OP_NAME:-}"
 
-# Validate worktree
-mg_validate_worktree "${WORKTREE}"
+if [[ "${HAS_WORKTREE}" = true ]]; then
+    WORKTREE="${MG_WORKTREE}"
+    TREE_DIR="${MG_TREE_DIR}"
 
-# Get actual branch name from the worktree
-BRANCH="$(mg_get_branch "${WORKTREE}")"
+    # Validate worktree
+    mg_validate_worktree "${WORKTREE}"
+
+    # Get actual branch name from the worktree
+    BRANCH="$(mg_get_branch "${WORKTREE}")"
+else
+    # No worktree - use branch directly
+    BRANCH="${MG_BRANCH}"
+    WORKTREE=""
+    TREE_DIR=""
+
+    echo "Note: No worktree found. Attempting direct branch merge."
+fi
 
 # All git operations must run from main repo (not a worktree)
 cd "${MAIN_REPO}"
 
-# Check for and clean up mid-rebase state
-mg_abort_incomplete_rebase "${WORKTREE}"
+# Worktree-specific checks (skip if no worktree)
+if [[ "${HAS_WORKTREE}" = true ]]; then
+    # Check for and clean up mid-rebase state
+    mg_abort_incomplete_rebase "${WORKTREE}"
 
-# Check worktree is clean (ignore untracked files)
-if mg_worktree_has_uncommitted "${WORKTREE}"; then
-    if [[ "${RESOLVE}" = true ]]; then
-        echo "Uncommitted changes detected. Starting claude to resolve..."
-        mg_resolve_uncommitted_changes "${WORKTREE}" "${TREE_DIR}" "${BRANCH}"
-        # Re-check after resolution
-        if mg_worktree_has_uncommitted "${WORKTREE}"; then
-            echo "Error: Uncommitted changes still exist after resolution"
+    # Check worktree is clean (ignore untracked files)
+    if mg_worktree_has_uncommitted "${WORKTREE}"; then
+        if [[ "${RESOLVE}" = true ]]; then
+            echo "Uncommitted changes detected. Starting claude to resolve..."
+            mg_resolve_uncommitted_changes "${WORKTREE}" "${TREE_DIR}" "${BRANCH}"
+            # Re-check after resolution
+            if mg_worktree_has_uncommitted "${WORKTREE}"; then
+                echo "Error: Uncommitted changes still exist after resolution"
+                exit 1
+            fi
+        else
+            echo "Error: Worktree has uncommitted changes"
+            echo "  cd ${WORKTREE} && git status"
+            echo ""
+            echo "To resolve with agent assistance:"
+            echo "  v0 merge ${TREE_DIR} --resolve"
             exit 1
         fi
-    else
-        echo "Error: Worktree has uncommitted changes"
-        echo "  cd ${WORKTREE} && git status"
-        echo ""
-        echo "To resolve with agent assistance:"
-        echo "  v0 merge ${TREE_DIR} --resolve"
-        exit 1
     fi
 fi
 
@@ -101,6 +115,17 @@ mg_acquire_lock "${BRANCH}"
 if mg_has_conflicts "${BRANCH}"; then
     if [[ "${RESOLVE}" = true ]]; then
         echo "Conflicts detected. Starting claude to resolve..."
+
+        # If no worktree, create a temporary one for resolution
+        if [[ "${HAS_WORKTREE}" = false ]]; then
+            echo "Creating temporary worktree for conflict resolution..."
+            mg_create_temp_worktree_for_resolution "${BRANCH}"
+            WORKTREE="${MG_TEMP_WORKTREE}"
+            TREE_DIR="${MG_TEMP_TREE_DIR}"
+            USING_TEMP_WORKTREE=true
+        else
+            USING_TEMP_WORKTREE=false
+        fi
 
         mg_launch_resolve_session "${WORKTREE}" "${TREE_DIR}" "${BRANCH}"
         mg_wait_for_resolve_session "${MG_RESOLVE_SESSION}"
@@ -114,6 +139,9 @@ if mg_has_conflicts "${BRANCH}"; then
             if [[ -f "${MG_RESOLVE_LOG:-}" ]]; then
                 echo "Check log file: ${MG_RESOLVE_LOG}"
             fi
+            if [[ "${USING_TEMP_WORKTREE}" = true ]]; then
+                mg_cleanup_temp_worktree
+            fi
             exit 1
         fi
 
@@ -124,6 +152,9 @@ if mg_has_conflicts "${BRANCH}"; then
             if [[ -f "${MG_RESOLVE_LOG:-}" ]]; then
                 echo "Check log file: ${MG_RESOLVE_LOG}"
             fi
+            if [[ "${USING_TEMP_WORKTREE}" = true ]]; then
+                mg_cleanup_temp_worktree
+            fi
             exit 1
         fi
 
@@ -131,7 +162,13 @@ if mg_has_conflicts "${BRANCH}"; then
         if mg_do_merge "${WORKTREE}" "${BRANCH}"; then
             merge_commit=$(mg_get_merge_commit)
             rm -f "${MG_RESOLVE_LOG:-}"
-            mg_cleanup_worktree "${WORKTREE}" "${TREE_DIR}" "${BRANCH}"
+
+            if [[ "${USING_TEMP_WORKTREE}" = true ]]; then
+                mg_cleanup_temp_worktree
+                mg_cleanup_branch_only "${BRANCH}"
+            else
+                mg_cleanup_worktree "${WORKTREE}" "${TREE_DIR}" "${BRANCH}"
+            fi
 
             if mg_push_and_verify "${merge_commit}"; then
                 op_to_update=$(mg_resolve_op_name "${OP_NAME}" "${BRANCH}")
@@ -152,29 +189,58 @@ if mg_has_conflicts "${BRANCH}"; then
     else
         echo
         echo -e "${C_RED}${C_BOLD}Error:${C_RESET} Merge would have conflicts. To resolve:"
-        echo -e "  ${C_BOLD}v0 merge ${TREE_DIR} --resolve${C_RESET}"
+        if [[ "${HAS_WORKTREE}" = true ]]; then
+            echo -e "  ${C_BOLD}v0 merge ${TREE_DIR} --resolve${C_RESET}"
+        else
+            echo -e "  ${C_BOLD}v0 merge ${INPUT} --resolve${C_RESET}"
+        fi
         exit 1
     fi
 else
     # No conflicts - direct merge
-    if mg_do_merge "${WORKTREE}" "${BRANCH}"; then
-        merge_commit=$(mg_get_merge_commit)
-        mg_cleanup_worktree "${WORKTREE}" "${TREE_DIR}" "${BRANCH}"
+    if [[ "${HAS_WORKTREE}" = true ]]; then
+        # With worktree - use standard merge flow
+        if mg_do_merge "${WORKTREE}" "${BRANCH}"; then
+            merge_commit=$(mg_get_merge_commit)
+            mg_cleanup_worktree "${WORKTREE}" "${TREE_DIR}" "${BRANCH}"
 
-        if mg_push_and_verify "${merge_commit}"; then
-            op_to_update=$(mg_resolve_op_name "${OP_NAME}" "${BRANCH}")
-            if [[ -n "${op_to_update}" ]]; then
-                mg_record_merge_commit "${op_to_update}" "${merge_commit}"
+            if mg_push_and_verify "${merge_commit}"; then
+                op_to_update=$(mg_resolve_op_name "${OP_NAME}" "${BRANCH}")
+                if [[ -n "${op_to_update}" ]]; then
+                    mg_record_merge_commit "${op_to_update}" "${merge_commit}"
+                fi
+
+                mg_update_operation_state "${BRANCH}"
+                if [[ -z "${V0_MERGEQ_CALLER:-}" ]]; then
+                    mg_update_queue_entry "${OP_NAME}" "${BRANCH}"
+                fi
+
+                mg_trigger_dependents "${BRANCH}"
+                mg_notify_merge "${PROJECT}" "${BRANCH}"
+                mg_delete_remote_branch "${BRANCH}"
             fi
+        fi
+    else
+        # Without worktree - use fast-forward merge
+        if mg_do_merge_without_worktree "${BRANCH}"; then
+            merge_commit=$(mg_get_merge_commit)
+            mg_cleanup_branch_only "${BRANCH}"
 
-            mg_update_operation_state "${BRANCH}"
-            if [[ -z "${V0_MERGEQ_CALLER:-}" ]]; then
-                mg_update_queue_entry "${OP_NAME}" "${BRANCH}"
+            if mg_push_and_verify "${merge_commit}"; then
+                op_to_update=$(mg_resolve_op_name "${OP_NAME}" "${BRANCH}")
+                if [[ -n "${op_to_update}" ]]; then
+                    mg_record_merge_commit "${op_to_update}" "${merge_commit}"
+                fi
+
+                mg_update_operation_state "${BRANCH}"
+                if [[ -z "${V0_MERGEQ_CALLER:-}" ]]; then
+                    mg_update_queue_entry "${OP_NAME}" "${BRANCH}"
+                fi
+
+                mg_trigger_dependents "${BRANCH}"
+                mg_notify_merge "${PROJECT}" "${BRANCH}"
+                mg_delete_remote_branch "${BRANCH}"
             fi
-
-            mg_trigger_dependents "${BRANCH}"
-            mg_notify_merge "${PROJECT}" "${BRANCH}"
-            mg_delete_remote_branch "${BRANCH}"
         fi
     fi
 fi

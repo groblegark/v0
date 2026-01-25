@@ -116,6 +116,32 @@ mg_delete_remote_branch() {
     git push "${V0_GIT_REMOTE}" --delete "${branch}" 2>/dev/null || true
 }
 
+# mg_do_merge_without_worktree <branch>
+# Execute merge for branch without a worktree (fast-forward only)
+# Returns 0 on success, 1 if conflicts (requires worktree for resolution)
+mg_do_merge_without_worktree() {
+    local branch="$1"
+
+    # Try fast-forward first (no worktree needed)
+    if git merge --ff-only "${branch}" 2>/dev/null; then
+        echo "Fast-forward merge successful"
+        return 0
+    fi
+
+    # Can't do non-FF merge without worktree for rebase
+    echo "Cannot fast-forward merge. Conflicts require worktree for resolution." >&2
+    return 1
+}
+
+# mg_cleanup_branch_only <branch>
+# Clean up branch when no worktree exists
+mg_cleanup_branch_only() {
+    local branch="$1"
+
+    git branch -d "${branch}" 2>/dev/null || git branch -D "${branch}"
+    echo "Removed branch: ${branch}"
+}
+
 # mg_get_merge_commit
 # Get the current HEAD commit hash (after merge)
 mg_get_merge_commit() {
