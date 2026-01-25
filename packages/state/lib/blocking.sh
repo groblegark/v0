@@ -107,12 +107,14 @@ sm_find_dependents() {
 
 # sm_trigger_dependents <op>
 # Notify dependent operations that blocker has merged
-# (wok already tracks this via blocked-by relationships)
+# Note: The actual unblocking happens when sm_transition_to_merged marks
+# the wok epic as done. This function just logs for visibility.
 sm_trigger_dependents() {
   local merged_op="$1"
 
-  # With wok-based tracking, dependents are automatically unblocked
-  # when their blockers are marked done. Just log for visibility.
+  # Dependents are unblocked when the blocker's wok epic is marked done
+  # (handled by _sm_close_wok_epic in sm_transition_to_merged).
+  # This function logs the event for visibility.
   local dep_op
   for dep_op in $(sm_find_dependents "${merged_op}"); do
     sm_emit_event "${dep_op}" "unblock:notified" "Blocker ${merged_op} completed"

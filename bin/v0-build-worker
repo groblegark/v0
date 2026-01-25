@@ -173,12 +173,55 @@ check_hold_before_phase() {
   return 0
 }
 
+# Repair stale wok blockers - mark merged operations' epics as done
+# This is a safety net for cases where the merge completed but wok wasn't updated
+repair_stale_wok_blockers() {
+  local epic_id
+  epic_id=$(get_state epic_id)
+  [[ -z "${epic_id}" ]] || [[ "${epic_id}" == "null" ]] && return 0
+
+  local blockers
+  blockers=$(v0_get_blockers "${epic_id}")
+  [[ "${blockers}" == "[]" ]] && return 0
+
+  local blocker_id
+  for blocker_id in $(echo "${blockers}" | jq -r '.[]'); do
+    # Check if blocker is still open in wok
+    local wok_status
+    wok_status=$(wk show "${blocker_id}" -o json 2>/dev/null | jq -r '.status // "unknown"')
+    case "${wok_status}" in
+      done|closed) continue ;;  # Already closed, skip
+    esac
+
+    # Blocker is open in wok - check if the operation is actually merged
+    local blocker_op
+    blocker_op=$(v0_blocker_to_op_name "${blocker_id}")
+    local blocker_state="${BUILD_DIR}/operations/${blocker_op}/state.json"
+
+    if [[ -f "${blocker_state}" ]]; then
+      local blocker_phase
+      blocker_phase=$(jq -r '.phase // "unknown"' "${blocker_state}")
+      if [[ "${blocker_phase}" == "merged" ]]; then
+        log "Repairing stale blocker: ${blocker_op} is merged but wok issue ${blocker_id} is ${wok_status}"
+        if wk done "${blocker_id}" --reason "Merged (repaired by v0 resume)" 2>/dev/null; then
+          sm_emit_event "${NAME}" "blocker:repaired" "Marked ${blocker_id} as done (${blocker_op} was already merged)"
+        else
+          log "Warning: Failed to mark ${blocker_id} as done"
+        fi
+      fi
+    fi
+  done
+}
+
 # Check wok blockers before starting new phases
 # Returns 0 if can proceed, 1 if blocked
 check_wok_blockers() {
   local epic_id
   epic_id=$(get_state epic_id)
   [[ -z "${epic_id}" ]] || [[ "${epic_id}" == "null" ]] && return 0
+
+  # First, repair any stale blockers (merged ops with open wok issues)
+  repair_stale_wok_blockers
 
   if v0_is_blocked "${epic_id}"; then
     local blocker

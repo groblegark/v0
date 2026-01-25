@@ -126,6 +126,18 @@ When an operation has unresolved blockers:
 - If blocked, worker pauses and logs the blocker
 - Operation proceeds when all blockers reach `done` or `closed` status in wok
 
+### Unblocking Flow
+
+When a blocker operation merges:
+1. `sm_transition_to_merged` marks the operation's wok epic as `done`
+2. This unblocks dependent operations that were waiting on this blocker
+3. `sm_trigger_dependents` logs the unblock event for visibility
+4. Dependent workers resume on their next poll/resume
+
+Safety net: If the wok epic wasn't marked done (e.g., due to a bug), `v0 resume`
+repairs stale blockers by checking if the blocker operation is merged but its
+wok issue is still open, and marks it done before checking blocking status.
+
 ## Hold Mechanism
 
 Operations can be put on hold to prevent phase transitions:
