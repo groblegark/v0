@@ -21,6 +21,7 @@ if [[ -t 1 ]]; then
     C_BLUE='\033[34m'
     C_CYAN='\033[36m'
     C_RED='\033[31m'
+    C_MAGENTA='\033[35m'
     C_LAVENDER='\033[38;5;183m'
     # Help output colors (muted/pastel palette)
     C_HELP_SECTION='\033[38;5;74m'   # Pastel cyan/steel blue
@@ -35,6 +36,7 @@ else
     C_BLUE=''
     C_CYAN=''
     C_RED=''
+    C_MAGENTA=''
     C_LAVENDER=''
     C_HELP_SECTION=''
     C_HELP_COMMAND=''

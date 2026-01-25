@@ -12,6 +12,7 @@ setup() {
     export C_GREEN='\033[32m'
     export C_RED='\033[31m'
     export C_YELLOW='\033[33m'
+    export C_MAGENTA='\033[35m'
     export C_CYAN='\033[36m'
     export C_DIM='\033[2m'
     export C_RESET='\033[0m'
