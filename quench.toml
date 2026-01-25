@@ -2,22 +2,17 @@ version = 1
 
 [project]
 source = ["bin/*", "lib/**/*.sh", "packages/*/lib/**/*.sh", "scripts/*"]
-tests = ["packages/*/tests/**/*.bats", "packages/test-support/**/*.bash"]
-ignore = ["tests/bats/bats-*/**"]
+tests = ["*.bats", "packages/test-support/**/*"]
+ignore = ["vendor"]
 
 [check.cloc]
 advice_test = """
 Can tests be refactored to reduce duplication?
 Consider using bats helpers or setup functions.
 """
-# Test patterns to identify test files (use default test file limit of 1100)
-test_patterns = ["packages/*/tests/**", "packages/test-support/**", "**/tests/**"]
-# Explicit test limit since some test files are larger than source limit
-max_lines_test = 1100
 exclude = [
     # ONLY for intentionally large fixture/test data
     # NEVER for tests or source files
-    "tests/bats/bats-*/**",  # vendored bats libraries
 ]
 
 # Shell suppress: require justification comment for shellcheck disables
