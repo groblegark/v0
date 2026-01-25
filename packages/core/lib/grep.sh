@@ -61,6 +61,18 @@ _v0_grep_rg() {
         rg_args+=("-m")
         skip_next=true
         ;;
+      -oE|-Eo)
+        # Combined -oE or -Eo: just -o for rg
+        rg_args+=("-o")
+        ;;
+      -qE|-Eq)
+        # Combined -qE or -Eq: just -q for rg
+        rg_args+=("-q")
+        ;;
+      -qF|-Fq)
+        # Combined -qF or -Fq
+        rg_args+=("-q" "-F")
+        ;;
       -q|-o|-c|-v|-F|-n|-i|-l|-w)
         # Direct mappings
         rg_args+=("$arg")
@@ -81,9 +93,9 @@ _v0_grep_rg() {
 
   if [[ -n "$pattern" ]]; then
     if [[ ${#files[@]} -gt 0 ]]; then
-      rg "${rg_args[@]}" "$pattern" "${files[@]}"
+      rg "${rg_args[@]}" -- "$pattern" "${files[@]}"
     else
-      rg "${rg_args[@]}" "$pattern"
+      rg "${rg_args[@]}" -- "$pattern"
     fi
   else
     # No pattern provided, let rg handle the error
@@ -98,9 +110,9 @@ v0_grep_quiet() {
   local pattern="$1"
   shift
   if [[ "$_V0_GREP_CMD" == "rg" ]]; then
-    rg -q "$pattern" "$@"
+    rg -q -- "$pattern" "$@"
   else
-    grep -q "$pattern" "$@"
+    grep -q -- "$pattern" "$@"
   fi
 }
 
@@ -111,9 +123,9 @@ v0_grep_extract() {
   local pattern="$1"
   shift
   if [[ "$_V0_GREP_CMD" == "rg" ]]; then
-    rg -o "$pattern" "$@"
+    rg -o -- "$pattern" "$@"
   else
-    grep -oE "$pattern" "$@"
+    grep -oE -- "$pattern" "$@"
   fi
 }
 
@@ -124,9 +136,9 @@ v0_grep_count() {
   local pattern="$1"
   shift
   if [[ "$_V0_GREP_CMD" == "rg" ]]; then
-    rg -c "$pattern" "$@" 2>/dev/null || echo "0"
+    rg -c -- "$pattern" "$@" 2>/dev/null || echo "0"
   else
-    grep -c "$pattern" "$@" 2>/dev/null || echo "0"
+    grep -c -- "$pattern" "$@" 2>/dev/null || echo "0"
   fi
 }
 
@@ -136,9 +148,9 @@ v0_grep_invert() {
   local pattern="$1"
   shift
   if [[ "$_V0_GREP_CMD" == "rg" ]]; then
-    rg -v "$pattern" "$@"
+    rg -v -- "$pattern" "$@"
   else
-    grep -v "$pattern" "$@"
+    grep -v -- "$pattern" "$@"
   fi
 }
 
@@ -149,9 +161,9 @@ v0_grep_first() {
   local pattern="$1"
   shift
   if [[ "$_V0_GREP_CMD" == "rg" ]]; then
-    rg -m 1 "$pattern" "$@"
+    rg -m 1 -- "$pattern" "$@"
   else
-    grep -m1 "$pattern" "$@"
+    grep -m1 -- "$pattern" "$@"
   fi
 }
 
@@ -161,8 +173,21 @@ v0_grep_fixed() {
   local string="$1"
   shift
   if [[ "$_V0_GREP_CMD" == "rg" ]]; then
-    rg -F "$string" "$@"
+    rg -F -- "$string" "$@"
   else
-    grep -F "$string" "$@"
+    grep -F -- "$string" "$@"
+  fi
+}
+
+# v0_grep_fixed_quiet - Fixed string quiet check (-qF)
+# Usage: v0_grep_fixed_quiet string [file...]
+# Returns: 0 if fixed string found, 1 otherwise
+v0_grep_fixed_quiet() {
+  local string="$1"
+  shift
+  if [[ "$_V0_GREP_CMD" == "rg" ]]; then
+    rg -qF -- "$string" "$@"
+  else
+    grep -qF -- "$string" "$@"
   fi
 }

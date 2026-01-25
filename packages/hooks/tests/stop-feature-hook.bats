@@ -9,7 +9,7 @@ setup() {
     setup_v0_env
     export V0_PLAN_LABEL="plan:test-feature"
     export V0_OP="test-feature"
-    export HOOK_SCRIPT="$PROJECT_ROOT/packages/hooks/lib/stop-feature.sh"
+    export HOOK_SCRIPT="$PROJECT_ROOT/packages/hooks/lib/stop-build.sh"
 }
 
 # ============================================================================

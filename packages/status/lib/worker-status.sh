@@ -4,6 +4,12 @@
 # Worker status display utilities for v0-status
 # Source this file to get worker status functions
 
+# Source grep wrapper for better performance (if not already sourced)
+if [[ -z "${_V0_GREP_CMD:-}" ]]; then
+  _STATUS_LIB_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+  source "${_STATUS_LIB_DIR}/../../core/lib/grep.sh"
+fi
+
 # get_worker_status <type> [all_sessions] [all_polling]
 # Determine worker status using batched session/polling data
 # Args:
@@ -38,7 +44,7 @@ get_worker_status() {
     local polling_pid=""
     if [[ -n "${all_polling}" ]]; then
       # Use pre-batched polling list
-      polling_pid=$(echo "${all_polling}" | grep "worker-${type}" | awk '{print $1}')
+      polling_pid=$(echo "${all_polling}" | v0_grep "worker-${type}" | awk '{print $1}')
     else
       # Direct check
       polling_pid=$(pgrep -f "while true.*${session}" 2>/dev/null || true)
@@ -69,7 +75,7 @@ get_worker_polling_pid() {
   fi
 
   if [[ -n "${all_polling}" ]]; then
-    echo "${all_polling}" | grep "worker-${type}" | awk '{print $1}'
+    echo "${all_polling}" | v0_grep "worker-${type}" | awk '{print $1}'
   else
     pgrep -f "while true.*${session}" 2>/dev/null || true
   fi

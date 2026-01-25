@@ -82,6 +82,11 @@ setup() {
     [[ "$result" == "1.2.3" ]]
 }
 
+@test "v0_grep_extract returns nothing on no match" {
+    result=$(echo "no match here" | v0_grep_extract '[0-9]{10}' || true)
+    [[ -z "$result" ]]
+}
+
 # ============================================================================
 # v0_grep_count() tests
 # ============================================================================
@@ -117,6 +122,11 @@ setup() {
 
     result=$(v0_grep_invert "remove" "$TEST_TEMP_DIR/file.txt")
     [[ $(echo "$result" | wc -l) -eq 2 ]]
+}
+
+@test "v0_grep_invert excludes empty lines" {
+    result=$(printf "a\n\nb\n" | v0_grep_invert '^$')
+    [[ $(echo "$result" | wc -l | tr -d ' ') -eq 2 ]]
 }
 
 # ============================================================================
@@ -158,6 +168,20 @@ setup() {
 }
 
 # ============================================================================
+# v0_grep_fixed_quiet() tests
+# ============================================================================
+
+@test "v0_grep_fixed_quiet matches literal strings" {
+    echo "test.file" | v0_grep_fixed_quiet "test.file"
+}
+
+@test "v0_grep_fixed_quiet does not interpret regex" {
+    # The . in regex would match any char, but -F should match literally
+    run bash -c "source '$PROJECT_ROOT/packages/core/lib/grep.sh' && echo 'testXfile' | v0_grep_fixed_quiet 'test.file'"
+    [[ "$status" -eq 1 ]]
+}
+
+# ============================================================================
 # v0_grep() general tests
 # ============================================================================
 
@@ -187,11 +211,43 @@ setup() {
     [[ "$result" == "123" ]]
 }
 
+@test "v0_grep with -oE combined option" {
+    result=$(echo "hello123world" | v0_grep -oE '[0-9]+')
+    [[ "$result" == "123" ]]
+}
+
+@test "v0_grep with -qE combined option" {
+    echo "hello123" | v0_grep -qE '[0-9]+'
+}
+
+@test "v0_grep with -qF combined option" {
+    echo "test.txt" | v0_grep -qF "test.txt"
+}
+
+@test "v0_grep with -m1 option" {
+    result=$(printf "a\na\na\n" | v0_grep -m1 "a")
+    [[ "$result" == "a" ]]
+    [[ $(echo "$result" | wc -l | tr -d ' ') -eq 1 ]]
+}
+
 @test "v0_grep with file argument" {
     echo "test line" > "$TEST_TEMP_DIR/file.txt"
 
     result=$(v0_grep "test" "$TEST_TEMP_DIR/file.txt")
     [[ "$result" == "test line" ]]
+}
+
+# ============================================================================
+# Edge Cases
+# ============================================================================
+
+@test "v0_grep handles empty input" {
+    result=$(echo "" | v0_grep "pattern" || true)
+    [[ -z "$result" ]]
+}
+
+@test "v0_grep handles special characters in pattern" {
+    echo "test^$pattern" | v0_grep -F "test^$pattern"
 }
 
 # ============================================================================
@@ -220,4 +276,13 @@ setup() {
     local inverted
     inverted=$(v0_grep_invert "line" "$TEST_TEMP_DIR/test.txt")
     [[ "$inverted" == "other" ]]
+}
+
+@test "v0_grep with piped input produces same results as grep" {
+    input="line1
+line2
+line3"
+    grep_result=$(echo "$input" | grep "line" | wc -l | tr -d ' ')
+    v0_result=$(echo "$input" | v0_grep "line" | wc -l | tr -d ' ')
+    [[ "$grep_result" == "$v0_result" ]]
 }

@@ -78,8 +78,8 @@ EOF
 # Template Tests
 # ============================================================================
 
-@test "claude.feature.m4 uses V0_GIT_REMOTE in git push commands" {
-    local template_file="${PROJECT_ROOT}/packages/cli/lib/templates/claude.feature.m4"
+@test "claude.build.m4 uses V0_GIT_REMOTE in git push commands" {
+    local template_file="${PROJECT_ROOT}/packages/cli/lib/templates/claude.build.m4"
 
     # Check that template references V0_GIT_REMOTE
     run grep "V0_GIT_REMOTE" "${template_file}"
@@ -98,8 +98,8 @@ EOF
 # Integration Tests - V0_GIT_REMOTE with V0_DEVELOP_BRANCH
 # ============================================================================
 
-@test "stop-feature.sh includes V0_GIT_REMOTE in error message" {
-    local hook_file="${PROJECT_ROOT}/packages/hooks/lib/stop-feature.sh"
+@test "stop-build.sh includes V0_GIT_REMOTE in error message" {
+    local hook_file="${PROJECT_ROOT}/packages/hooks/lib/stop-build.sh"
 
     # Check that the hook uses V0_GIT_REMOTE
     run grep "V0_GIT_REMOTE" "${hook_file}"

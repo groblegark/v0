@@ -18,6 +18,10 @@ source "${_MERGE_DIR}/../../core/lib/grep.sh"
 # BUILD_DIR - Path to build directory
 # REPO_NAME - Name of the repository
 
+# Source grep wrapper for better performance
+_MERGE_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+source "${_MERGE_DIR}/../../core/lib/grep.sh"
+
 # mg_has_conflicts <branch>
 # Check if merge would have conflicts (run from main repo)
 # Returns 0 if conflicts, 1 if no conflicts
