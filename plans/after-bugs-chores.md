@@ -1,5 +1,7 @@
 # Implementation Plan: `--after` Argument for v0 fix/chore
 
+**Root Feature:** `v0-c020`
+
 ## Overview
 
 Add an `--after` argument to `v0 fix` and `v0 chore` commands that accepts comma-separated issue IDs. When specified, the created bug/chore will be marked as blocked by those issues using wok's dependency system (`wk dep <id> blocked-by <deps>`). This hides the issue from `wk ready` until dependencies are resolved.
