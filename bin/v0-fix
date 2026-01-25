@@ -522,7 +522,10 @@ report_bug() {
     exit 1
   fi
 
-  id=$(echo "${output}" | grep -oE "$(v0_issue_pattern)" | head -1)
+  # Extract issue ID - match any prefix-hexid format (e.g., proj-abc1, v0-9e51)
+  # This is more robust than v0_issue_pattern which uses ISSUE_PREFIX from .v0.rc,
+  # while wk may use a different prefix from .wok/config.toml
+  id=$(echo "${output}" | grep -oE '[a-zA-Z0-9]+-[a-f0-9]+' | head -1)
 
   if [[ -z "${id}" ]]; then
     echo "Error: Failed to create bug (no ID returned)"

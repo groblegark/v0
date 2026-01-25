@@ -176,7 +176,8 @@ create_idea_issue() {
   local idea_id
 
   # Create idea issue for the roadmap
-  idea_id=$(wk new idea "${desc}" --label "roadmap:${NAME}" 2>/dev/null | grep -oE "${ISSUE_PREFIX}-[a-z0-9]+" | head -1)
+  # Use generic pattern to match any prefix-hexid format (wk prefix may differ from v0 ISSUE_PREFIX)
+  idea_id=$(wk new idea "${desc}" --label "roadmap:${NAME}" 2>/dev/null | grep -oE '[a-zA-Z0-9]+-[a-f0-9]+' | head -1)
 
   if [[ -z "${idea_id}" ]]; then
     echo "Warning: Failed to create roadmap idea issue (wk may not be initialized)"
