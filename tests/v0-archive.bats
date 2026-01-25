@@ -122,16 +122,16 @@ setup() {
     [[ "${output}" != *"new.md"* ]]
 }
 
-@test "archive default days is 30" {
-    # Create plan from 35 days ago
+@test "archive default days is 7" {
+    # Create plan from 10 days ago (should be archived)
     local old_date
-    old_date=$(date -v-35d +%Y-%m-%d 2>/dev/null || date -d "35 days ago" +%Y-%m-%d)
+    old_date=$(date -v-10d +%Y-%m-%d 2>/dev/null || date -d "10 days ago" +%Y-%m-%d)
     mkdir -p "${PLANS_DIR}/archive/${old_date}"
     echo "# Old" > "${PLANS_DIR}/archive/${old_date}/old.md"
 
-    # Create plan from 25 days ago (should be skipped)
+    # Create plan from 5 days ago (should be skipped)
     local new_date
-    new_date=$(date -v-25d +%Y-%m-%d 2>/dev/null || date -d "25 days ago" +%Y-%m-%d)
+    new_date=$(date -v-5d +%Y-%m-%d 2>/dev/null || date -d "5 days ago" +%Y-%m-%d)
     mkdir -p "${PLANS_DIR}/archive/${new_date}"
     echo "# New" > "${PLANS_DIR}/archive/${new_date}/new.md"
 
