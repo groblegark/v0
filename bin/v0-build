@@ -631,14 +631,14 @@ if [[ "${PHASE}" = "init" ]]; then
   else
     if tmux has-session -t "${PLAN_SESSION}" 2>/dev/null; then
       echo "Plan session '${PLAN_SESSION}' already running, waiting for completion..."
-      echo "Attach with: v0 attach feature ${NAME}"
+      echo "Attach with: v0 attach ${NAME}"
     else
       echo ""
       echo -e "${C_BOLD}${C_CYAN}=== Starting planning step ===${C_RESET}"
       echo -e "Session: ${C_DIM}${PLAN_SESSION}${C_RESET}"
       echo ""
       echo "Attach to watch planning:"
-      echo -e "  ${C_BOLD}v0 attach feature ${NAME}${C_RESET}"
+      echo -e "  ${C_BOLD}v0 attach ${NAME}${C_RESET}"
       echo -e "  ${C_DIM}(Ctrl-B D to detach)${C_RESET}"
       echo ""
 
@@ -782,7 +782,7 @@ if [[ "${PHASE}" = "queued" ]] && [[ -z "${ENQUEUE_ONLY}" ]]; then
   else
     if tmux has-session -t "${SESSION}" 2>/dev/null; then
       echo "Error: tmux session '${SESSION}' already exists"
-      echo "Attach with: v0 attach feature ${NAME}"
+      echo "Attach with: v0 attach ${NAME}"
       echo "Or kill it:  v0 shutdown"
       exit 1
     fi
@@ -848,7 +848,7 @@ if [[ "${PHASE}" = "queued" ]] && [[ -z "${ENQUEUE_ONLY}" ]]; then
     fi
     echo ""
     echo "Watch live:"
-    echo -e "  ${C_BOLD}v0 attach feature ${NAME}${C_RESET}"
+    echo -e "  ${C_BOLD}v0 attach ${NAME}${C_RESET}"
     echo -e "  ${C_DIM}(Ctrl-B D to detach)${C_RESET}"
     echo ""
     echo "Check status:"
@@ -869,5 +869,5 @@ elif [[ "${PHASE}" = "queued" ]]; then
 elif [[ "${PHASE}" = "executing" ]]; then
   SESSION=$(get_state tmux_session)
   echo "Operation '${NAME}' is already executing"
-  echo "Attach with: v0 attach feature ${NAME}"
+  echo "Attach with: v0 attach ${NAME}"
 fi
