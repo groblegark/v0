@@ -164,6 +164,7 @@ sm_transition_to_pending_merge() {
 
 # sm_transition_to_merged <op>
 # Transition operation to merged phase
+# Also marks the wok epic as done to unblock dependents
 sm_transition_to_merged() {
   local op="$1"
 
@@ -177,6 +178,35 @@ sm_transition_to_merged() {
   _sm_do_transition "${op}" "merged" "merge:completed" "" \
     "merged_at" "\"$(date -u +%Y-%m-%dT%H:%M:%SZ)\"" \
     "merge_status" "\"merged\""
+
+  # Mark the wok epic as done to unblock dependent operations
+  _sm_close_wok_epic "${op}"
+}
+
+# _sm_close_wok_epic <op>
+# Internal helper to mark the operation's wok epic as done
+# This unblocks any operations that were waiting on this one
+_sm_close_wok_epic() {
+  local op="$1"
+  local epic_id
+
+  epic_id=$(sm_read_state "${op}" "epic_id")
+  if [[ -z "${epic_id}" ]] || [[ "${epic_id}" == "null" ]]; then
+    return 0  # No epic to close
+  fi
+
+  # Check if already done/closed
+  local status
+  status=$(wk show "${epic_id}" -o json 2>/dev/null | jq -r '.status // "unknown"')
+  case "${status}" in
+    done|closed) return 0 ;;  # Already closed
+  esac
+
+  # Mark as done - use --reason for agent compatibility
+  if ! wk done "${epic_id}" --reason "Merged to ${V0_DEVELOP_BRANCH:-main}" 2>/dev/null; then
+    # Log but don't fail - the git merge already succeeded
+    sm_emit_event "${op}" "wok:warn" "Failed to mark epic ${epic_id} as done"
+  fi
 }
 
 # sm_transition_to_failed <op> <error>

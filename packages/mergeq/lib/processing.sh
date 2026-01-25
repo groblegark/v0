@@ -298,12 +298,8 @@ mq_process_merge() {
             return 1
         fi
 
-        # Verified - mark as merged
-        local merged_at
-        merged_at=$(date -u +%Y-%m-%dT%H:%M:%SZ)
-        sm_update_state "${op}" "merge_status" '"merged"'
-        sm_update_state "${op}" "merged_at" "\"${merged_at}\""
-        sm_update_state "${op}" "phase" '"merged"'
+        # Verified - mark as merged (this also marks wok epic as done to unblock dependents)
+        sm_transition_to_merged "${op}"
         mq_update_entry_status "${op}" "${MQ_STATUS_COMPLETED}"
         mq_log_event "merge:completed: ${op}"
         mq_emit_event "merge:completed" "${op}"
@@ -322,7 +318,7 @@ mq_process_merge() {
             fi
         fi
 
-        # Trigger dependent operations
+        # Trigger dependent operations (wok epic already marked done above)
         local dep_op
         for dep_op in $(sm_find_dependents "${op}" 2>/dev/null); do
             echo "[$(date +%H:%M:%S)] Unblocking dependent operation: ${dep_op}"
