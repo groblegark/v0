@@ -19,7 +19,7 @@
 mq_is_branch_merge() {
     local op="$1"
     # Check if it exists as a branch on remote
-    git ls-remote --heads "${V0_GIT_REMOTE}" "${op}" 2>/dev/null | grep -q .
+    git ls-remote --heads "${V0_GIT_REMOTE}" "${op}" 2>/dev/null | v0_grep_quiet .
 }
 
 # mq_is_branch_ready <branch>

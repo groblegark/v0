@@ -251,7 +251,7 @@ v0_init_config() {
 
       # Add .wok to gitignore when wk init runs
       if [[ -f "${target_dir}/.gitignore" ]]; then
-        if ! grep -q "^\.wok/" "${target_dir}/.gitignore"; then
+        if ! v0_grep_quiet "^\.wok/" "${target_dir}/.gitignore"; then
           echo ".wok/" >> "${target_dir}/.gitignore"
           echo "Added .wok/ to .gitignore"
         fi
@@ -264,7 +264,7 @@ v0_init_config() {
 
   # Ensure .v0/ is in gitignore (always, regardless of wk state)
   if [[ -f "${target_dir}/.gitignore" ]]; then
-    if ! grep -q "^\.v0/" "${target_dir}/.gitignore"; then
+    if ! v0_grep_quiet "^\.v0/" "${target_dir}/.gitignore"; then
       echo ".v0/" >> "${target_dir}/.gitignore"
       echo "Added .v0/ to .gitignore"
     fi

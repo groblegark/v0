@@ -16,7 +16,7 @@ mq_acquire_lock() {
     if [[ -f "${QUEUE_LOCK}" ]]; then
         # Stale check: if PID in lock is dead, remove it
         local holder_pid
-        holder_pid=$(grep -oE 'pid [0-9]+' "${QUEUE_LOCK}" 2>/dev/null | grep -oE '[0-9]+' || true)
+        holder_pid=$(v0_grep_extract 'pid [0-9]+' "${QUEUE_LOCK}" 2>/dev/null | v0_grep_extract '[0-9]+' || true)
         if [[ -n "${holder_pid}" ]] && ! kill -0 "${holder_pid}" 2>/dev/null; then
             rm -f "${QUEUE_LOCK}"
         else

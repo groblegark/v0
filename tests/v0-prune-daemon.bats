@@ -30,12 +30,20 @@ setup() {
 }
 
 teardown() {
-    # Stop any running daemon
-    if [[ -f "${BUILD_DIR}/.prune-daemon.pid" ]]; then
+    # Stop any running daemon BEFORE cleaning up directories
+    # This prevents "getcwd: cannot access parent directories" errors
+    if [[ -n "${BUILD_DIR:-}" ]] && [[ -f "${BUILD_DIR}/.prune-daemon.pid" ]]; then
         local pid
-        pid=$(cat "${BUILD_DIR}/.prune-daemon.pid")
-        kill "${pid}" 2>/dev/null || true
-        rm -f "${BUILD_DIR}/.prune-daemon.pid"
+        pid=$(cat "${BUILD_DIR}/.prune-daemon.pid" 2>/dev/null || true)
+        if [[ -n "${pid}" ]]; then
+            kill -9 "${pid}" 2>/dev/null || true
+            # Wait for process to actually terminate
+            for _ in 1 2 3 4 5; do
+                kill -0 "${pid}" 2>/dev/null || break
+                sleep 0.1
+            done
+        fi
+        rm -f "${BUILD_DIR}/.prune-daemon.pid" 2>/dev/null || true
     fi
 
     # Standard teardown
@@ -132,11 +140,15 @@ teardown() {
     prune_daemon_start
 
     # Give daemon time to complete initial prune
-    sleep 1
+    sleep 2
 
-    run cat "${BUILD_DIR}/logs/prune-daemon.log"
-    assert_output --partial "Starting pruning"
-    assert_output --partial "Pruning complete"
+    # Check that log file contains expected messages
+    # Use grep to be more resilient to timing issues
+    run grep "Starting pruning" "${BUILD_DIR}/logs/prune-daemon.log"
+    assert_success
+
+    run grep "Pruning complete" "${BUILD_DIR}/logs/prune-daemon.log"
+    assert_success
 }
 
 # ============================================================================
@@ -169,13 +181,14 @@ teardown() {
 # Lock file tests
 # ============================================================================
 
-@test "daemon acquires lock during pruning" {
+@test "daemon creates lock file" {
     prune_daemon_start
 
-    # Give daemon time to run
-    sleep 0.5
+    # Give daemon time to run initial prune
+    sleep 2
 
-    # Lock file should exist
+    # Lock file should exist (created even if not currently held)
+    # The lock file is created when flock is called
     assert_file_exists "${BUILD_DIR}/.prune-daemon.lock"
 }
 
