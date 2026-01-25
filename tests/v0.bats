@@ -47,7 +47,7 @@ load '../packages/test-support/helpers/test_helper'
 
 @test "v0 help shows resume in same section as cancel" {
     # resume should be grouped with cancel/hold/prune (operational control commands)
-    # not with feat/plan/decompose (feature pipeline commands)
+    # not with feat/plan (feature pipeline commands)
     run "${PROJECT_ROOT}/bin/v0" --help
     assert_success
     # Extract the section containing cancel and verify resume is nearby
@@ -125,15 +125,6 @@ load '../packages/test-support/helpers/test_helper'
     # usage() exits 1 but shows help
     assert_failure
     assert_output --partial "Usage: v0 build"
-}
-
-@test "v0 decomp routes to decompose" {
-    create_v0rc "testproject" "test"
-    # decompose without args shows usage
-    run "${PROJECT_ROOT}/bin/v0" decomp
-    # usage() exits 1 but shows help
-    assert_failure
-    assert_output --partial "Usage: v0 decompose"
 }
 
 @test "v0 bug routes to fix" {

@@ -248,7 +248,7 @@ detect_operation_type() {
         mergeq|merge|nudge)
             echo "daemon"
             ;;
-        plan|decompose)
+        plan)
             echo "phase"
             ;;
         *)

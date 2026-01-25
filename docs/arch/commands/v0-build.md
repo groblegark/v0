@@ -9,7 +9,7 @@ See [operations/state.md](../operations/state.md) for state machine, phases, and
 ```bash
 v0 build auth "Add JWT authentication"       # Full pipeline
 v0 build auth --plan plans/auth.md           # With existing plan
-v0 build auth "Add JWT auth" --enqueue       # Plan + decompose only
+v0 build auth "Add JWT auth" --enqueue       # Plan only
 v0 build auth --resume                       # Resume from current phase
 v0 build auth "Add JWT auth" --foreground    # Run blocking
 v0 build api "Build API" --after auth        # Chain operations
@@ -20,7 +20,7 @@ v0 build api "Build API" --after auth        # Chain operations
 | Flag | Description |
 |------|-------------|
 | `--plan <file>` | Use existing plan file |
-| `--enqueue` | Plan + decompose only, don't execute |
+| `--enqueue` | Plan only, don't execute |
 | `--resume` | Continue from current phase |
 | `--foreground` | Run blocking instead of background |
 | `--after <name>` | Wait for another operation to complete first |

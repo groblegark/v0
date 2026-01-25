@@ -70,7 +70,7 @@ v0 init --develop staging --remote upstream
 The main workflow is fire-and-forget. Start work and let it run:
 
 ```bash
-v0 build auth "Add JWT authentication"      # Plans, decomposes, implements, merges
+v0 build auth "Add JWT authentication"      # Plans, implements, merges
 v0 chore "Update dependencies"              # Files issue, starts worker immediately
 v0 fix "Login button broken on mobile"      # Files bug, starts worker immediately
 ```
@@ -102,9 +102,8 @@ You'll get macOS notifications as tasks complete and branches merge.
 Builds go through a planning lifecycle:
 
 1. **Plan** - Creates `plans/<name>.md` with implementation steps
-2. **Decompose** - Converts the plan into trackable issues
-3. **Execute** - Works through issues in isolated worktrees
-4. **Merge** - Completed work merges to main
+2. **Execute** - Works through the plan in an isolated worktree
+3. **Merge** - Completed work merges to main
 
 You can create plans separately for review:
 
@@ -117,7 +116,7 @@ v0 build plans/api.md                  # Execute the plan
 Or let `v0 build` handle everything:
 
 ```bash
-v0 build api "Build REST API"          # Plans, decomposes, executes, merges
+v0 build api "Build REST API"          # Plans, executes, merges
 ```
 
 Completed plans are archived to `plans/archive/`.

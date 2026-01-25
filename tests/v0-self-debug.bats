@@ -382,14 +382,6 @@ update_operation_state() {
     assert_output --partial "operation: new-plan"
 }
 
-@test "v0-self-debug: decompose debugs most recent decomposing operation" {
-    create_mock_operation "decompose-fail" "feature" "decomposing" "error"
-
-    run "${V0_SELF_DEBUG}" decompose --stdout
-    assert_success
-    assert_output --partial "operation: decompose-fail"
-}
-
 @test "v0-self-debug: reports error when no plan operation exists" {
     # Ensure operations directory exists but has no plan operations
     mkdir -p "${TEST_TEMP_DIR}/project/.v0/build/operations"

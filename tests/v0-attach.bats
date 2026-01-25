@@ -261,7 +261,7 @@ EOF
         "'"${PROJECT_ROOT}"'/bin/v0-attach" feature api
     '
     assert_failure
-    assert_output --partial "v0-myproject-api-decompose"
+    assert_output --partial "v0-myproject-api-feature"
 }
 
 @test "attach feature shows status for merged phase" {
