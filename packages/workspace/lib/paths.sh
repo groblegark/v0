@@ -40,3 +40,21 @@ ws_is_valid_workspace() {
   local dir="${1:-${V0_WORKSPACE_DIR}}"
   [[ -d "${dir}" ]] && { [[ -d "${dir}/.git" ]] || [[ -f "${dir}/.git" ]]; }
 }
+
+# ws_get_git_dir
+# Get the actual git directory for the workspace (works for both repos and worktrees)
+# For regular repos: returns .git directory
+# For worktrees: returns the worktree-specific git directory
+# Args: directory path (defaults to V0_WORKSPACE_DIR)
+# Outputs: absolute path to git directory, or empty on error
+ws_get_git_dir() {
+  local dir="${1:-${V0_WORKSPACE_DIR}}"
+  local git_dir
+  git_dir=$(git -C "${dir}" rev-parse --git-dir 2>/dev/null) || return 1
+
+  # Handle relative paths from git rev-parse
+  if [[ "${git_dir}" != /* ]]; then
+    git_dir="${dir}/${git_dir}"
+  fi
+  echo "${git_dir}"
+}

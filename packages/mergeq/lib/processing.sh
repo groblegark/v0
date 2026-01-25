@@ -103,7 +103,7 @@ mq_process_branch_merge() {
     mq_log_event "merge:started: ${branch} (branch)"
     mq_emit_event "merge:started" "${branch}"
 
-    # Ensure workspace exists and switch to it
+    # Ensure workspace exists
     if ! ws_ensure_workspace; then
         echo "[$(date +%H:%M:%S)] Failed to create workspace" >&2
         mq_update_entry_status "${branch}" "${MQ_STATUS_FAILED}"
@@ -111,14 +111,17 @@ mq_process_branch_merge() {
         mq_emit_event "merge:failed" "${branch}"
         return 1
     fi
-    cd "${V0_WORKSPACE_DIR}"
 
-    # Ensure we're on the main branch
+    # Use explicit -C flag for all git operations to ensure we're in the workspace
+    # This avoids issues with cwd being in the wrong directory
+    local ws="${V0_WORKSPACE_DIR}"
+
+    # Ensure we're on the develop branch
     local current_branch
-    current_branch=$(git rev-parse --abbrev-ref HEAD)
+    current_branch=$(git -C "${ws}" rev-parse --abbrev-ref HEAD)
     if [[ "${current_branch}" != "${V0_DEVELOP_BRANCH}" ]]; then
         echo "[$(date +%H:%M:%S)] Switching to ${V0_DEVELOP_BRANCH} (was on ${current_branch})"
-        if ! git checkout "${V0_DEVELOP_BRANCH}" 2>&1 | tee -a "${MERGEQ_DIR}/logs/merges.log"; then
+        if ! git -C "${ws}" checkout "${V0_DEVELOP_BRANCH}" 2>&1 | tee -a "${MERGEQ_DIR}/logs/merges.log"; then
             echo "[$(date +%H:%M:%S)] Failed to checkout ${V0_DEVELOP_BRANCH}" >&2
             mq_update_entry_status "${branch}" "${MQ_STATUS_FAILED}"
             mq_log_event "merge:failed: ${branch} (checkout failed)"
@@ -128,20 +131,13 @@ mq_process_branch_merge() {
     fi
 
     # Pull latest develop branch to stay current
-    git pull --ff-only "${V0_GIT_REMOTE}" "${V0_DEVELOP_BRANCH}" 2>&1 | tee -a "${MERGEQ_DIR}/logs/merges.log" || true
+    git -C "${ws}" pull --ff-only "${V0_GIT_REMOTE}" "${V0_DEVELOP_BRANCH}" 2>&1 | tee -a "${MERGEQ_DIR}/logs/merges.log" || true
 
     # Clean up any incomplete merge/rebase state from previous failed attempts
-    if [[ -d ".git/rebase-merge" ]] || [[ -d ".git/rebase-apply" ]]; then
-        echo "[$(date +%H:%M:%S)] Aborting incomplete rebase..."
-        git rebase --abort 2>/dev/null || true
-    fi
-    if [[ -f ".git/MERGE_HEAD" ]]; then
-        echo "[$(date +%H:%M:%S)] Aborting incomplete merge..."
-        git merge --abort 2>/dev/null || true
-    fi
+    ws_abort_incomplete_operations "${ws}"
 
     # Fetch latest
-    if ! git fetch "${V0_GIT_REMOTE}" "${branch}" 2>&1 | tee -a "${MERGEQ_DIR}/logs/merges.log"; then
+    if ! git -C "${ws}" fetch "${V0_GIT_REMOTE}" "${branch}" 2>&1 | tee -a "${MERGEQ_DIR}/logs/merges.log"; then
         echo "[$(date +%H:%M:%S)] Failed to fetch ${branch}" >&2
         mq_update_entry_status "${branch}" "${MQ_STATUS_FAILED}"
         mq_log_event "merge:failed: ${branch} (fetch failed)"
@@ -153,7 +149,7 @@ mq_process_branch_merge() {
     # OK: Capture exit code without aborting script
     set +e
     local merge_output
-    merge_output=$(git merge --no-edit "${V0_GIT_REMOTE}/${branch}" 2>&1)
+    merge_output=$(git -C "${ws}" merge --no-edit "${V0_GIT_REMOTE}/${branch}" 2>&1)
     local merge_exit=$?
     set -e
 
@@ -162,7 +158,7 @@ mq_process_branch_merge() {
     if [[ ${merge_exit} -eq 0 ]]; then
         # Success - push to remote
         echo "Pushing merged changes..."
-        if ! git push "${V0_GIT_REMOTE}" "${V0_DEVELOP_BRANCH}" 2>&1 | tee -a "${MERGEQ_DIR}/logs/merges.log"; then
+        if ! git -C "${ws}" push "${V0_GIT_REMOTE}" "${V0_DEVELOP_BRANCH}" 2>&1 | tee -a "${MERGEQ_DIR}/logs/merges.log"; then
             echo "[$(date +%H:%M:%S)] Push failed for ${branch}" >&2
             mq_update_entry_status "${branch}" "${MQ_STATUS_FAILED}"
             mq_log_event "merge:failed: ${branch} (push failed)"
@@ -172,7 +168,7 @@ mq_process_branch_merge() {
 
         # Delete the merged branch
         echo "Deleting merged branch ${V0_GIT_REMOTE}/${branch}..."
-        git push "${V0_GIT_REMOTE}" --delete "${branch}" 2>&1 | tee -a "${MERGEQ_DIR}/logs/merges.log" || true
+        git -C "${ws}" push "${V0_GIT_REMOTE}" --delete "${branch}" 2>&1 | tee -a "${MERGEQ_DIR}/logs/merges.log" || true
 
         mq_update_entry_status "${branch}" "${MQ_STATUS_COMPLETED}"
         mq_log_event "merge:completed: ${branch} (branch)"

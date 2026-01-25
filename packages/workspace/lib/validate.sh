@@ -50,6 +50,23 @@ ws_get_current_branch() {
   git -C "${V0_WORKSPACE_DIR}" rev-parse --abbrev-ref HEAD 2>/dev/null
 }
 
+# ws_abort_incomplete_operations
+# Abort any in-progress rebase or merge in the workspace
+# Args: directory path (defaults to V0_WORKSPACE_DIR)
+# Returns: 0 always (failures are silently ignored)
+ws_abort_incomplete_operations() {
+  local dir="${1:-${V0_WORKSPACE_DIR}}"
+  local git_dir
+  if git_dir=$(ws_get_git_dir "${dir}"); then
+    if [[ -d "${git_dir}/rebase-merge" ]] || [[ -d "${git_dir}/rebase-apply" ]]; then
+      git -C "${dir}" rebase --abort 2>/dev/null || true
+    fi
+    if [[ -f "${git_dir}/MERGE_HEAD" ]]; then
+      git -C "${dir}" merge --abort 2>/dev/null || true
+    fi
+  fi
+}
+
 # ws_sync_to_develop
 # Reset workspace to V0_DEVELOP_BRANCH (fetch + checkout + reset)
 # This ensures the workspace is clean and up to date with remote
@@ -63,12 +80,7 @@ ws_sync_to_develop() {
   git -C "${V0_WORKSPACE_DIR}" fetch "${V0_GIT_REMOTE}" "${V0_DEVELOP_BRANCH}" 2>/dev/null || true
 
   # Abort any in-progress rebase or merge
-  if [[ -d "${V0_WORKSPACE_DIR}/.git/rebase-merge" ]] || [[ -d "${V0_WORKSPACE_DIR}/.git/rebase-apply" ]]; then
-    git -C "${V0_WORKSPACE_DIR}" rebase --abort 2>/dev/null || true
-  fi
-  if [[ -f "${V0_WORKSPACE_DIR}/.git/MERGE_HEAD" ]]; then
-    git -C "${V0_WORKSPACE_DIR}" merge --abort 2>/dev/null || true
-  fi
+  ws_abort_incomplete_operations
 
   # Checkout develop branch
   if ! ws_is_on_develop; then
