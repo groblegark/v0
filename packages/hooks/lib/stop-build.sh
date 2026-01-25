@@ -63,7 +63,7 @@ fi
 
 # Check for uncommitted changes in worktree
 if [ -n "$V0_WORKTREE" ] && [ -d "$V0_WORKTREE" ]; then
-  UNCOMMITTED=$(git -C "$V0_WORKTREE" status --porcelain 2>/dev/null | v0_grep_invert '^??' | wc -l | tr -d ' ')
+  UNCOMMITTED=$(git -C "$V0_WORKTREE" status --porcelain 2>/dev/null | v0_grep_invert '^[?][?]' | wc -l | tr -d ' ')
   if [ "$UNCOMMITTED" -gt 0 ]; then
     REPO_NAME=$(basename "$V0_WORKTREE")
     echo "{\"decision\": \"block\", \"reason\": \"Uncommitted changes in worktree. Run: cd $REPO_NAME && git add . && git commit -m \\\"...\\\" && git push ${V0_GIT_REMOTE:-origin}\"}"
