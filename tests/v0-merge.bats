@@ -378,6 +378,137 @@ EOF
     assert_output --partial "previously failed to merge"
 }
 
+@test "v0-merge: verification_failed with remote branch already merged cleans up" {
+    local project_dir
+    project_dir=$(setup_isolated_project)
+
+    # Create a bare "remote" repo
+    local remote_dir="${TEST_TEMP_DIR}/remote.git"
+    git init --bare --quiet "${remote_dir}"
+
+    # Initialize git repo
+    cd "${project_dir}"
+    git init --quiet
+    git config user.email "test@test.com"
+    git config user.name "Test"
+    git remote add origin "${remote_dir}"
+    echo "initial" > file.txt
+    git add file.txt
+    git commit --quiet -m "Initial commit"
+    git push --quiet -u origin HEAD
+
+    # Get the default branch name
+    local default_branch
+    default_branch=$(git rev-parse --abbrev-ref HEAD)
+
+    # Update .v0.rc to use the correct develop branch
+    echo "V0_DEVELOP_BRANCH=\"${default_branch}\"" >> "${project_dir}/.v0.rc"
+
+    # Create feature branch, push to remote, then merge to main
+    git checkout -b feature/remote-merged --quiet
+    echo "feature" > feature.txt
+    git add feature.txt
+    git commit --quiet -m "Feature commit"
+    git push --quiet -u origin feature/remote-merged
+    git checkout "${default_branch}" --quiet
+    git merge --ff-only feature/remote-merged --quiet
+    git push --quiet origin "${default_branch}"
+
+    # Delete local feature branch (simulating worktree cleanup)
+    git branch -d feature/remote-merged
+
+    # Delete local remote-tracking ref (simulating stale refs)
+    git update-ref -d refs/remotes/origin/feature/remote-merged
+
+    # Create operation state with verification_failed status
+    # Remote branch still exists but local refs are stale
+    mkdir -p "${project_dir}/.v0/build/operations/test-op"
+    cat > "${project_dir}/.v0/build/operations/test-op/state.json" <<EOF
+{
+    "name": "test-op",
+    "phase": "completed",
+    "worktree": "/nonexistent/path",
+    "branch": "feature/remote-merged",
+    "merge_status": "verification_failed",
+    "merge_commit": "0000000000000000000000000000000000000000"
+}
+EOF
+
+    run env -u PROJECT -u ISSUE_PREFIX -u V0_ROOT -u BUILD_DIR -u MERGEQ_DIR bash -c '
+        cd "'"${project_dir}"'" || exit 1
+        "'"${V0_MERGE}"'" test-op 2>&1
+    '
+    # Should output cleanup message instead of error
+    assert_output --partial "already merged"
+    assert_output --partial "Cleanup complete"
+    refute_output --partial "Error:"
+}
+
+@test "v0-merge: verification_failed with remote branch not merged allows merge" {
+    local project_dir
+    project_dir=$(setup_isolated_project)
+
+    # Create a bare "remote" repo
+    local remote_dir="${TEST_TEMP_DIR}/remote.git"
+    git init --bare --quiet "${remote_dir}"
+
+    # Initialize git repo
+    cd "${project_dir}"
+    git init --quiet
+    git config user.email "test@test.com"
+    git config user.name "Test"
+    git remote add origin "${remote_dir}"
+    echo "initial" > file.txt
+    git add file.txt
+    git commit --quiet -m "Initial commit"
+    git push --quiet -u origin HEAD
+
+    # Get the default branch name
+    local default_branch
+    default_branch=$(git rev-parse --abbrev-ref HEAD)
+
+    # Update .v0.rc to use the correct develop branch
+    echo "V0_DEVELOP_BRANCH=\"${default_branch}\"" >> "${project_dir}/.v0.rc"
+
+    # Create feature branch and push to remote, but don't merge
+    git checkout -b feature/remote-not-merged --quiet
+    echo "feature" > feature.txt
+    git add feature.txt
+    git commit --quiet -m "Feature commit"
+    git push --quiet -u origin feature/remote-not-merged
+    git checkout "${default_branch}" --quiet
+
+    # Delete local feature branch (simulating worktree cleanup)
+    git branch -D feature/remote-not-merged
+
+    # Delete local remote-tracking ref (simulating stale refs)
+    git update-ref -d refs/remotes/origin/feature/remote-not-merged
+
+    # Create operation state with verification_failed status
+    # Remote branch exists but local refs are stale
+    mkdir -p "${project_dir}/.v0/build/operations/test-op"
+    cat > "${project_dir}/.v0/build/operations/test-op/state.json" <<EOF
+{
+    "name": "test-op",
+    "phase": "completed",
+    "worktree": "/nonexistent/path",
+    "branch": "feature/remote-not-merged",
+    "merge_status": "verification_failed",
+    "merge_commit": "0000000000000000000000000000000000000000"
+}
+EOF
+
+    run env -u PROJECT -u ISSUE_PREFIX -u V0_ROOT -u BUILD_DIR -u MERGEQ_DIR bash -c '
+        cd "'"${project_dir}"'" || exit 1
+        "'"${V0_MERGE}"'" test-op 2>&1
+    '
+    # Should find remote branch and attempt merge (success since ff is possible)
+    assert_success
+    assert_output --partial "Found remote branch"
+    assert_output --partial "attempting merge"
+    refute_output --partial "previously failed to merge"
+}
+
 # ============================================================================
 # Non-Fast-Forward Merge Tests
 # ============================================================================
