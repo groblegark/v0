@@ -78,8 +78,10 @@ pp_do_push() {
         # Also update local agent branch if it exists and isn't in use
         if git rev-parse --verify "${agent_branch}" >/dev/null 2>&1; then
             # Check if branch is checked out in a worktree
+            # Porcelain format: "worktree /path\nHEAD sha\nbranch refs/heads/name\n\n"
+            # Search backwards from the branch line to find the worktree path
             local worktree_path
-            worktree_path=$(git worktree list --porcelain | grep -A1 "^worktree " | grep -B1 "branch refs/heads/${agent_branch}$" | head -1 | sed 's/^worktree //')
+            worktree_path=$(git worktree list --porcelain | grep -B2 "^branch refs/heads/${agent_branch}$" | head -1 | sed 's/^worktree //')
             if [[ -n "${worktree_path}" ]]; then
                 # Branch is in use by a worktree; skip local update (remote was already updated)
                 true
