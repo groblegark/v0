@@ -105,10 +105,10 @@ EOF
     assert_output --partial "Usage: v0 monitor"
 }
 
-@test "v0 --help shows monitor command" {
+@test "v0 --help does not show monitor command (internal only)" {
     run "${PROJECT_ROOT}/bin/v0" --help
     assert_success
-    assert_output --partial "monitor"
+    refute_output --partial "monitor"
 }
 
 # ============================================================================

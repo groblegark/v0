@@ -89,7 +89,6 @@ Commands:
   resume        Resume an existing feature (alias for 'feature --resume')
   hold          Put an operation on hold (pause phase transitions)
   prune         Remove completed/cancelled operation state
-  monitor       Monitor worker queues for auto-shutdown
 
   prime         Quick-start guide (run after context loss)
   talk          Open claude with haiku model for quick conversations
