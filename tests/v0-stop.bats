@@ -121,6 +121,18 @@ EOF
     assert_output --partial "Would run: v0 mergeq --stop"
 }
 
+@test "stop nudge --dry-run shows single worker" {
+    local project_dir
+    project_dir=$(setup_isolated_project)
+
+    run env -u PROJECT -u ISSUE_PREFIX -u V0_ROOT bash -c '
+        cd "'"$project_dir"'"
+        "'"$PROJECT_ROOT"'/bin/v0-stop" nudge --dry-run
+    '
+    assert_success
+    assert_output --partial "Would run: v0 nudge stop"
+}
+
 @test "stop --dry-run fix accepts options in any order" {
     local project_dir
     project_dir=$(setup_isolated_project)

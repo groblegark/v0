@@ -8,7 +8,7 @@ V0_DIR="$(cd "$(dirname "$0")/.." && pwd)"
 source "${V0_DIR}/packages/cli/lib/v0-common.sh"
 
 # Valid worker types
-VALID_WORKERS="fix chore mergeq"
+VALID_WORKERS="fix chore mergeq nudge"
 
 usage() {
   v0_help <<'EOF'
@@ -20,6 +20,7 @@ Workers:
   fix       Stop the bug fix worker
   chore     Stop the chore worker
   mergeq    Stop the merge queue daemon
+  nudge     Stop the nudge daemon
 
 If no worker is specified, performs full shutdown (equivalent to 'v0 shutdown').
 
@@ -56,7 +57,7 @@ while [[ $# -gt 0 ]]; do
     -h|--help)
       usage
       ;;
-    fix|chore|mergeq)
+    fix|chore|mergeq|nudge)
       if [[ -n "${WORKER}" ]]; then
         echo "Error: Only one worker can be specified" >&2
         echo "To stop all workers, run: v0 shutdown" >&2
@@ -81,11 +82,21 @@ if [[ -z "${WORKER}" ]]; then
 else
   # Specific worker
   if [[ -n "${DRY_RUN}" ]]; then
-    echo "Would run: v0 ${WORKER} --stop"
+    # nudge uses 'stop' subcommand, others use '--stop' flag
+    if [[ "${WORKER}" = "nudge" ]]; then
+      echo "Would run: v0 ${WORKER} stop"
+    else
+      echo "Would run: v0 ${WORKER} --stop"
+    fi
   else
     if [[ -n "${FORCE}" ]]; then
       echo "Note: --force has no effect on individual worker stop" >&2
     fi
-    exec "${V0_DIR}/bin/v0-${WORKER}" --stop
+    # nudge uses 'stop' subcommand, others use '--stop' flag
+    if [[ "${WORKER}" = "nudge" ]]; then
+      exec "${V0_DIR}/bin/v0-${WORKER}" stop
+    else
+      exec "${V0_DIR}/bin/v0-${WORKER}" --stop
+    fi
   fi
 fi
