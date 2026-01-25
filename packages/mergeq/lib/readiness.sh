@@ -29,7 +29,7 @@ mq_is_branch_ready() {
     local branch="$1"
 
     # Check if branch exists on remote (already verified by mq_is_branch_merge)
-    if ! git ls-remote --heads "${V0_GIT_REMOTE}" "${branch}" 2>/dev/null | grep -q .; then
+    if ! git ls-remote --heads "${V0_GIT_REMOTE}" "${branch}" 2>/dev/null | v0_grep_quiet .; then
         echo "Branch '${V0_GIT_REMOTE}/${branch}' does not exist" >&2
         return 1
     fi
