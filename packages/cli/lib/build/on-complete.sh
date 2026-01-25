@@ -19,6 +19,7 @@ feature_create_on_complete() {
   local v0_dir="$4"
   local v0_root="$5"
 
+  mkdir -p "${tree_dir}/.claude"
   cat > "${tree_dir}/.claude/on-complete.sh" <<WRAPPER
 #!/bin/bash
 STATE_FILE="${state_file}"
@@ -72,6 +73,7 @@ feature_create_settings() {
   local v0_dir="$2"
   local hook_script="${v0_dir}/packages/hooks/lib/stop-feature.sh"
 
+  mkdir -p "${tree_dir}/.claude"
   cat > "${tree_dir}/.claude/settings.local.json" <<SETTINGS_EOF
 {
   "hooks": {
