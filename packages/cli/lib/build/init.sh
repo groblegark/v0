@@ -10,7 +10,7 @@
 #   $1 = operation name
 #   $2 = prompt text
 #   $3 = name of array containing labels
-#   $4 = JSON object with options (no_merge, after, eager, safe)
+#   $4 = JSON object with options (no_merge)
 # Uses: STATE_DIR, STATE_FILE from caller
 feature_init_state() {
   local name="$1"
@@ -30,23 +30,11 @@ feature_init_state() {
   fi
 
   # Extract options
-  local no_merge after eager safe
+  local no_merge
   no_merge=$(echo "${options_json}" | jq -r '.no_merge // false')
-  after=$(echo "${options_json}" | jq -r '.after // ""')
-  eager=$(echo "${options_json}" | jq -r '.eager // false')
-  safe=$(echo "${options_json}" | jq -r '.safe // false')
 
   local merge_queued="true"
   [[ "${no_merge}" = "true" ]] && merge_queued="false"
-
-  local after_json="null"
-  local eager_json="false"
-  local safe_json="false"
-  if [[ -n "${after}" ]]; then
-    after_json="\"${after}\""
-    [[ "${eager}" = "true" ]] && eager_json="true"
-  fi
-  [[ "${safe}" = "true" ]] && safe_json="true"
 
   cat > "${STATE_FILE}" <<EOF
 {
@@ -66,13 +54,10 @@ feature_init_state() {
   "merge_status": null,
   "merged_at": null,
   "merge_error": null,
-  "after": ${after_json},
-  "eager": ${eager_json},
-  "safe": ${safe_json},
-  "blocked_phase": null,
   "worker_pid": null,
   "worker_log": null,
-  "worker_started_at": null
+  "worker_started_at": null,
+  "_schema_version": 2
 }
 EOF
 }

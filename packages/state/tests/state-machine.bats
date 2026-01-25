@@ -284,21 +284,6 @@ create_test_state() {
     assert_output "testp-abc123"
 }
 
-@test "sm_transition_to_blocked sets blocked state" {
-    create_test_state "test-op" "planned"
-
-    sm_transition_to_blocked "test-op" "parent-op" "planned"
-
-    run sm_read_state "test-op" "phase"
-    assert_output "blocked"
-
-    run sm_read_state "test-op" "after"
-    assert_output "parent-op"
-
-    run sm_read_state "test-op" "blocked_phase"
-    assert_output "planned"
-}
-
 @test "sm_transition_to_executing updates phase and session" {
     create_test_state "test-op" "queued"
 
@@ -729,32 +714,6 @@ create_test_state() {
     sm_transition_to_merged "lifecycle-test"
     run sm_get_phase "lifecycle-test"
     assert_output "merged"
-}
-
-@test "blocked operation can unblock and continue" {
-    create_test_state "parent-op" "init"
-    create_test_state "child-op" "init"
-
-    # Block child on parent
-    sm_transition_to_blocked "child-op" "parent-op" "init"
-    run sm_get_phase "child-op"
-    assert_output "blocked"
-
-    # Parent completes
-    sm_transition_to_planned "parent-op" "plans/parent.md"
-    sm_transition_to_queued "parent-op"
-    sm_transition_to_executing "parent-op" "v0-parent-session"
-    sm_transition_to_completed "parent-op"
-    sm_transition_to_pending_merge "parent-op"
-    sm_transition_to_merged "parent-op"
-
-    # Unblock child
-    run sm_is_blocker_merged "child-op"
-    assert_success
-
-    sm_unblock_operation "child-op"
-    run sm_get_phase "child-op"
-    assert_output "init"
 }
 
 # ============================================================================
