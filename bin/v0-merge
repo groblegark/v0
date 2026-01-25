@@ -241,6 +241,45 @@ else
                 mg_notify_merge "${PROJECT}" "${BRANCH}"
                 mg_delete_remote_branch "${BRANCH}"
             fi
+        else
+            # Fast-forward failed - need worktree for rebase
+            if [[ "${RESOLVE}" = true ]]; then
+                echo "Creating temporary worktree for rebase..."
+                mg_create_temp_worktree_for_resolution "${BRANCH}"
+                WORKTREE="${MG_TEMP_WORKTREE}"
+                TREE_DIR="${MG_TEMP_TREE_DIR}"
+
+                # Do the merge with the temp worktree
+                if mg_do_merge "${WORKTREE}" "${BRANCH}"; then
+                    merge_commit=$(mg_get_merge_commit)
+                    mg_cleanup_temp_worktree
+                    mg_cleanup_branch_only "${BRANCH}"
+
+                    if mg_push_and_verify "${merge_commit}"; then
+                        op_to_update=$(mg_resolve_op_name "${OP_NAME}" "${BRANCH}")
+                        if [[ -n "${op_to_update}" ]]; then
+                            mg_record_merge_commit "${op_to_update}" "${merge_commit}"
+                        fi
+
+                        mg_update_operation_state "${BRANCH}"
+                        if [[ -z "${V0_MERGEQ_CALLER:-}" ]]; then
+                            mg_update_queue_entry "${OP_NAME}" "${BRANCH}"
+                        fi
+
+                        mg_trigger_dependents "${BRANCH}"
+                        mg_notify_merge "${PROJECT}" "${BRANCH}" "(after rebase)"
+                        mg_delete_remote_branch "${BRANCH}"
+                    fi
+                else
+                    mg_cleanup_temp_worktree
+                    exit 1
+                fi
+            else
+                echo
+                echo -e "${C_RED}${C_BOLD}Error:${C_RESET} Cannot fast-forward merge. To resolve:"
+                echo -e "  ${C_BOLD}v0 merge ${INPUT} --resolve${C_RESET}"
+                exit 1
+            fi
         fi
     fi
 fi

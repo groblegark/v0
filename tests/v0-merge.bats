@@ -377,3 +377,51 @@ EOF
     assert_output --partial "Error:"
     assert_output --partial "previously failed to merge"
 }
+
+# ============================================================================
+# Non-Fast-Forward Merge Tests
+# ============================================================================
+
+@test "v0-merge: non-ff merge without worktree suggests --resolve" {
+    local project_dir
+    project_dir=$(setup_isolated_project)
+
+    # Initialize git repo
+    cd "${project_dir}"
+    git init --quiet
+    git config user.email "test@test.com"
+    git config user.name "Test"
+    echo "initial" > file.txt
+    git add file.txt
+    git commit --quiet -m "Initial commit"
+
+    # Get the default branch name
+    local default_branch
+    default_branch=$(git rev-parse --abbrev-ref HEAD)
+
+    # Update .v0.rc to use the correct develop branch
+    echo "V0_DEVELOP_BRANCH=\"${default_branch}\"" >> "${project_dir}/.v0.rc"
+
+    # Create feature branch
+    git checkout -b feature/diverged --quiet
+    echo "feature" > feature.txt
+    git add feature.txt
+    git commit --quiet -m "Feature commit"
+    git checkout "${default_branch}" --quiet
+
+    # Add a commit to main to make branches diverge (ff not possible)
+    echo "main change" > main.txt
+    git add main.txt
+    git commit --quiet -m "Main commit"
+
+    # No worktree, no state file - just the branch
+    run env -u PROJECT -u ISSUE_PREFIX -u V0_ROOT -u BUILD_DIR bash -c '
+        cd "'"${project_dir}"'" || exit 1
+        "'"${V0_MERGE}"'" feature/diverged 2>&1
+    '
+    # Should fail and suggest using --resolve
+    assert_failure
+    assert_output --partial "No worktree found. Attempting direct branch merge"
+    assert_output --partial "Cannot fast-forward merge"
+    assert_output --partial "--resolve"
+}
