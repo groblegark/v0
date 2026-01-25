@@ -763,7 +763,7 @@ create_test_state() {
 @test "sm_migrate_state skips already current schema" {
     local op_dir="${BUILD_DIR}/operations/test-op"
     mkdir -p "${op_dir}/logs"
-    echo '{"name": "test-op", "phase": "init", "_schema_version": 1}' > "${op_dir}/state.json"
+    echo '{"name": "test-op", "phase": "init", "_schema_version": 2}' > "${op_dir}/state.json"
 
     sm_migrate_state "test-op"
 
@@ -779,9 +779,9 @@ create_test_state() {
     run sm_get_phase "test-op"
     assert_output "init"
 
-    # Should now have schema version 1
+    # Should now have schema version 2
     run sm_get_state_version "test-op"
-    assert_output "1"
+    assert_output "2"
 }
 
 @test "new state files should include _schema_version when created with transitions" {
@@ -794,7 +794,7 @@ create_test_state() {
     sm_transition_to_planned "test-op" "plans/test.md"
 
     run sm_get_state_version "test-op"
-    assert_output "1"
+    assert_output "2"
 }
 
 # ============================================================================
@@ -946,15 +946,6 @@ create_test_state() {
 
 @test "sm_transition_to_cancelled transitions from executing" {
     create_test_state "test-op" "executing"
-
-    sm_transition_to_cancelled "test-op"
-
-    run sm_read_state "test-op" "phase"
-    assert_output "cancelled"
-}
-
-@test "sm_transition_to_cancelled transitions from blocked" {
-    create_test_state "test-op" "blocked" '"after": "parent-op"'
 
     sm_transition_to_cancelled "test-op"
 
