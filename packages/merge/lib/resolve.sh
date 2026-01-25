@@ -10,10 +10,37 @@
 # BUILD_DIR - Path to build directory
 # REPO_NAME - Name of the repository
 
+# mg_resolve_branch_to_ref <branch-name>
+# Resolve branch name to git ref, verify it exists
+# Sets: MG_BRANCH, MG_HAS_WORKTREE=false
+# Returns 0 if branch exists, 1 if not
+mg_resolve_branch_to_ref() {
+    local branch="$1"
+
+    # Check if branch exists locally
+    if git show-ref --verify --quiet "refs/heads/${branch}" 2>/dev/null; then
+        MG_BRANCH="${branch}"
+        MG_HAS_WORKTREE=false
+        return 0
+    fi
+
+    # Check remote
+    if git show-ref --verify --quiet "refs/remotes/${V0_GIT_REMOTE}/${branch}" 2>/dev/null; then
+        # Create local tracking branch
+        git branch "${branch}" "${V0_GIT_REMOTE}/${branch}" 2>/dev/null || true
+        MG_BRANCH="${branch}"
+        MG_HAS_WORKTREE=false
+        return 0
+    fi
+
+    echo "Error: Branch '${branch}' not found locally or on remote" >&2
+    return 1
+}
+
 # mg_resolve_operation_to_worktree <operation>
 # Resolve operation name to worktree path
-# Sets: MG_WORKTREE, MG_TREE_DIR, MG_OP_NAME
-# Returns 0 on success, 1 on failure
+# Sets: MG_WORKTREE, MG_TREE_DIR, MG_OP_NAME, MG_HAS_WORKTREE, MG_BRANCH
+# Returns 0 on success (with worktree or just branch), 1 on failure
 mg_resolve_operation_to_worktree() {
     local op_name="$1"
     local state_file="${BUILD_DIR}/operations/${op_name}/state.json"
@@ -28,14 +55,36 @@ mg_resolve_operation_to_worktree() {
     # Get worktree path from state
     local worktree
     worktree=$(sm_read_state "${op_name}" "worktree")
-    if [[ -z "${worktree}" ]] || [[ "${worktree}" = "null" ]]; then
-        echo "Error: Operation '${op_name}' has no worktree" >&2
-        return 1
-    fi
 
-    if [[ ! -d "${worktree}" ]]; then
-        echo "Error: Worktree not found: ${worktree}" >&2
-        echo "The worktree may have been removed." >&2
+    # Get branch from state (even if worktree missing)
+    local branch
+    branch=$(sm_read_state "${op_name}" "branch")
+
+    if [[ -z "${worktree}" ]] || [[ "${worktree}" = "null" ]] || [[ ! -d "${worktree}" ]]; then
+        # Worktree missing - try branch-only merge if branch exists
+        if [[ -n "${branch}" ]] && [[ "${branch}" != "null" ]]; then
+            if git show-ref --verify --quiet "refs/heads/${branch}" 2>/dev/null; then
+                MG_BRANCH="${branch}"
+                MG_HAS_WORKTREE=false
+                MG_OP_NAME="${op_name}"
+                MG_WORKTREE=""
+                MG_TREE_DIR=""
+                return 0
+            fi
+            # Also check remote
+            if git show-ref --verify --quiet "refs/remotes/${V0_GIT_REMOTE}/${branch}" 2>/dev/null; then
+                # Create local tracking branch
+                git branch "${branch}" "${V0_GIT_REMOTE}/${branch}" 2>/dev/null || true
+                MG_BRANCH="${branch}"
+                MG_HAS_WORKTREE=false
+                MG_OP_NAME="${op_name}"
+                MG_WORKTREE=""
+                MG_TREE_DIR=""
+                return 0
+            fi
+        fi
+
+        echo "Error: Worktree not found and branch doesn't exist for '${op_name}'" >&2
         return 1
     fi
 
@@ -49,11 +98,13 @@ mg_resolve_operation_to_worktree() {
     MG_WORKTREE="${worktree}"
     MG_TREE_DIR="$(dirname "${worktree}")"
     MG_OP_NAME="${op_name}"
+    MG_HAS_WORKTREE=true
+    MG_BRANCH="${branch:-}"
 }
 
 # mg_resolve_path_to_worktree <path>
 # Resolve a path to worktree
-# Sets: MG_WORKTREE, MG_TREE_DIR
+# Sets: MG_WORKTREE, MG_TREE_DIR, MG_HAS_WORKTREE
 # Returns 0 on success, 1 on failure
 mg_resolve_path_to_worktree() {
     local input="$1"
@@ -77,6 +128,8 @@ mg_resolve_path_to_worktree() {
         echo "Error: Worktree not found: ${MG_WORKTREE}"
         return 1
     fi
+
+    MG_HAS_WORKTREE=true
 }
 
 # mg_validate_worktree <worktree>

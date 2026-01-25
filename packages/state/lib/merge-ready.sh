@@ -29,11 +29,22 @@ sm_is_merge_ready() {
     return 1
   fi
 
-  # Guard 2: Must have worktree
-  local worktree
+  # Guard 2: Must have worktree OR branch must exist
+  local worktree branch
   worktree=$(sm_read_state "${op}" "worktree")
+  branch=$(sm_read_state "${op}" "branch")
+
   if [[ -z "${worktree}" ]] || [[ "${worktree}" = "null" ]] || [[ ! -d "${worktree}" ]]; then
-    return 1
+    # No worktree - check if branch exists
+    if [[ -z "${branch}" ]] || [[ "${branch}" = "null" ]]; then
+      return 1
+    fi
+    # Check if branch exists locally or on remote
+    if ! git show-ref --verify --quiet "refs/heads/${branch}" 2>/dev/null; then
+      if ! git show-ref --verify --quiet "refs/remotes/${V0_GIT_REMOTE:-origin}/${branch}" 2>/dev/null; then
+        return 1
+      fi
+    fi
   fi
 
   # Guard 3: tmux session must be gone
@@ -67,7 +78,7 @@ sm_all_issues_closed() {
 
 # sm_merge_ready_reason <op>
 # Return human-readable reason why merge is/isn't ready
-# Format: ready | phase:<current> | worktree:missing | session:active | open_issues:<count>
+# Format: ready | phase:<current> | worktree:missing | branch:missing | session:active | open_issues:<count>
 sm_merge_ready_reason() {
   local op="$1"
 
@@ -79,12 +90,25 @@ sm_merge_ready_reason() {
     return
   fi
 
-  # Check worktree
-  local worktree
+  # Check worktree or branch
+  local worktree branch
   worktree=$(sm_read_state "${op}" "worktree")
+  branch=$(sm_read_state "${op}" "branch")
+
   if [[ -z "${worktree}" ]] || [[ "${worktree}" = "null" ]] || [[ ! -d "${worktree}" ]]; then
-    echo "worktree:missing"
-    return
+    # No worktree - check if branch exists
+    if [[ -z "${branch}" ]] || [[ "${branch}" = "null" ]]; then
+      echo "worktree:missing"
+      return
+    fi
+    # Check if branch exists locally or on remote
+    if ! git show-ref --verify --quiet "refs/heads/${branch}" 2>/dev/null; then
+      if ! git show-ref --verify --quiet "refs/remotes/${V0_GIT_REMOTE:-origin}/${branch}" 2>/dev/null; then
+        echo "branch:missing"
+        return
+      fi
+    fi
+    # Worktree missing but branch exists - can proceed with branch-only merge
   fi
 
   # Check tmux session

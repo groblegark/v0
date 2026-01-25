@@ -245,6 +245,41 @@ mg_cleanup_resolve_session() {
     rm -f "${MG_PROMPT_FILE:-}" "${MG_RESOLVE_SCRIPT:-}" "${tree_dir}/done"
 }
 
+# mg_create_temp_worktree_for_resolution <branch>
+# Creates a temporary worktree for conflict resolution
+# Sets: MG_TEMP_WORKTREE, MG_TEMP_TREE_DIR
+mg_create_temp_worktree_for_resolution() {
+    local branch="$1"
+
+    local temp_tree_dir
+    temp_tree_dir="${BUILD_DIR}/temp-merge-$(date +%s)"
+    local temp_worktree="${temp_tree_dir}/${REPO_NAME}"
+
+    mkdir -p "${temp_tree_dir}"
+
+    if ! git worktree add "${temp_worktree}" "${branch}" 2>/dev/null; then
+        echo "Error: Failed to create temporary worktree for ${branch}" >&2
+        rm -rf "${temp_tree_dir}"
+        return 1
+    fi
+
+    MG_TEMP_WORKTREE="${temp_worktree}"
+    MG_TEMP_TREE_DIR="${temp_tree_dir}"
+
+    echo "Created temporary worktree: ${temp_worktree}"
+}
+
+# mg_cleanup_temp_worktree
+# Clean up temporary worktree after resolution
+mg_cleanup_temp_worktree() {
+    if [[ -n "${MG_TEMP_WORKTREE:-}" ]] && [[ -d "${MG_TEMP_WORKTREE}" ]]; then
+        git worktree remove "${MG_TEMP_WORKTREE}" --force 2>/dev/null || true
+        rm -rf "${MG_TEMP_TREE_DIR:-}"
+        MG_TEMP_WORKTREE=""
+        MG_TEMP_TREE_DIR=""
+    fi
+}
+
 # mg_resolve_uncommitted_changes <worktree> <tree_dir> <branch>
 # Resolve uncommitted changes by launching claude agent
 mg_resolve_uncommitted_changes() {

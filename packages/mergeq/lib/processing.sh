@@ -226,16 +226,30 @@ mq_process_merge() {
     mq_log_event "merge:started: ${op}"
     mq_emit_event "merge:started" "${op}"
 
-    # Get worktree path
-    local worktree
+    # Get worktree path and branch
+    local worktree branch
     worktree=$(jq -r '.worktree // empty' "${state_file}")
+    branch=$(jq -r '.branch // empty' "${state_file}")
 
-    if [[ -z "${worktree}" ]] || [[ ! -d "${worktree}" ]]; then
-        echo "Error: Worktree not found: ${worktree}" >&2
+    # Determine merge target - worktree if exists, otherwise operation name (v0-merge handles branch-only)
+    local merge_target=""
+    if [[ -n "${worktree}" ]] && [[ -d "${worktree}" ]]; then
+        merge_target="${worktree}"
+    elif [[ -n "${branch}" ]]; then
+        # No worktree but have branch - check if branch exists
+        if git show-ref --verify --quiet "refs/heads/${branch}" 2>/dev/null || \
+           git show-ref --verify --quiet "refs/remotes/${V0_GIT_REMOTE}/${branch}" 2>/dev/null; then
+            echo "[$(date +%H:%M:%S)] Merging without worktree (branch: ${branch})"
+            merge_target="${op}"
+        fi
+    fi
+
+    if [[ -z "${merge_target}" ]]; then
+        echo "Error: Worktree not found and branch doesn't exist: ${branch}" >&2
         mq_update_entry_status "${op}" "${MQ_STATUS_FAILED}"
         sm_update_state "${op}" "merge_status" '"failed"'
-        sm_update_state "${op}" "merge_error" '"Worktree not found"'
-        mq_log_event "merge:failed: ${op} (worktree not found)"
+        sm_update_state "${op}" "merge_error" '"Worktree not found and branch does not exist"'
+        mq_log_event "merge:failed: ${op} (worktree not found, branch missing)"
         mq_emit_event "merge:failed" "${op}"
         return 1
     fi
@@ -247,7 +261,7 @@ mq_process_merge() {
     # OK: Capture exit code without aborting script
     set +e
     local merge_output
-    merge_output=$(V0_MERGEQ_CALLER=1 "${V0_DIR}/bin/v0-merge" "${worktree}" --resolve 2>&1)
+    merge_output=$(V0_MERGEQ_CALLER=1 "${V0_DIR}/bin/v0-merge" "${merge_target}" --resolve 2>&1)
     local merge_exit=$?
     set -e
 
@@ -479,17 +493,17 @@ mq_process_watch() {
                     else
                         ready_check="open issues (${open_count} open, ${in_progress_count} in progress) - already resumed once"
                     fi
-                elif [[ "${ready_check}" == "worktree:missing" ]]; then
+                elif [[ "${ready_check}" == "worktree:missing" ]] || [[ "${ready_check}" == "branch:missing" ]]; then
                     local state_file="${BUILD_DIR}/operations/${op}/state.json"
                     local already_marked
                     already_marked=$(jq -r '.worktree_missing // false' "${state_file}" 2>/dev/null)
 
                     if [[ "${already_marked}" != "true" ]]; then
-                        echo "[$(date +%H:%M:%S)] Skipping ${op}: worktree missing - needs manual recovery"
-                        mq_log_event "skip-no-worktree: ${op}"
+                        echo "[$(date +%H:%M:%S)] Skipping ${op}: ${ready_check} - needs manual recovery"
+                        mq_log_event "skip-no-worktree: ${op} (${ready_check})"
                         sm_update_state "${op}" "worktree_missing" "true"
                     fi
-                    ready_check="worktree missing - needs manual recovery"
+                    ready_check="${ready_check} - needs manual recovery"
                 fi
 
                 not_ready_reasons="${not_ready_reasons}  - ${op}: ${ready_check}"$'\n'
