@@ -193,12 +193,6 @@ EOF
     assert_output --partial "does not exist"
 }
 
-@test "v0-build: --eager requires --after" {
-    run "${V0_BUILD}" test-op "Test prompt" --eager 2>&1
-    assert_failure
-    assert_output --partial "--eager requires --after"
-}
-
 # ============================================================================
 # wk dep Integration Tests
 # ============================================================================
@@ -294,4 +288,80 @@ EOF
         run jq -r '.after' "${state_file}"
         assert_output "blocker"
     fi
+}
+
+# ============================================================================
+# --hold Flag Tests
+# ============================================================================
+
+@test "v0-build: --hold sets operation hold state" {
+    # Create a plan file to skip planning
+    mkdir -p "${TEST_TEMP_DIR}/project/plans"
+    cat > "${TEST_TEMP_DIR}/project/plans/test-op.md" <<EOF
+# Test Plan
+Feature: \`test-feature456\`
+## Tasks
+- Task 1
+EOF
+
+    run "${V0_BUILD}" test-op --plan "${TEST_TEMP_DIR}/project/plans/test-op.md" --hold --dry-run 2>&1 || true
+
+    local state_file="${TEST_TEMP_DIR}/project/.v0/build/operations/test-op/state.json"
+    if [[ -f "${state_file}" ]]; then
+        run jq -r '.held' "${state_file}"
+        assert_output "true"
+    fi
+}
+
+# ============================================================================
+# --blocked-by Alias Tests
+# ============================================================================
+
+@test "v0-build: --blocked-by is alias for --after" {
+    # Create blocker operation
+    local blocker_dir="${TEST_TEMP_DIR}/project/.v0/build/operations/blocker"
+    mkdir -p "${blocker_dir}"
+    cat > "${blocker_dir}/state.json" <<EOF
+{
+  "name": "blocker",
+  "phase": "merged",
+  "epic_id": "test-blocker123"
+}
+EOF
+
+    run "${V0_BUILD}" test-op "Test prompt" --blocked-by blocker --dry-run 2>&1 || true
+
+    local state_file="${TEST_TEMP_DIR}/project/.v0/build/operations/test-op/state.json"
+    if [[ -f "${state_file}" ]]; then
+        run jq -r '.after' "${state_file}"
+        assert_output "blocker"
+    fi
+}
+
+# ============================================================================
+# Removed Flag Tests
+# ============================================================================
+
+@test "v0-build: --foreground is not a valid option" {
+    run "${V0_BUILD}" test-op "Test prompt" --foreground 2>&1
+    assert_failure
+    assert_output --partial "Unknown option"
+}
+
+@test "v0-build: --safe is not a valid option" {
+    run "${V0_BUILD}" test-op "Test prompt" --safe 2>&1
+    assert_failure
+    assert_output --partial "Unknown option"
+}
+
+@test "v0-build: --enqueue is not a valid option" {
+    run "${V0_BUILD}" test-op "Test prompt" --enqueue 2>&1
+    assert_failure
+    assert_output --partial "Unknown option"
+}
+
+@test "v0-build: --eager is not a valid option" {
+    run "${V0_BUILD}" test-op "Test prompt" --eager 2>&1
+    assert_failure
+    assert_output --partial "Unknown option"
 }

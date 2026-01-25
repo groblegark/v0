@@ -27,42 +27,32 @@ Usage: v0 build <name> <prompt> [options]
 Transform a prompt into an autonomous development pipeline.
 
 Options:
-  --enqueue      Plan and create issue but don't launch worker
   --resume [p]   Resume an existing operation, optionally from phase p
                  Valid phases: init, planned, queued
   --no-merge     Don't auto-merge when work completes (default: auto-merge)
   --label <l>    Add label to created issue (can repeat)
-  --safe         Require permission prompts in worker (default: skip prompts)
   --dry-run      Show what would happen without executing
-  --after <op>       Wait for operation to merge before executing
-  --eager            With --after: run planning before waiting (default: wait first)
-  --plan <file>      Use existing plan (skips planning if feature ID present)
-  --foreground       Run plan/build in foreground (blocking)
-  --attach           Follow worker logs after queuing
+  --after <op>   Wait for operation to merge before executing
+  --plan <file>  Use existing plan (skips planning if feature ID present)
+  --attach       Follow worker logs after queuing
 
 Modes:
   Default: Queue build and run in background (exits immediately)
-  --foreground: Plan -> Launch worker -> Auto-merge (blocking)
-  --enqueue: Plan only, don't execute (work available via resume)
   --resume: Check state and continue from last phase
   --no-merge: Skip automatic merge after completion
   --after: Wait for another operation to merge before executing
-    Default: Block immediately, don't start any work until unblocked
-    --eager: Run planning first, then block before execution
   --plan: Use existing plan file
     If plan has feature ID (\$ISSUE_PREFIX-xxx): Skip planning, go to execute
     If no feature ID: Skip planning, file issue, then execute
 
 Examples:
   v0 build auth "Add JWT authentication"          # Queue and run in background
-  v0 build auth "Add JWT auth" --foreground       # Run in foreground (blocking)
-  v0 build api "Build REST API" --enqueue         # Plan only, no worker
+  v0 build api "Build REST API"                   # Queue and run in background
   v0 build auth --resume                          # Resume from current phase
   v0 build auth --resume --attach                 # Resume and follow logs
   v0 build auth --resume init                     # Restart from planning phase
   v0 build addx "Add X" --no-merge                # Don't auto-merge
   v0 build api "Build API" --after auth           # Wait for auth before starting
-  v0 build api "Build API" --after auth --eager   # Plan first, then wait
   v0 build refactor --plan plans/refactor.md      # Use existing plan
 EOF
   exit 1
@@ -70,23 +60,19 @@ EOF
 
 NAME=""
 PROMPT=""
-ENQUEUE_ONLY=""
 RESUME=""
 RESUME_PHASE=""
 NO_MERGE=""
 LABELS=()
-SAFE=""
 DRY_RUN=""
 AFTER=""
-EAGER=""
 PLAN_FILE_ARG=""
-FOREGROUND=""
 ATTACH=""
+HOLD=""
 
 # Parse args
 while [[ $# -gt 0 ]]; do
   case "$1" in
-    --enqueue) ENQUEUE_ONLY=1; shift ;;
     --resume)
       RESUME=1
       shift
@@ -97,12 +83,11 @@ while [[ $# -gt 0 ]]; do
       ;;
     --no-merge) NO_MERGE=1; shift ;;
     --label) LABELS+=("$2"); shift 2 ;;
-    --safe) SAFE=1; shift ;;
     --dry-run) DRY_RUN=1; shift ;;
     --after) AFTER="$2"; shift 2 ;;
-    --eager) EAGER=1; shift ;;
+    --blocked-by) AFTER="$2"; shift 2 ;;  # Undocumented alias for --after
     --plan) PLAN_FILE_ARG="$2"; shift 2 ;;
-    --foreground) FOREGROUND=1; shift ;;
+    --hold) HOLD=1; shift ;;
     --attach) ATTACH=1; shift ;;
     -h|--help) usage ;;
     -*) echo "Unknown option: $1"; usage ;;
@@ -178,9 +163,6 @@ if [[ -n "${AFTER}" ]]; then
       exit 1
     fi
   fi
-elif [[ -n "${EAGER}" ]]; then
-  echo "Error: --eager requires --after"
-  exit 1
 fi
 
 # Require dependencies
@@ -212,14 +194,10 @@ init_state() {
   [[ -n "${NO_MERGE}" ]] && merge_queued="false"
 
   local after="null"
-  local eager="false"
-  local safe="false"
   local blocked_phase="null"
   if [[ -n "${AFTER}" ]]; then
     after="\"${AFTER}\""
-    [[ -n "${EAGER}" ]] && eager="true"
   fi
-  [[ -n "${SAFE}" ]] && safe="true"
 
   cat > "${STATE_FILE}" <<EOF
 {
@@ -240,8 +218,6 @@ init_state() {
   "merged_at": null,
   "merge_error": null,
   "after": ${after},
-  "eager": ${eager},
-  "safe": ${safe},
   "blocked_phase": ${blocked_phase},
   "worker_pid": null,
   "worker_log": null,
@@ -298,19 +274,6 @@ if [[ -n "${RESUME}" ]]; then
     [[ -n "${label}" ]] && LABELS+=("${label}")
   done < <(jq -r '.labels[]' "${STATE_FILE}" 2>/dev/null || true)
   AFTER=$(get_state after)
-  EAGER=$(get_state eager)
-  [[ "${EAGER}" = "true" ]] && EAGER=1 || EAGER=""
-  SAFE_CHANGED=""
-  if [[ -n "${SAFE}" ]]; then
-    SAFE_STATE=$(get_state safe)
-    if [[ "${SAFE_STATE}" != "true" ]]; then
-      SAFE_CHANGED=1
-    fi
-    update_state "safe" 'true'
-  else
-    SAFE_STATE=$(get_state safe)
-    [[ "${SAFE_STATE}" = "true" ]] && SAFE=1
-  fi
 
   # Add merge_queued field if missing (for operations created by v0 plan)
   MERGE_QUEUED_STATE=$(get_state merge_queued)
@@ -375,8 +338,8 @@ if [[ -n "${RESUME}" ]]; then
   fi
 
   # Background execution for resume (like new operations)
-  # Spawn a worker to continue from current phase unless --foreground or --dry-run
-  if [[ -z "${FOREGROUND}" ]] && [[ -z "${DRY_RUN}" ]]; then
+  # Spawn a worker to continue from current phase unless --dry-run
+  if [[ -z "${DRY_RUN}" ]]; then
     # Don't spawn worker for phases that don't need it
     if [[ "${PHASE}" != "completed" ]] && [[ "${PHASE}" != "merged" ]] && [[ "${PHASE}" != "pending_merge" ]] && [[ "${PHASE}" != "blocked" ]] && [[ "${PHASE}" != "executing" ]]; then
       WORKER_LOG="${STATE_DIR}/logs/worker.log"
@@ -512,12 +475,6 @@ if [[ -n "${RESUME}" ]]; then
       update_state "phase" '"queued"'
       update_state "tmux_session" 'null'
       PHASE="queued"
-    elif [[ -n "${SAFE_CHANGED}" ]]; then
-      echo "Restarting session to apply --safe flag..."
-      tmux kill-session -t "${SESSION}" 2>/dev/null || true
-      update_state "phase" '"queued"'
-      update_state "tmux_session" 'null'
-      PHASE="queued"
     fi
   fi
 
@@ -533,12 +490,17 @@ else
   init_state
   PHASE="init"
 
+  # Set hold if requested
+  if [[ -n "${HOLD}" ]]; then
+    sm_set_hold "${NAME}"
+  fi
+
   # Check if operation is held (for new operations with existing state)
   if [[ -f "${STATE_FILE}" ]]; then
     sm_exit_if_held "${NAME}" "feature"
   fi
 
-  if [[ -z "${EAGER}" ]] && [[ -n "${AFTER}" ]] && [[ "${AFTER}" != "null" ]]; then
+  if [[ -n "${AFTER}" ]] && [[ "${AFTER}" != "null" ]]; then
     if ! is_after_op_merged "${AFTER}"; then
       # Use state machine transition to blocked phase
       sm_transition_to_blocked "${NAME}" "${AFTER}" "init"
@@ -615,8 +577,7 @@ else
   # Background execution (default for new operations)
   # The worker (v0-build-worker) runs plan -> build in background.
   # This allows the user to queue features and continue with other work.
-  # Use --foreground to preserve the old blocking behavior.
-  if [[ -z "${FOREGROUND}" ]] && [[ -z "${DRY_RUN}" ]]; then
+  if [[ -z "${DRY_RUN}" ]]; then
     WORKER_LOG="${STATE_DIR}/logs/worker.log"
     mkdir -p "${STATE_DIR}/logs"
 
@@ -648,296 +609,18 @@ else
   fi
 fi
 
-# Phase 1: Plan
-if [[ "${PHASE}" = "init" ]]; then
-  mkdir -p "${STATE_DIR}/logs"
-
-  emit_event "plan:starting" "Creating implementation plan"
-
+# Phase 1: Plan (dry-run only - actual execution happens in background worker)
+if [[ "${PHASE}" = "init" ]] && [[ -n "${DRY_RUN}" ]]; then
   FEATURE_BRANCH=$(v0_expand_branch "${V0_FEATURE_BRANCH}" "${NAME}")
-  if ! tree_output=$("${V0_DIR}/bin/v0-tree" "${FEATURE_BRANCH}"); then
-    echo "Error: Failed to create worktree for ${FEATURE_BRANCH}"
-    exit 1
-  fi
-  { read -r TREE_DIR; read -r WORKTREE; } <<< "${tree_output}"
-
-  # Link worktree to main repo's shared workspace
-  wk init --workspace "${V0_ROOT}/.wok" --path "${TREE_DIR}" 2>/dev/null || true
-
   PLAN_SESSION=$(v0_session_name "${NAME}" "plan")
-
-  if [[ -n "${DRY_RUN}" ]]; then
-    echo "[DRY-RUN] Would run: v0 plan ${NAME} \"${PROMPT}\" in tmux session ${PLAN_SESSION}"
-  else
-    # Create feature issue immediately (before planning) for foreground mode
-    FEATURE_ID=$(get_state epic_id)
-    if [[ -z "${FEATURE_ID}" ]] || [[ "${FEATURE_ID}" = "null" ]]; then
-      FEATURE_ID=$(create_feature_issue "${NAME}")
-      if [[ -n "${FEATURE_ID}" ]]; then
-        update_state "epic_id" "\"${FEATURE_ID}\""
-        emit_event "issue:created" "Created feature ${FEATURE_ID}"
-        echo -e "${C_GREEN}Created feature:${C_RESET} ${C_CYAN}${FEATURE_ID}${C_RESET}"
-        echo ""
-      fi
-    fi
-
-    if tmux has-session -t "${PLAN_SESSION}" 2>/dev/null; then
-      echo "Plan session '${PLAN_SESSION}' already running, waiting for completion..."
-      echo "Attach with: v0 attach ${NAME}"
-    else
-      echo ""
-      echo -e "${C_BOLD}${C_CYAN}=== Starting planning step ===${C_RESET}"
-      echo -e "Session: ${C_DIM}${PLAN_SESSION}${C_RESET}"
-      echo ""
-      echo "Attach to watch planning:"
-      echo -e "  ${C_BOLD}v0 attach ${NAME}${C_RESET}"
-      echo -e "  ${C_DIM}(Ctrl-B D to detach)${C_RESET}"
-      echo ""
-
-      printf '%s' "${PROMPT}" > "${STATE_DIR}/prompt.txt"
-      create_feature_done_script "${STATE_DIR}" "${STATE_DIR}/logs/plan.exit"
-
-      V0_SAFE_EXPORT=""
-      [[ -n "${SAFE}" ]] && V0_SAFE_EXPORT="export V0_SAFE=1"
-
-      cat > "${STATE_DIR}/run-plan.sh" <<EOF
-#!/bin/bash
-cd '${TREE_DIR}'
-export V0_ROOT='${V0_ROOT}'
-${V0_SAFE_EXPORT}
-PROMPT="\$(cat '${STATE_DIR}/prompt.txt')"
-script -q '${STATE_DIR}/logs/plan.log' '${V0_DIR}/bin/v0-plan' '${NAME}' "\${PROMPT}" --direct
-EXIT_CODE=\$?
-[[ ! -f '${STATE_DIR}/logs/plan.exit' ]] && echo \${EXIT_CODE} > '${STATE_DIR}/logs/plan.exit'
-EOF
-      chmod +x "${STATE_DIR}/run-plan.sh"
-      tmux new-session -d -s "${PLAN_SESSION}" -c "${TREE_DIR}" "${STATE_DIR}/run-plan.sh"
-    fi
-
-    update_state "tmux_session" "\"${PLAN_SESSION}\""
-    update_state "working_dir" "\"${V0_ROOT}\""
-
-    # Monitor session until plan file created and agent idle
-    PLAN_LOCATIONS="${TREE_DIR}/${V0_PLANS_DIR}/${NAME}.md:${WORKTREE}/${V0_PLANS_DIR}/${NAME}.md:${PLANS_DIR}/${NAME}.md"
-    monitor_plan_session "${PLAN_SESSION}" "${STATE_DIR}/logs/plan.exit" "${PLAN_LOCATIONS}" "plan:idle_complete"
-    PLAN_FOUND="${FOUND_FILE}"
-
-    # Clean ANSI escape sequences from plan.log
-    v0_clean_log_file "${STATE_DIR}/logs/plan.log"
-
-    PLAN_EXIT=$(get_session_exit_code "${STATE_DIR}/logs/plan.exit")
-    set -e
-
-    # Check all locations if FOUND_FILE wasn't set
-    mkdir -p "${PLANS_DIR}"
-    if [[ -z "${PLAN_FOUND}" ]]; then
-      if [[ -f "${TREE_DIR}/${V0_PLANS_DIR}/${NAME}.md" ]]; then
-        PLAN_FOUND="${TREE_DIR}/${V0_PLANS_DIR}/${NAME}.md"
-      elif [[ -f "${WORKTREE}/${V0_PLANS_DIR}/${NAME}.md" ]]; then
-        PLAN_FOUND="${WORKTREE}/${V0_PLANS_DIR}/${NAME}.md"
-      elif [[ -f "${PLANS_DIR}/${NAME}.md" ]]; then
-        PLAN_FOUND="${PLANS_DIR}/${NAME}.md"
-      fi
-    fi
-
-    if [[ ${PLAN_EXIT} -ne 0 ]]; then
-      if [[ -n "${PLAN_FOUND}" ]]; then
-        emit_event "plan:recovered" "Exit code ${PLAN_EXIT} but plan file exists at ${PLAN_FOUND}"
-        echo "Note: Process exited with code ${PLAN_EXIT} but plan file was created successfully"
-      else
-        emit_event "plan:failed" "Exit code ${PLAN_EXIT}"
-        echo "Error: Plan creation failed. Check ${STATE_DIR}/logs/plan.log for details."
-        rm -f "${STATE_DIR}/done"
-        exit 1
-      fi
-    fi
-
-    if [[ -z "${PLAN_FOUND}" ]]; then
-      emit_event "plan:failed" "Plan file not created"
-      echo "Error: Plan file was not created at ${V0_PLANS_DIR}/${NAME}.md"
-      rm -f "${STATE_DIR}/done"
-      exit 1
-    fi
-
-    if [[ "${PLAN_FOUND}" != "${PLANS_DIR}/${NAME}.md" ]]; then
-      /bin/cp "${PLAN_FOUND}" "${PLANS_DIR}/${NAME}.md"
-      emit_event "plan:copied" "Copied from ${PLAN_FOUND} to main repo"
-    fi
-
-    # Auto-commit the plan file (unless already committed or worktree is dirty with other changes)
-    if git -C "${V0_ROOT}" diff --quiet -- "${V0_PLANS_DIR}/${NAME}.md" 2>/dev/null && \
-       git -C "${V0_ROOT}" ls-files --error-unmatch "${V0_PLANS_DIR}/${NAME}.md" &>/dev/null; then
-      emit_event "plan:commit" "Already committed"
-    elif git -C "${V0_ROOT}" check-ignore -q "${V0_PLANS_DIR}/${NAME}.md" 2>/dev/null; then
-      emit_event "plan:commit" "Skipped (gitignored)"
-    elif git -C "${V0_ROOT}" add "${V0_PLANS_DIR}/${NAME}.md" && \
-         git -C "${V0_ROOT}" commit -m "Add plan: ${NAME}" -m "Auto-committed by v0 feature"; then
-      emit_event "plan:commit" "Committed ${V0_PLANS_DIR}/${NAME}.md"
-    else
-      emit_event "plan:commit" "Failed to commit (worktree may have other changes)"
-    fi
-  fi
-
-  rm -f "${STATE_DIR}/done"
-
-  # Use state machine transition to planned phase
-  sm_transition_to_planned "${NAME}" "${V0_PLANS_DIR}/${NAME}.md"
-
-  # Update feature issue with plan content (issue already created at init)
-  PLAN_FILE="${PLANS_DIR}/${NAME}.md"
-  FEATURE_ID=$(get_state epic_id)
-
-  if [[ -n "${FEATURE_ID}" ]] && [[ "${FEATURE_ID}" != "null" ]]; then
-    # Update existing issue with plan content
-    file_plan_issue "${NAME}" "${PLAN_FILE}" "${FEATURE_ID}"
-    emit_event "issue:updated" "Updated feature ${FEATURE_ID} with plan"
-  else
-    # Fallback: create new issue (shouldn't happen normally)
-    FEATURE_ID=$(file_plan_issue "${NAME}" "${PLAN_FILE}")
-    if [[ -n "${FEATURE_ID}" ]]; then
-      update_state "epic_id" "\"${FEATURE_ID}\""
-      emit_event "issue:created" "Created feature ${FEATURE_ID}"
-      # Add blocked-by dependency in wk if --after was specified
-      if [[ -n "${AFTER}" ]] && [[ "${AFTER}" != "null" ]]; then
-        BLOCKER_ISSUE_ID=$(get_blocker_issue_id "${AFTER}")
-        if [[ -n "${BLOCKER_ISSUE_ID}" ]] && [[ "${BLOCKER_ISSUE_ID}" != "null" ]]; then
-          if wk dep "${FEATURE_ID}" blocked-by "${BLOCKER_ISSUE_ID}" 2>/dev/null; then
-            emit_event "dep:added" "Added blocked-by: ${BLOCKER_ISSUE_ID}"
-          else
-            emit_event "dep:failed" "Failed to add blocked-by: ${BLOCKER_ISSUE_ID}"
-          fi
-        fi
-      fi
-    else
-      emit_event "issue:warning" "Failed to create feature issue"
-    fi
-  fi
-
-  # Add labels to the issue
-  if [[ -n "${FEATURE_ID}" ]] && [[ ${#LABELS[@]} -gt 0 ]]; then
-    for label in "${LABELS[@]}"; do
-      wk label "${FEATURE_ID}" "${label}" 2>/dev/null || true
-    done
-  fi
-
-  # Transition to queued
-  sm_transition_to_queued "${NAME}" "${FEATURE_ID}"
+  echo "[DRY-RUN] Would run: v0 plan ${NAME} \"${PROMPT}\" in tmux session ${PLAN_SESSION}"
   PHASE="queued"
 fi
 
-# Phase 2: Execute (unless --enqueue)
-if [[ "${PHASE}" = "queued" ]] && [[ -z "${ENQUEUE_ONLY}" ]]; then
-  mkdir -p "${STATE_DIR}/logs"
-
-  if [[ -n "${EAGER}" ]] && [[ -n "${AFTER}" ]] && [[ "${AFTER}" != "null" ]]; then
-    if ! is_after_op_merged "${AFTER}"; then
-      # Use state machine transition to blocked phase (eager mode)
-      sm_transition_to_blocked "${NAME}" "${AFTER}" "queued"
-      echo ""
-      echo -e "${C_BOLD}${C_YELLOW}=== Waiting for '${AFTER}' (eager mode) ===${C_RESET}"
-      echo "Planning complete. Will execute after '${AFTER}' merges."
-      echo -e "Current phase: ${C_DIM}$(get_blocker_phase "${AFTER}")${C_RESET}"
-      echo -e "Feature: ${C_DIM}$(get_state epic_id)${C_RESET}"
-      echo ""
-      echo "Resume manually with:"
-      echo -e "  ${C_BOLD}v0 feature ${NAME} --resume${C_RESET}"
-      exit 0
-    fi
-  fi
-
-  emit_event "execute:starting" "Launching agent in tmux"
-
+# Phase 2: Execute (dry-run only - actual execution happens in background worker)
+if [[ "${PHASE}" = "queued" ]] && [[ -n "${DRY_RUN}" ]]; then
   SESSION=$(v0_session_name "${NAME}" "feature")
-
-  if [[ -n "${DRY_RUN}" ]]; then
-    echo "[DRY-RUN] Would run: tmux new-session -d -s ${SESSION} ... claude ..."
-  else
-    if tmux has-session -t "${SESSION}" 2>/dev/null; then
-      echo "Error: tmux session '${SESSION}' already exists"
-      echo "Attach with: v0 attach ${NAME}"
-      echo "Or kill it:  v0 shutdown"
-      exit 1
-    fi
-
-    tree_output=""
-    FEATURE_BRANCH=$(v0_expand_branch "${V0_FEATURE_BRANCH}" "${NAME}")
-    if ! tree_output=$("${V0_DIR}/bin/v0-tree" "${FEATURE_BRANCH}"); then
-      echo "Error: Failed to create worktree for ${FEATURE_BRANCH}"
-      exit 1
-    fi
-    { read -r TREE_DIR; read -r _WORKTREE; } <<< "${tree_output}"
-
-    # Link worktree to main repo's shared workspace
-    wk init --workspace "${V0_ROOT}/.wok" --path "${TREE_DIR}" 2>/dev/null || true
-
-    FEATURE_ID=$(get_state epic_id)
-
-    M4_ARGS="-D HAS_PLAN=1 -D V0_GIT_REMOTE=${V0_GIT_REMOTE}"
-    m4 ${M4_ARGS} "${V0_DIR}/packages/cli/lib/templates/claude.build.m4" > "${TREE_DIR}/CLAUDE.md"
-    emit_event "claude.md:created" "${TREE_DIR}/CLAUDE.md"
-
-    feature_create_settings "${TREE_DIR}" "${V0_DIR}"
-
-    PLAN_FILE="${PLANS_DIR}/${NAME}.md"
-    if [[ -f "${PLAN_FILE}" ]]; then
-      /bin/cp "${PLAN_FILE}" "${TREE_DIR}/PLAN.md"
-      emit_event "plan:copied" "PLAN.md"
-    fi
-
-    create_feature_done_script "${TREE_DIR}"
-    create_incomplete_script "${TREE_DIR}" "${NAME}" "${V0_DIR}"
-
-    SAFE_FROM_STATE=$(get_state safe)
-    [[ "${SAFE_FROM_STATE}" = "true" ]] && SAFE=1
-    CLAUDE_ARGS="--model opus --dangerously-skip-permissions --allow-dangerously-skip-permissions"
-    [[ -n "${SAFE}" ]] && CLAUDE_ARGS="--model opus --permission-mode acceptEdits"
-
-    feature_create_on_complete "${TREE_DIR}" "${STATE_FILE}" "${NAME}" "${V0_DIR}" "${V0_ROOT}"
-
-    # Ensure nudge worker is running and write session marker
-    ensure_nudge_running
-    write_session_marker "${TREE_DIR}" "${SESSION}"
-
-    tmux new-session -d -s "${SESSION}" -c "${TREE_DIR}" \
-      "export V0_OP='${NAME}'; export V0_PLAN_LABEL='plan:${NAME}'; export V0_WORKTREE='${TREE_DIR}/${REPO_NAME}'; export V0_ROOT='${V0_ROOT}'; \
-       claude ${CLAUDE_ARGS} 'Implement the plan. See CLAUDE.md and PLAN.md for details.'; \
-       '${TREE_DIR}/.claude/on-complete.sh'; \
-       echo ''; echo 'Session complete. Closing in 5 seconds...'; sleep 5"
-
-    # Store worktree first (needed by sm_is_merge_ready later)
-    update_state "worktree" "\"${TREE_DIR}/${REPO_NAME}\""
-    # Use state machine transition to executing phase
-    sm_transition_to_executing "${NAME}" "${SESSION}"
-
-    echo ""
-    echo -e "${C_BOLD}${C_CYAN}=== Build step started ===${C_RESET}"
-    echo -e "Operation: ${C_DIM}${NAME}${C_RESET}"
-    echo -e "Session:   ${C_DIM}${SESSION}${C_RESET}"
-    if [[ -z "${NO_MERGE}" ]]; then
-      echo -e "Merge:     ${C_GREEN}Auto-merge when complete${C_RESET}"
-    else
-      echo -e "Merge:     ${C_DIM}Disabled (--no-merge)${C_RESET}"
-    fi
-    echo ""
-    echo "Watch live:"
-    echo -e "  ${C_BOLD}v0 attach ${NAME}${C_RESET}"
-    echo -e "  ${C_DIM}(Ctrl-B D to detach)${C_RESET}"
-    echo ""
-    echo "Check:"
-    echo -e "  ${C_BOLD}v0 status ${NAME}${C_RESET}"
-    echo ""
-    echo "Stop:"
-    echo -e "  ${C_BOLD}v0 cancel ${NAME}${C_RESET}${C_DIM}   # stop and cancel operation${C_RESET}"
-    echo -e "  ${C_BOLD}v0 hold ${NAME}${C_RESET}${C_DIM}     # pause after current work completes${C_RESET}"
-  fi
-elif [[ "${PHASE}" = "queued" ]]; then
-  echo ""
-  echo -e "${C_BOLD}${C_CYAN}=== Work queued (--enqueue mode) ===${C_RESET}"
-  echo -e "Operation: ${C_DIM}${NAME}${C_RESET}"
-  echo -e "Feature: ${C_DIM}$(get_state epic_id)${C_RESET}"
-  echo ""
-  echo "Start execution with:"
-  echo -e "  ${C_BOLD}v0 feature ${NAME} --resume${C_RESET}"
+  echo "[DRY-RUN] Would run: tmux new-session -d -s ${SESSION} ... claude ..."
 elif [[ "${PHASE}" = "executing" ]]; then
   SESSION=$(get_state tmux_session)
   echo "Operation '${NAME}' is already executing"

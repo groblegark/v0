@@ -199,8 +199,6 @@ run_plan_phase() {
 
   local PROMPT
   PROMPT=$(get_state prompt)
-  local SAFE
-  SAFE=$(get_state safe)
 
   FEATURE_BRANCH=$(v0_expand_branch "${V0_FEATURE_BRANCH}" "${NAME}")
   if ! tree_output=$("${V0_DIR}/bin/v0-tree" "${FEATURE_BRANCH}"); then
@@ -219,14 +217,10 @@ run_plan_phase() {
     printf '%s' "${PROMPT}" > "${STATE_DIR}/prompt.txt"
     create_done_script "${STATE_DIR}" "${STATE_DIR}/logs/plan.exit"
 
-    V0_SAFE_EXPORT=""
-    [[ "${SAFE}" = "true" ]] && V0_SAFE_EXPORT="export V0_SAFE=1"
-
     cat > "${STATE_DIR}/run-plan.sh" <<EOF
 #!/bin/bash
 cd '${WORKTREE}'
 export V0_ROOT='${V0_ROOT}'
-${V0_SAFE_EXPORT}
 PROMPT="\$(cat '${STATE_DIR}/prompt.txt')"
 script -q '${STATE_DIR}/logs/plan.log' '${V0_DIR}/bin/v0-plan' '${NAME}' "\${PROMPT}" --direct
 EXIT_CODE=\$?
@@ -387,29 +381,6 @@ EOF
 run_build_phase() {
   log "Starting build phase"
 
-  local ENQUEUE_ONLY
-  ENQUEUE_ONLY=$(get_state enqueue_only)
-
-  if [[ "${ENQUEUE_ONLY}" = "true" ]]; then
-    log "Enqueue-only mode, skipping build phase"
-    return 0
-  fi
-
-  local AFTER
-  AFTER=$(get_state after)
-  local EAGER
-  EAGER=$(get_state eager)
-
-  if [[ "${EAGER}" = "true" ]] && [[ -n "${AFTER}" ]] && [[ "${AFTER}" != "null" ]]; then
-    if ! is_after_op_merged "${AFTER}"; then
-      # Use state machine transition to blocked phase
-      sm_transition_to_blocked "${NAME}" "${AFTER}" "queued"
-      log "Planning complete. Will execute after '${AFTER}' merges."
-      log "Current phase: $(get_blocker_phase "${AFTER}")"
-      return 0
-    fi
-  fi
-
   emit_event "execute:starting" "Launching agent in tmux"
 
   SESSION=$(v0_session_name "${NAME}" "feature")
@@ -486,10 +457,7 @@ SETTINGS_EOF
   NO_MERGE=$(get_state merge_queued)
   [[ "${NO_MERGE}" = "false" ]] && NO_MERGE=1 || NO_MERGE=""
 
-  local SAFE
-  SAFE=$(get_state safe)
   CLAUDE_ARGS="--model opus --dangerously-skip-permissions --allow-dangerously-skip-permissions"
-  [[ "${SAFE}" = "true" ]] && CLAUDE_ARGS="--model opus --permission-mode acceptEdits"
 
   cat > "${TREE_DIR}/.claude/on-complete.sh" <<WRAPPER
 #!/bin/bash

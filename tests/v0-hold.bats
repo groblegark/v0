@@ -531,6 +531,6 @@ EOF
     assert_output --partial "has merged, proceeding"
     # Should NOT show the "Hold cleared" message (because it wasn't held)
     refute_output --partial "Hold cleared"
-    # Should show it attempted to continue with the next phase
-    assert_output --partial "plan:starting"
+    # Should show it attempted to continue with the next phase (dry-run output)
+    assert_output --partial "[DRY-RUN] Would run: v0 plan"
 }
