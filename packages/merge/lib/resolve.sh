@@ -194,6 +194,51 @@ mg_resolve_operation_to_worktree() {
                 return 1
             fi
 
+            # Fallback: Check if branch exists on remote and can still be merged
+            if [[ -n "${branch}" ]] && [[ "${branch}" != "null" ]]; then
+                # Fetch the latest refs to ensure we have current remote state
+                git -C "${main_repo}" fetch "${V0_GIT_REMOTE}" --prune 2>/dev/null || true
+
+                if git -C "${main_repo}" show-ref --verify --quiet "refs/remotes/${V0_GIT_REMOTE}/${branch}" 2>/dev/null; then
+                    # Remote branch exists - check if it's already merged
+                    local remote_head
+                    remote_head=$(git -C "${main_repo}" rev-parse "refs/remotes/${V0_GIT_REMOTE}/${branch}" 2>/dev/null)
+
+                    if [[ -n "${remote_head}" ]] && \
+                       git -C "${main_repo}" merge-base --is-ancestor "${remote_head}" "${V0_DEVELOP_BRANCH:-main}" 2>/dev/null; then
+                        # Remote branch was already merged - clean up
+                        echo "Operation '${op_name}' remote branch was already merged (cleaning up)..."
+
+                        # Update mergeq entry to completed
+                        if [[ -f "${QUEUE_FILE:-}" ]] && mq_entry_exists "${op_name}"; then
+                            mq_update_entry_status "${op_name}" "completed" 2>/dev/null || true
+                        fi
+
+                        # Delete remote branch
+                        git -C "${main_repo}" push "${V0_GIT_REMOTE}" --delete "${branch}" 2>/dev/null || true
+
+                        # Transition operation to merged state
+                        sm_transition_to_merged "${op_name}" 2>/dev/null || true
+
+                        echo "Cleanup complete. Operation '${op_name}' is now marked as merged."
+                        return 1
+                    fi
+
+                    # Remote branch exists but not merged - allow merge to proceed
+                    echo "Found remote branch '${branch}', attempting merge..."
+
+                    # Create local tracking branch from remote
+                    git -C "${main_repo}" branch "${branch}" "${V0_GIT_REMOTE}/${branch}" 2>/dev/null || true
+
+                    MG_BRANCH="${branch}"
+                    MG_HAS_WORKTREE=false
+                    MG_OP_NAME="${op_name}"
+                    MG_WORKTREE=""
+                    MG_TREE_DIR=""
+                    return 0
+                fi
+            fi
+
             echo "Error: Operation '${op_name}' previously failed to merge (status: ${merge_status})" >&2
             echo "" >&2
             echo "The worktree and branch have been cleaned up." >&2
