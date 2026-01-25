@@ -119,6 +119,85 @@ v0_resolve_to_wok_id() {
   return 1
 }
 
+# ============================================================================
+# Wok Blocking Helpers
+# ============================================================================
+
+# v0_get_blockers <epic_id>
+# Returns JSON array of blocker issue IDs from wok
+# Output: ["v0-abc", "v0-def"] or []
+v0_get_blockers() {
+  local epic_id="$1"
+  [[ -z "${epic_id}" ]] && echo "[]" && return
+
+  local blockers
+  blockers=$(wk show "${epic_id}" -o json 2>/dev/null | jq -r '.blockers // []')
+  echo "${blockers:-[]}"
+}
+
+# v0_get_first_open_blocker <epic_id>
+# Returns the first blocker that is not done/closed
+# Output: issue_id or empty
+v0_get_first_open_blocker() {
+  local epic_id="$1"
+  [[ -z "${epic_id}" ]] && return
+
+  # Get blockers and filter to first open one
+  local blockers
+  blockers=$(v0_get_blockers "${epic_id}")
+  [[ "${blockers}" == "[]" ]] && return
+
+  # Check each blocker's status (stop at first open)
+  local blocker_id
+  for blocker_id in $(echo "${blockers}" | jq -r '.[]'); do
+    local status
+    status=$(wk show "${blocker_id}" -o json 2>/dev/null | jq -r '.status // "unknown"')
+    case "${status}" in
+      done|closed) continue ;;
+      *) echo "${blocker_id}"; return ;;
+    esac
+  done
+}
+
+# v0_is_blocked <epic_id>
+# Check if issue has any open blockers
+# Returns: 0 if blocked, 1 if not blocked
+v0_is_blocked() {
+  local epic_id="$1"
+  [[ -z "${epic_id}" ]] && return 1
+
+  local first_blocker
+  first_blocker=$(v0_get_first_open_blocker "${epic_id}")
+  [[ -n "${first_blocker}" ]]
+}
+
+# v0_blocker_to_op_name <blocker_id>
+# Resolve a wok issue ID to an operation name if possible
+# Returns: operation name or original issue ID
+v0_blocker_to_op_name() {
+  local blocker_id="$1"
+
+  # Check if this issue belongs to an operation (has plan: label)
+  local labels
+  labels=$(wk show "${blocker_id}" -o json 2>/dev/null | jq -r '.labels // []')
+
+  # Look for plan:<name> label
+  local plan_label
+  plan_label=$(echo "${labels}" | jq -r '.[] | select(startswith("plan:"))' | head -1)
+
+  if [[ -n "${plan_label}" ]]; then
+    # Extract name from plan:<name>
+    echo "${plan_label#plan:}"
+  else
+    # No operation found, return issue ID
+    echo "${blocker_id}"
+  fi
+}
+
+# ============================================================================
+# Branch Expansion Utilities
+# ============================================================================
+
 # Expand a branch template by substituting {name} or {id} with a value
 # Usage: v0_expand_branch "$V0_FEATURE_BRANCH" "$NAME"
 # Example: v0_expand_branch "feature/{name}" "auth" -> "feature/auth"

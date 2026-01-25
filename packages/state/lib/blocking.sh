@@ -1,126 +1,122 @@
 #!/bin/bash
 # SPDX-License-Identifier: MIT
 # Copyright (c) 2026 Alfred Jean LLC
-# operations/blocking.sh - Dependency management
+# operations/blocking.sh - Dependency management via wok
 #
-# This module provides:
-# - Blocked state checks
-# - Blocker status queries
-# - Unblock operations
-# - Dependent triggering
+# This module provides blocking checks that query wok
+# instead of using local state.json fields.
 #
-# External commands: jq, spawns v0-feature
-
-# Requires: BUILD_DIR, V0_DIR to be set (via v0_load_config)
-# Requires: sm_read_state, sm_bulk_update_state from io.sh
+# External commands: wk, jq
+#
+# Requires: BUILD_DIR to be set (via v0_load_config)
+# Requires: sm_read_state from io.sh
 # Requires: sm_emit_event from logging.sh
-# Requires: sm_get_phase from schema.sh
-# Requires: sm_is_held from holds.sh
+# Requires: v0_get_blockers, v0_get_first_open_blocker, v0_is_blocked,
+#           v0_blocker_to_op_name from v0-common.sh
 
 # ============================================================================
 # Blocking/Dependency Helpers
 # ============================================================================
 
 # sm_is_blocked <op>
-# Check if operation is blocked by --after dependency
+# Check if operation is blocked by any open dependencies in wok
 sm_is_blocked() {
   local op="$1"
-  local phase after
-  phase=$(sm_get_phase "${op}")
-  after=$(sm_read_state "${op}" "after")
+  local epic_id
+  epic_id=$(sm_read_state "${op}" "epic_id")
 
-  [[ "${phase}" = "blocked" ]] || { [[ -n "${after}" ]] && [[ "${after}" != "null" ]]; }
+  [[ -z "${epic_id}" ]] || [[ "${epic_id}" == "null" ]] && return 1
+
+  v0_is_blocked "${epic_id}"
 }
 
 # sm_get_blocker <op>
-# Get the operation blocking this one
+# Get the first open blocker operation/issue for display
+# Returns operation name if resolvable, otherwise issue ID
 sm_get_blocker() {
   local op="$1"
-  sm_read_state "${op}" "after"
+  local epic_id
+  epic_id=$(sm_read_state "${op}" "epic_id")
+
+  [[ -z "${epic_id}" ]] || [[ "${epic_id}" == "null" ]] && return
+
+  local blocker_id
+  blocker_id=$(v0_get_first_open_blocker "${epic_id}")
+  [[ -z "${blocker_id}" ]] && return
+
+  # Try to resolve to operation name
+  v0_blocker_to_op_name "${blocker_id}"
 }
 
-# sm_get_blocker_status <blocker_op>
-# Get phase of the blocking operation
+# sm_get_blocker_status <blocker>
+# Get phase/status of the blocking operation or issue
 sm_get_blocker_status() {
-  local blocker_op="$1"
-  local state_file="${BUILD_DIR}/operations/${blocker_op}/state.json"
+  local blocker="$1"
 
-  if [[ ! -f "${state_file}" ]]; then
-    echo "unknown"
-    return 1
+  # Try as operation name first
+  local state_file="${BUILD_DIR}/operations/${blocker}/state.json"
+  if [[ -f "${state_file}" ]]; then
+    jq -r '.phase // "unknown"' "${state_file}"
+    return
   fi
 
-  jq -r '.phase // "unknown"' "${state_file}"
+  # Try as wok issue ID
+  local status
+  status=$(wk show "${blocker}" -o json 2>/dev/null | jq -r '.status // "unknown"')
+  echo "${status}"
 }
 
 # sm_is_blocker_merged <op>
-# Check if the blocking operation has merged
+# Check if all blockers have completed (done/closed in wok)
 sm_is_blocker_merged() {
   local op="$1"
-  local blocker
-  blocker=$(sm_get_blocker "${op}")
+  local epic_id
+  epic_id=$(sm_read_state "${op}" "epic_id")
 
-  if [[ -z "${blocker}" ]] || [[ "${blocker}" = "null" ]]; then
-    return 0  # No blocker, not blocked
-  fi
+  [[ -z "${epic_id}" ]] || [[ "${epic_id}" == "null" ]] && return 0
 
-  local blocker_phase
-  blocker_phase=$(sm_get_blocker_status "${blocker}")
-  [[ "${blocker_phase}" = "merged" ]]
-}
-
-# sm_unblock_operation <op>
-# Clear blocked state and restore phase
-sm_unblock_operation() {
-  local op="$1"
-  local resume_phase
-  resume_phase=$(sm_read_state "${op}" "blocked_phase")
-
-  if [[ -z "${resume_phase}" ]] || [[ "${resume_phase}" = "null" ]]; then
-    resume_phase="init"
-  fi
-
-  sm_bulk_update_state "${op}" \
-    "phase" "\"${resume_phase}\"" \
-    "after" "null" \
-    "blocked_phase" "null"
-
-  sm_emit_event "${op}" "unblock:resumed" "Resumed from ${resume_phase}"
+  # If no open blockers, then all are "merged"
+  ! v0_is_blocked "${epic_id}"
 }
 
 # sm_find_dependents <op>
 # Find operations waiting for the given operation
-# Returns operation names, one per line
+# Uses wok's blocking relationship queries
 sm_find_dependents() {
   local merged_op="$1"
+  local merged_epic_id
+  merged_epic_id=$(sm_read_state "${merged_op}" "epic_id")
 
-  [[ ! -d "${BUILD_DIR}/operations" ]] && return
+  [[ -z "${merged_epic_id}" ]] || [[ "${merged_epic_id}" == "null" ]] && return
 
-  for state_file in "${BUILD_DIR}"/operations/*/state.json; do
-    [[ -f "${state_file}" ]] || continue
+  # Get issues that this one blocks
+  local blocking_ids
+  blocking_ids=$(wk show "${merged_epic_id}" -o json 2>/dev/null | jq -r '.blocking // [] | .[]')
 
-    local after
-    after=$(jq -r '.after // empty' "${state_file}")
-    if [[ "${after}" = "${merged_op}" ]]; then
-      jq -r '.name' "${state_file}"
+  # Resolve each to operation name if possible
+  local blocked_id
+  for blocked_id in ${blocking_ids}; do
+    local op_name
+    op_name=$(v0_blocker_to_op_name "${blocked_id}")
+    # Only return if it's a known operation
+    if [[ -f "${BUILD_DIR}/operations/${op_name}/state.json" ]]; then
+      echo "${op_name}"
     fi
   done
 }
 
 # sm_trigger_dependents <op>
-# Unblock and resume dependent operations
+# Notify dependent operations that blocker has merged
+# (wok already tracks this via blocked-by relationships)
 sm_trigger_dependents() {
   local merged_op="$1"
-  local dep_op
 
+  # With wok-based tracking, dependents are automatically unblocked
+  # when their blockers are marked done. Just log for visibility.
+  local dep_op
   for dep_op in $(sm_find_dependents "${merged_op}"); do
-    if sm_is_held "${dep_op}"; then
-      sm_emit_event "${dep_op}" "unblock:held" "Dependency ${merged_op} merged but operation held"
-      echo "Dependent '${dep_op}' remains held"
-    else
-      sm_unblock_operation "${dep_op}"
-      # Resume in background
-      "${V0_DIR}/bin/v0-feature" "${dep_op}" --resume &
-    fi
+    sm_emit_event "${dep_op}" "unblock:notified" "Blocker ${merged_op} completed"
   done
 }
+
+# REMOVED: sm_unblock_operation - no longer needed, wok tracks automatically

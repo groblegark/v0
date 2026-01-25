@@ -28,6 +28,9 @@ source "${V0_DIR}/packages/status/lib/recent-display.sh"
 # Source branch status utilities
 source "${V0_DIR}/packages/status/lib/branch-status.sh"
 
+# Source blocker display utilities
+source "${V0_DIR}/packages/status/lib/blocker-display.sh"
+
 usage() {
   v0_help <<'EOF'
 Usage: v0 status [name] [options]
@@ -298,7 +301,7 @@ if [[ -n "${LIST}" ]] || [[ -n "${BLOCKED}" ]]; then
   # Determine effective limit: --max-ops overrides, otherwise show all (use very high number)
   effective_limit="${MAX_OPS:-99999}"
   if [[ ${#state_files[@]} -gt 0 ]]; then
-    while IFS=$'\t' read -r name op_type phase created machine completed merge_queued merge_status merged_at completed_at after session worker_pid held held_at merge_resumed worktree_missing merge_commit created_epoch completed_epoch merged_epoch held_epoch; do
+    while IFS=$'\t' read -r name op_type phase created machine completed merge_queued merge_status merged_at completed_at epic_id session worker_pid held held_at merge_resumed worktree_missing merge_commit created_epoch completed_epoch merged_epoch held_epoch; do
       # Handle META line for max name length and pruning stats
       if [[ "${name}" = "META" ]]; then
         max_name_len="${op_type}"  # op_type field contains max_name_len for META
@@ -311,9 +314,13 @@ if [[ -n "${LIST}" ]] || [[ -n "${BLOCKED}" ]]; then
         continue
       fi
       [[ -z "${name}" ]] && continue
-    # If --blocked filter, skip non-blocked operations
+    # If --blocked filter, skip non-blocked operations (check wok for blockers)
     if [[ -n "${BLOCKED}" ]]; then
-      if [[ -z "${after}" ]] || [[ "${after}" = "null" ]]; then
+      if [[ -z "${epic_id}" ]] || [[ "${epic_id}" = "null" ]]; then
+        continue
+      fi
+      # Check wok for open blockers
+      if ! v0_is_blocked "${epic_id}"; then
         continue
       fi
     fi
@@ -334,15 +341,21 @@ if [[ -n "${LIST}" ]] || [[ -n "${BLOCKED}" ]]; then
       fi
     fi
 
-    # Add after indicator (only show for phases where operation is still waiting)
+    # Add blocker indicator (only show for phases where operation is still waiting)
+    # Query wok for blockers using epic_id
     after_icon=""
-    if [[ -n "${after}" ]] && [[ "${after}" != "null" ]]; then
+    if [[ -n "${epic_id}" ]] && [[ "${epic_id}" != "null" ]]; then
       case "${phase}" in
         executing|completed|pending_merge|merged|cancelled)
           # Don't show [after] for these phases - operation is already past waiting
           ;;
         *)
-          after_icon=" ${C_YELLOW}[after ${after}]${C_RESET}"
+          # Get first blocker from wok
+          local blocker_display
+          blocker_display=$(_status_get_blocker_display "${epic_id}")
+          if [[ -n "${blocker_display}" ]]; then
+            after_icon=" ${C_YELLOW}[after ${blocker_display}]${C_RESET}"
+          fi
           ;;
       esac
     fi
@@ -460,7 +473,7 @@ if [[ -n "${LIST}" ]] || [[ -n "${BLOCKED}" ]]; then
 
       # Priority classification for limit pruning
       # 0 = open (highest priority: needs attention, including merge issues)
-      # 1 = blocked (waiting on dependencies)
+      # 1 = reserved (blocking now checked via wok at display time)
       # 2 = truly completed (merged successfully or cancelled)
       def priority_class:
         if .phase == "cancelled"
@@ -474,10 +487,7 @@ if [[ -n "${LIST}" ]] || [[ -n "${BLOCKED}" ]]; then
           # All other completed states (pending merge, failed, conflict, not queued) need attention
           else 0
           end
-        elif .phase == "blocked"
-        then 1  # blocked phase is always priority 1
-        elif (.after != null and .after != "null") and .phase != "executing" and .phase != "failed"
-        then 1  # blocked (has unmet dependency, not yet executing)
+        # NOTE: blocked phase removed in v2, blocking tracked via wok
         else 0  # open (needs attention: init, planned, queued, executing, failed, conflict, interrupted)
         end;
 
@@ -520,7 +530,7 @@ if [[ -n "${LIST}" ]] || [[ -n "${BLOCKED}" ]]; then
         (.merge_status // "null"),
         (.merged_at // "null"),
         (.completed_at // "null"),
-        (.after // "null"),
+        (.epic_id // "null"),
         (.tmux_session // "null"),
         (.worker_pid // "null"),
         (.held // false),
@@ -747,21 +757,21 @@ fi
 show_status() {
   # Batch read all state fields in single jq invocation (instead of 20+ separate calls)
   # Phase 5 optimization: added merge_commit and merge_error to batch read
+  # Note: after/eager fields removed in schema v2 - blocking now tracked via wok
   local phase op_type feature_id machine session current_issue last_activity \
-        merge_queued merge_status merged_at after eager worker_pid worker_log \
+        merge_queued merge_status merged_at worker_pid worker_log \
         worker_started_at error_msg held held_at worktree merge_commit merge_error
   IFS=$'\t' read -r phase op_type feature_id machine session current_issue \
-    last_activity merge_queued merge_status merged_at after eager worker_pid \
+    last_activity merge_queued merge_status merged_at worker_pid \
     worker_log worker_started_at error_msg held held_at worktree merge_commit merge_error <<< \
     "$(sm_read_state_fields "${NAME}" phase type epic_id machine tmux_session \
        current_issue last_activity merge_queued merge_status merged_at \
-       after eager worker_pid worker_log worker_started_at error held held_at worktree \
+       worker_pid worker_log worker_started_at error held held_at worktree \
        merge_commit merge_error)"
 
   # Handle defaults for fields that need them
   [[ -z "${op_type}" ]] && op_type="build"
   [[ -z "${merge_queued}" ]] && merge_queued="false"
-  [[ -z "${eager}" ]] && eager="false"
   [[ -z "${held}" ]] && held="false"
 
   # Get completed count separately (requires array length calculation)
@@ -885,19 +895,18 @@ show_status() {
     echo "  Release: v0 resume ${NAME}"
   fi
 
-  # Show after info if applicable
-  if [[ -n "${after}" ]] && [[ "${after}" != "null" ]]; then
-    echo ""
-    echo "After: ${after}"
-    [[ "${eager}" = "true" ]] && echo "Mode: eager (plan first)" || echo "Mode: wait first"
+  # Show blocker info from wok if applicable
+  if [[ -n "${feature_id}" ]] && [[ "${feature_id}" != "null" ]]; then
+    local blocker_display
+    blocker_display=$(_status_get_blocker_display "${feature_id}")
+    if [[ -n "${blocker_display}" ]]; then
+      echo ""
+      echo "Blocked by: ${blocker_display}"
 
-    # Use state machine to get after operation status
-    local after_phase
-    if sm_state_exists "${after}"; then
-      after_phase=$(sm_get_phase "${after}")
-      echo "Status: ${after_phase}"
-    else
-      echo "Status: unknown (operation not found)"
+      # Try to get blocker status
+      local blocker_status
+      blocker_status=$(sm_get_blocker_status "${blocker_display}")
+      echo "Status: ${blocker_status}"
     fi
   fi
 

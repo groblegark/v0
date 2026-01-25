@@ -1,5 +1,5 @@
 #!/usr/bin/env bats
-# v0-build.bats - Tests for v0-build script (blocked-by dependency feature)
+# v0-build.bats - Tests for v0-build script (wok-based dependency feature)
 
 load '../packages/test-support/helpers/test_helper'
 
@@ -145,40 +145,38 @@ teardown() {
 }
 
 # ============================================================================
-# get_blocker_issue_id Helper Tests
+# Blocker Helper Tests (via v0-common.sh functions)
 # ============================================================================
 
-@test "v0-build: get_blocker_issue_id extracts epic_id from blocker state" {
-    # Create a blocker operation with epic_id
-    local blocker_dir="${TEST_TEMP_DIR}/project/.v0/build/operations/blocker"
-    mkdir -p "${blocker_dir}"
-    cat > "${blocker_dir}/state.json" <<EOF
+@test "v0-build: v0_resolve_to_wok_id extracts epic_id from operation state" {
+    # Create an operation with epic_id
+    local op_dir="${TEST_TEMP_DIR}/project/.v0/build/operations/myop"
+    mkdir -p "${op_dir}"
+    cat > "${op_dir}/state.json" <<EOF
 {
-  "name": "blocker",
+  "name": "myop",
   "phase": "merged",
   "epic_id": "test-abc123"
 }
 EOF
 
-    # Source the script to get the function (indirectly test via v0-build behavior)
-    # The function is internal, so we test it through integration
-    # This test verifies the state file structure is correct
-    run jq -r '.epic_id // empty' "${blocker_dir}/state.json"
+    # Test via jq directly (v0_resolve_to_wok_id uses this internally)
+    run jq -r '.epic_id // empty' "${op_dir}/state.json"
     assert_success
     assert_output "test-abc123"
 }
 
-@test "v0-build: get_blocker_issue_id returns empty for missing epic_id" {
-    local blocker_dir="${TEST_TEMP_DIR}/project/.v0/build/operations/blocker"
-    mkdir -p "${blocker_dir}"
-    cat > "${blocker_dir}/state.json" <<EOF
+@test "v0-build: operation without epic_id returns empty" {
+    local op_dir="${TEST_TEMP_DIR}/project/.v0/build/operations/myop"
+    mkdir -p "${op_dir}"
+    cat > "${op_dir}/state.json" <<EOF
 {
-  "name": "blocker",
+  "name": "myop",
   "phase": "init"
 }
 EOF
 
-    run jq -r '.epic_id // empty' "${blocker_dir}/state.json"
+    run jq -r '.epic_id // empty' "${op_dir}/state.json"
     assert_success
     assert_output ""
 }
@@ -267,7 +265,7 @@ EOF
     fi
 }
 
-@test "v0-build: --after stores dependency in state.json" {
+@test "v0-build: --after creates state file without after field (v2 schema)" {
     # Create blocker operation
     local blocker_dir="${TEST_TEMP_DIR}/project/.v0/build/operations/blocker"
     mkdir -p "${blocker_dir}"
@@ -282,11 +280,14 @@ EOF
     # Run v0 build with --after (dry-run)
     run "${V0_BUILD}" test-op "Test prompt" --after blocker --dry-run 2>&1 || true
 
-    # Verify state file has after field
+    # Verify state file does NOT have after field (v2 schema uses wok deps)
     local state_file="${TEST_TEMP_DIR}/project/.v0/build/operations/test-op/state.json"
     if [[ -f "${state_file}" ]]; then
-        run jq -r '.after' "${state_file}"
-        assert_output "blocker"
+        run jq -r 'has("after")' "${state_file}"
+        assert_output "false"
+        # Should have schema version 2
+        run jq -r '._schema_version' "${state_file}"
+        assert_output "2"
     fi
 }
 
@@ -331,10 +332,61 @@ EOF
 
     run "${V0_BUILD}" test-op "Test prompt" --blocked-by blocker --dry-run 2>&1 || true
 
-    local state_file="${TEST_TEMP_DIR}/project/.v0/build/operations/test-op/state.json"
-    if [[ -f "${state_file}" ]]; then
-        run jq -r '.after' "${state_file}"
-        assert_output "blocker"
+    # Verify wk dep was called (via mock calls file)
+    if [[ -f "${MOCK_CALLS_DIR}/wk.calls" ]]; then
+        run cat "${MOCK_CALLS_DIR}/wk.calls"
+        assert_output --partial "dep"
+        assert_output --partial "blocked-by"
+    fi
+}
+
+@test "v0-build: --after accepts comma-separated list" {
+    # Create blocker operations
+    for op in blocker1 blocker2; do
+        local op_dir="${TEST_TEMP_DIR}/project/.v0/build/operations/${op}"
+        mkdir -p "${op_dir}"
+        cat > "${op_dir}/state.json" <<EOF
+{
+  "name": "${op}",
+  "phase": "merged",
+  "epic_id": "test-${op}-123"
+}
+EOF
+    done
+
+    run "${V0_BUILD}" test-op "Test prompt" --after blocker1,blocker2 --dry-run 2>&1 || true
+
+    # Verify wk dep was called for both blockers
+    if [[ -f "${MOCK_CALLS_DIR}/wk.calls" ]]; then
+        run cat "${MOCK_CALLS_DIR}/wk.calls"
+        assert_output --partial "blocked-by"
+        assert_output --partial "test-blocker1-123"
+        assert_output --partial "test-blocker2-123"
+    fi
+}
+
+@test "v0-build: --after merges multiple flags" {
+    # Create blocker operations
+    for op in a b c; do
+        local op_dir="${TEST_TEMP_DIR}/project/.v0/build/operations/${op}"
+        mkdir -p "${op_dir}"
+        cat > "${op_dir}/state.json" <<EOF
+{
+  "name": "${op}",
+  "phase": "merged",
+  "epic_id": "test-${op}-123"
+}
+EOF
+    done
+
+    run "${V0_BUILD}" test-op "Test prompt" --after a,b --after c --dry-run 2>&1 || true
+
+    # Verify wk dep was called for all three blockers
+    if [[ -f "${MOCK_CALLS_DIR}/wk.calls" ]]; then
+        run cat "${MOCK_CALLS_DIR}/wk.calls"
+        assert_output --partial "test-a-123"
+        assert_output --partial "test-b-123"
+        assert_output --partial "test-c-123"
     fi
 }
 

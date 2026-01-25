@@ -50,11 +50,7 @@ sm_get_display_status() {
     planned)
       echo "planned|cyan|"
       ;;
-    blocked)
-      local after
-      after=$(sm_get_blocker "${op}")
-      echo "blocked|yellow|[waiting: ${after}]"
-      ;;
+    # NOTE: blocked phase removed in v2 - blocking tracked via wok
     queued)
       echo "queued|cyan|"
       ;;

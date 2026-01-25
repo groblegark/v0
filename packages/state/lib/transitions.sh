@@ -112,24 +112,7 @@ sm_transition_to_queued() {
   fi
 }
 
-# sm_transition_to_blocked <op> <blocked_by> <resume_phase>
-# Transition operation to blocked phase
-sm_transition_to_blocked() {
-  local op="$1"
-  local blocked_by="$2"
-  local resume_phase="$3"
-
-  if ! sm_can_transition "${op}" "blocked"; then
-    local current
-    current=$(sm_get_phase "${op}")
-    echo "Error: Cannot transition from '${current}' to 'blocked'" >&2
-    return 1
-  fi
-
-  _sm_do_transition "${op}" "blocked" "blocked:waiting" "Waiting for ${blocked_by}" \
-    "after" "\"${blocked_by}\"" \
-    "blocked_phase" "\"${resume_phase}\""
-}
+# NOTE: sm_transition_to_blocked removed in v2 - blocking via wok deps only
 
 # sm_transition_to_executing <op> <session>
 # Transition operation to executing phase

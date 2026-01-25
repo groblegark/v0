@@ -15,7 +15,8 @@
 # Schema Versioning
 # ============================================================================
 # Current schema version - increment when state.json format changes
-SM_STATE_VERSION=1
+# v2: Removed after/blocked_phase/eager fields, blocking via wok only
+SM_STATE_VERSION=2
 
 # ============================================================================
 # Log Rotation Settings
@@ -30,10 +31,9 @@ SM_LOG_KEEP_COUNT=3
 # ============================================================================
 # From State      -> Allowed Transitions
 # -------------------------------------------
-# init            -> planned, blocked, failed
-# planned         -> queued, blocked, failed
-# blocked         -> init, planned, queued (on unblock)
-# queued          -> executing, blocked, failed
+# init            -> planned, failed
+# planned         -> queued, failed
+# queued          -> executing, failed
 # executing       -> completed, failed, interrupted
 # completed       -> pending_merge, merged, failed
 # pending_merge   -> merged, conflict, failed
@@ -42,6 +42,8 @@ SM_LOG_KEEP_COUNT=3
 # conflict        -> pending_merge (on retry), failed
 # interrupted     -> init, planned, queued (on resume)
 # cancelled       -> (terminal)
+#
+# NOTE: blocked phase removed in v2. Blocking is tracked via wok deps.
 
 # ============================================================================
 # State File Path
@@ -69,14 +71,14 @@ sm_state_exists() {
 
 # sm_allowed_transitions <phase>
 # Return space-separated list of valid next phases for current phase
+# NOTE: blocked phase removed in v2 - blocking via wok deps only
 sm_allowed_transitions() {
   local phase="$1"
 
   case "${phase}" in
-    init)          echo "planned blocked failed" ;;
-    planned)       echo "queued executing blocked failed" ;;
-    blocked)       echo "init planned queued" ;;
-    queued)        echo "executing blocked failed" ;;
+    init)          echo "planned failed" ;;
+    planned)       echo "queued executing failed" ;;
+    queued)        echo "executing failed" ;;
     executing)     echo "completed failed interrupted" ;;
     completed)     echo "pending_merge merged failed" ;;
     pending_merge) echo "merged conflict failed" ;;

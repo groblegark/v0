@@ -13,18 +13,12 @@ flowchart TD
     start((start)) --> init
 
     init["init<br/>(planning not started)"]
-    init -->|"--after<br/>(no --eager)"| blocked
     init -->|normal| planned
-    init -->|"--after --eager"| planned
 
-    blocked["blocked<br/>(waiting for op)"]
     planned["planned<br/>(plan created)"]
-
-    blocked -->|"after op merged"| queued
     planned -->|"issue filed"| queued
 
     queued["queued<br/>(issue filed)"]
-    queued -->|"--enqueue"| stop1(("(stops)"))
     queued -->|error| failed1[failed]
     queued --> executing
 
@@ -53,8 +47,7 @@ flowchart TD
 |-------|-------------|
 | `init` | Initial state. Planning has not started yet. |
 | `planned` | Plan file created at `plans/<name>.md`. Ready for issue filing. |
-| `queued` | Feature issue filed from plan. Ready for execution (or stopped if `--enqueue`). |
-| `blocked` | Waiting for another operation to complete (`--after` flag). |
+| `queued` | Feature issue filed from plan. Ready for execution. |
 | `executing` | Claude agent is running in a tmux session. |
 | `completed` | Agent finished work. May be pending merge. |
 | `pending_merge` | Added to merge queue, waiting to be merged. |
@@ -97,23 +90,41 @@ flowchart TD
 - On conflict, attempts automatic resolution with Claude
 - On success, branch merged to main and deleted
 
-## Blocking and Dependencies
+## Dependency Tracking (v2+)
+
+Starting with schema v2, operation dependencies are tracked exclusively
+in wok using `blocked-by` relationships:
+
+```bash
+# Add dependency when creating operation
+v0 build api "Build API" --after auth
+# Multiple dependencies supported:
+v0 build api "Build API" --after auth,config
+v0 build api "Build API" --after auth --after config
+
+# Check if operation is blocked (via wok)
+wk show <epic_id> -o json | jq '.blockers'
+
+# Operations are unblocked when blockers reach done/closed status
+wk ready --label plan:<name>  # Shows if unblocked
+```
+
+The `after`, `blocked_phase`, and `eager` fields have been removed from
+state.json. Migration from v1 automatically adds wok dependencies.
+
+### Blocking Behavior
 
 Operations can depend on other operations using the `--after` flag:
 
 ```bash
 v0 feature api "Build API" --after auth
+v0 feature api "Build API" --after auth,config  # Multiple deps
 ```
 
-**Default behavior** (no `--eager`):
-- Operation blocks immediately at `init`
-- Waits for the dependency to reach `merged` state
-- Then proceeds with planning
-
-**Eager mode** (`--eager`):
-- Planning runs first
-- Operation blocks at `queued` before execution
-- Useful when you want to review the plan while waiting
+When an operation has unresolved blockers:
+- The worker checks wok before execution
+- If blocked, worker pauses and logs the blocker
+- Operation proceeds when all blockers reach `done` or `closed` status in wok
 
 ## Hold Mechanism
 
@@ -129,7 +140,7 @@ When held:
 - Phase transitions are blocked
 - Agent exits gracefully after current work
 
-## State File Schema
+## State File Schema (v2)
 
 ```json
 {
@@ -149,17 +160,18 @@ When held:
   "merge_status": null,
   "merged_at": null,
   "merge_error": null,
-  "after": null,
-  "eager": false,
-  "safe": false,
-  "blocked_phase": null,
   "held": false,
   "held_at": null,
   "worker_pid": 12345,
   "worker_log": "/path/to/logs/worker.log",
-  "worker_started_at": "2026-01-19T00:00:00Z"
+  "worker_started_at": "2026-01-19T00:00:00Z",
+  "_schema_version": 2,
+  "_migrated_at": "2026-01-19T00:00:00Z"
 }
 ```
+
+Note: The `after`, `blocked_phase`, `eager`, and `safe` fields were removed in v2.
+Dependencies are tracked via wok `blocked-by` relationships instead.
 
 ## Merge Queue States
 

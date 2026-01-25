@@ -32,7 +32,9 @@ Options:
   --no-merge     Don't auto-merge when work completes (default: auto-merge)
   --label <l>    Add label to created issue (can repeat)
   --dry-run      Show what would happen without executing
-  --after <op>   Wait for operation to merge before executing
+  --after <ops>  Wait for operations to merge before executing
+                 Accepts comma-separated list: --after auth,api
+                 Can be specified multiple times: --after auth --after api
   --plan <file>  Use existing plan (skips planning if feature ID present)
   --attach       Follow worker logs after queuing
 
@@ -65,7 +67,7 @@ RESUME_PHASE=""
 NO_MERGE=""
 LABELS=()
 DRY_RUN=""
-AFTER=""
+AFTER_OPS=()
 PLAN_FILE_ARG=""
 ATTACH=""
 HOLD=""
@@ -84,8 +86,17 @@ while [[ $# -gt 0 ]]; do
     --no-merge) NO_MERGE=1; shift ;;
     --label) LABELS+=("$2"); shift 2 ;;
     --dry-run) DRY_RUN=1; shift ;;
-    --after) AFTER="$2"; shift 2 ;;
-    --blocked-by) AFTER="$2"; shift 2 ;;  # Undocumented alias for --after
+    --after|--blocked-by)
+      # Split comma-separated IDs and add to array
+      IFS=',' read -ra ids <<< "$2"
+      AFTER_OPS+=("${ids[@]}")
+      shift 2
+      ;;
+    --after=*)
+      IFS=',' read -ra ids <<< "${1#--after=}"
+      AFTER_OPS+=("${ids[@]}")
+      shift
+      ;;
     --plan) PLAN_FILE_ARG="$2"; shift 2 ;;
     --hold) HOLD=1; shift ;;
     --attach) ATTACH=1; shift ;;
@@ -126,14 +137,23 @@ if [[ -n "${PLAN_FILE_ARG}" ]]; then
   fi
 fi
 
-# Validate --after and --eager flags
-if [[ -n "${AFTER}" ]]; then
+# Validate --after flags
+if [[ ${#AFTER_OPS[@]} -gt 0 ]]; then
   if [[ -z "${RESUME}" ]]; then
-    if [[ ! -f "${BUILD_DIR}/operations/${AFTER}/state.json" ]]; then
-      echo "Error: Operation '${AFTER}' does not exist"
-      echo "Create it first with: v0 feature ${AFTER} \"...\""
-      exit 1
-    fi
+    issue_pattern=$(v0_issue_pattern)
+    for after_op in "${AFTER_OPS[@]}"; do
+      # Skip validation for wok issue IDs (they're resolved at dep time)
+      if [[ "${after_op}" =~ ^${issue_pattern}$ ]]; then
+        continue
+      fi
+      if [[ ! -f "${BUILD_DIR}/operations/${after_op}/state.json" ]]; then
+        echo "Error: Operation '${after_op}' does not exist"
+        echo "Create it first with: v0 feature ${after_op} \"...\""
+        exit 1
+      fi
+    done
+
+    # Check for circular dependencies
     check_circular_dep() {
       local checking="$1"
       local visited="$2"
@@ -145,23 +165,40 @@ if [[ -n "${AFTER}" ]]; then
       local check_state="${BUILD_DIR}/operations/${checking}/state.json"
       [[ ! -f "${check_state}" ]] && return 1
 
-      local check_after
-      check_after=$(jq -r '.after // empty' "${check_state}")
-      [[ -z "${check_after}" ]] || [[ "${check_after}" = "null" ]] && return 1
-
-      if [[ "${check_after}" = "${NAME}" ]]; then
-        return 0
+      # Get blockers from wok via epic_id
+      local check_epic_id
+      check_epic_id=$(jq -r '.epic_id // empty' "${check_state}")
+      if [[ -n "${check_epic_id}" ]] && [[ "${check_epic_id}" != "null" ]]; then
+        local check_blockers
+        check_blockers=$(v0_get_blockers "${check_epic_id}")
+        if [[ "${check_blockers}" != "[]" ]]; then
+          for blocker_id in $(echo "${check_blockers}" | jq -r '.[]'); do
+            local blocker_name
+            blocker_name=$(v0_blocker_to_op_name "${blocker_id}")
+            if [[ "${blocker_name}" = "${NAME}" ]]; then
+              return 0
+            fi
+            if check_circular_dep "${blocker_name}" "${visited}:${checking}:"; then
+              return 0
+            fi
+          done
+        fi
       fi
-
-      check_circular_dep "${check_after}" "${visited}:${checking}:"
+      return 1
     }
 
-    if check_circular_dep "${AFTER}" ":"; then
-      echo "Error: Circular dependency detected"
-      echo "  '${NAME}' would wait for '${AFTER}'"
-      echo "  but '${AFTER}' is (transitively) waiting for '${NAME}'"
-      exit 1
-    fi
+    for after_op in "${AFTER_OPS[@]}"; do
+      # Skip wok issue IDs for circular check (handled by wok itself)
+      if [[ "${after_op}" =~ ^${issue_pattern}$ ]]; then
+        continue
+      fi
+      if check_circular_dep "${after_op}" ":"; then
+        echo "Error: Circular dependency detected"
+        echo "  '${NAME}' would wait for '${after_op}'"
+        echo "  but '${after_op}' is (transitively) waiting for '${NAME}'"
+        exit 1
+      fi
+    done
   fi
 fi
 
@@ -193,11 +230,8 @@ init_state() {
   local merge_queued="true"
   [[ -n "${NO_MERGE}" ]] && merge_queued="false"
 
-  local after="null"
-  local blocked_phase="null"
-  if [[ -n "${AFTER}" ]]; then
-    after="\"${AFTER}\""
-  fi
+  # Note: after/blocked_phase fields removed in schema v2
+  # Blocking is now tracked exclusively in wok
 
   cat > "${STATE_FILE}" <<EOF
 {
@@ -217,11 +251,10 @@ init_state() {
   "merge_status": null,
   "merged_at": null,
   "merge_error": null,
-  "after": ${after},
-  "blocked_phase": ${blocked_phase},
   "worker_pid": null,
   "worker_log": null,
-  "worker_started_at": null
+  "worker_started_at": null,
+  "_schema_version": 2
 }
 EOF
 }
@@ -234,28 +267,8 @@ emit_event() {
   sm_emit_event "${NAME}" "$@"
 }
 
-is_after_op_merged() {
-  local op="$1"
-  local phase
-  phase=$(sm_get_phase "${op}")
-  [[ "${phase}" = "merged" ]]
-}
-
-get_blocker_phase() {
-  local op="$1"
-  local phase
-  phase=$(sm_get_phase "${op}")
-  echo "${phase:-unknown}"
-}
-
-# Get blocker operation's issue ID for wk dep
-get_blocker_issue_id() {
-  local op="$1"
-  local blocker_state="${BUILD_DIR}/operations/${op}/state.json"
-  if [[ -f "${blocker_state}" ]]; then
-    jq -r '.epic_id // empty' "${blocker_state}"
-  fi
-}
+# Note: Blocking is now tracked in wok, not state.json
+# Use v0_is_blocked, v0_get_first_open_blocker from v0-common.sh
 
 # Resume logic
 if [[ -n "${RESUME}" ]]; then
@@ -273,7 +286,7 @@ if [[ -n "${RESUME}" ]]; then
   while IFS= read -r label; do
     [[ -n "${label}" ]] && LABELS+=("${label}")
   done < <(jq -r '.labels[]' "${STATE_FILE}" 2>/dev/null || true)
-  AFTER=$(get_state after)
+  # Note: blocking is now tracked in wok, not state.json
 
   # Add merge_queued field if missing (for operations created by v0 plan)
   MERGE_QUEUED_STATE=$(get_state merge_queued)
@@ -408,63 +421,18 @@ if [[ -n "${RESUME}" ]]; then
     fi
   fi
 
-  if [[ "${PHASE}" = "blocked" ]]; then
-    if [[ -n "${AFTER}" ]] && [[ "${AFTER}" != "null" ]]; then
-      after_state_file="${BUILD_DIR}/operations/${AFTER}/state.json"
-      if [[ ! -f "${after_state_file}" ]]; then
-        echo "Operation '${AFTER}' no longer exists, proceeding..."
-        PHASE=$(get_state blocked_phase)
-        [[ -z "${PHASE}" ]] || [[ "${PHASE}" = "null" ]] && PHASE="init"
-        update_state "after" 'null'
-        emit_event "unblock:resumed" "After op ${AFTER} deleted"
-
-        # If this resume was just clearing a hold, don't start the operation
-        if [[ -n "${WAS_HELD}" ]]; then
-          update_state "phase" "\"${PHASE}\""
-          echo ""
-          echo "Hold cleared. Operation unblocked and ready at phase: ${PHASE}"
-          echo ""
-          echo "Start with:"
-          echo "  v0 feature ${NAME} --resume"
-          exit 0
-        fi
-      elif is_after_op_merged "${AFTER}"; then
-        echo "Operation '${AFTER}' has merged, proceeding..."
-        PHASE=$(get_state blocked_phase)
-        if [[ -z "${PHASE}" ]] || [[ "${PHASE}" = "null" ]]; then
-          PHASE="init"
-        fi
-        update_state "after" 'null'
-        emit_event "unblock:resumed" "Unblocked by ${AFTER} merge"
-
-        # If this resume was just clearing a hold, don't start the operation
-        # Let the user run resume again to actually start it
-        if [[ -n "${WAS_HELD}" ]]; then
-          update_state "phase" "\"${PHASE}\""
-          echo ""
-          echo "Hold cleared. Operation unblocked and ready at phase: ${PHASE}"
-          echo ""
-          echo "Start with:"
-          echo "  v0 feature ${NAME} --resume"
-          exit 0
-        fi
-      else
-        after_phase=$(get_blocker_phase "${AFTER}")
-        if [[ "${after_phase}" = "failed" ]] || [[ "${after_phase}" = "conflict" ]]; then
-          echo "Warning: Operation '${AFTER}' has ${after_phase} status"
-          echo "It needs to be resolved before this operation can proceed."
-          echo ""
-          echo "To manually unblock, clear the after field:"
-          echo "  jq '.after = null | .phase = .blocked_phase' ${STATE_FILE} > tmp && mv tmp ${STATE_FILE}"
-          echo "  v0 feature ${NAME} --resume"
-        else
-          echo "Still waiting for '${AFTER}' (phase: ${after_phase})"
-        fi
-        exit 0
-      fi
-    else
-      PHASE=$(get_state blocked_phase)
-      [[ -z "${PHASE}" ]] || [[ "${PHASE}" = "null" ]] && PHASE="init"
+  # Check for wok blockers (replaces old blocked phase handling)
+  EPIC_ID=$(get_state epic_id)
+  if [[ -n "${EPIC_ID}" ]] && [[ "${EPIC_ID}" != "null" ]]; then
+    FIRST_BLOCKER=$(v0_get_first_open_blocker "${EPIC_ID}")
+    if [[ -n "${FIRST_BLOCKER}" ]]; then
+      BLOCKER_NAME=$(v0_blocker_to_op_name "${FIRST_BLOCKER}")
+      echo "Operation is blocked by '${BLOCKER_NAME}'"
+      echo ""
+      echo "To remove the blocker, either:"
+      echo "  - Complete the blocking operation"
+      echo "  - Remove the dependency: wk undep ${EPIC_ID} blocked-by ${FIRST_BLOCKER}"
+      exit 0
     fi
   fi
 
@@ -500,20 +468,7 @@ else
     sm_exit_if_held "${NAME}" "feature"
   fi
 
-  if [[ -n "${AFTER}" ]] && [[ "${AFTER}" != "null" ]]; then
-    if ! is_after_op_merged "${AFTER}"; then
-      # Use state machine transition to blocked phase
-      sm_transition_to_blocked "${NAME}" "${AFTER}" "init"
-      echo ""
-      echo -e "${C_BOLD}${C_YELLOW}=== Waiting for '${AFTER}' ===${C_RESET}"
-      echo "Will start after '${AFTER}' merges."
-      echo -e "Current phase: ${C_DIM}$(get_blocker_phase "${AFTER}")${C_RESET}"
-      echo ""
-      echo "Resume manually with:"
-      echo -e "  ${C_BOLD}v0 feature ${NAME} --resume${C_RESET}"
-      exit 0
-    fi
-  fi
+  # Note: wok dependencies added after epic_id is created (see below)
 
   if [[ -n "${PLAN_FILE_ARG}" ]]; then
     mkdir -p "${PLANS_DIR}"
@@ -537,16 +492,20 @@ else
         update_state "phase" '"queued"'
         emit_event "plan:provided" "Using existing feature ${EXISTING_FEATURE} from ${PLAN_FILE_ARG}"
         PHASE="queued"
-        # Add blocked-by dependency in wk if --after was specified
-        if [[ -n "${AFTER}" ]] && [[ "${AFTER}" != "null" ]]; then
-          BLOCKER_ISSUE_ID=$(get_blocker_issue_id "${AFTER}")
-          if [[ -n "${BLOCKER_ISSUE_ID}" ]] && [[ "${BLOCKER_ISSUE_ID}" != "null" ]]; then
-            if wk dep "${EXISTING_FEATURE}" blocked-by "${BLOCKER_ISSUE_ID}" 2>/dev/null; then
-              emit_event "dep:added" "Added blocked-by: ${BLOCKER_ISSUE_ID}"
+        # Add blocked-by dependencies in wk if --after was specified
+        if [[ ${#AFTER_OPS[@]} -gt 0 ]]; then
+          for after_op in "${AFTER_OPS[@]}"; do
+            local resolved_id
+            if resolved_id=$(v0_resolve_to_wok_id "${after_op}"); then
+              if wk dep "${EXISTING_FEATURE}" blocked-by "${resolved_id}" 2>/dev/null; then
+                emit_event "dep:added" "Added blocked-by: ${resolved_id}"
+              else
+                emit_event "dep:failed" "Failed to add blocked-by: ${resolved_id}"
+              fi
             else
-              emit_event "dep:failed" "Failed to add blocked-by: ${BLOCKER_ISSUE_ID}"
+              emit_event "dep:skipped" "Could not resolve '${after_op}' to wok ID"
             fi
-          fi
+          done
         fi
       else
         echo "Warning: Feature ${EXISTING_FEATURE} is ${FEATURE_STATUS}, will file new issue"
@@ -572,6 +531,22 @@ else
     else
       emit_event "issue:warning" "Failed to create feature issue"
     fi
+  fi
+
+  # Add wok dependencies if --after was specified
+  if [[ ${#AFTER_OPS[@]} -gt 0 ]] && [[ -n "${FEATURE_ID}" ]]; then
+    for after_op in "${AFTER_OPS[@]}"; do
+      local resolved_id
+      if resolved_id=$(v0_resolve_to_wok_id "${after_op}"); then
+        if wk dep "${FEATURE_ID}" blocked-by "${resolved_id}" 2>/dev/null; then
+          emit_event "dep:added" "Added blocked-by: ${resolved_id}"
+        else
+          emit_event "dep:failed" "Failed to add blocked-by: ${resolved_id}"
+        fi
+      else
+        emit_event "dep:skipped" "Could not resolve '${after_op}' to wok ID"
+      fi
+    done
   fi
 
   # Background execution (default for new operations)

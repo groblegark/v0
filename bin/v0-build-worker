@@ -77,28 +77,8 @@ emit_event() {
   echo "[$(date -u +%Y-%m-%dT%H:%M:%SZ)] ${event}: ${details}" >> "${STATE_DIR}/logs/events.log"
 }
 
-is_after_op_merged() {
-  local op="$1"
-  local phase
-  phase=$(sm_get_phase "${op}")
-  [[ "${phase}" = "merged" ]]
-}
-
-get_blocker_phase() {
-  local op="$1"
-  local phase
-  phase=$(sm_get_phase "${op}")
-  echo "${phase:-unknown}"
-}
-
-# Get blocker operation's issue ID for wk dep
-get_blocker_issue_id() {
-  local op="$1"
-  local blocker_state="${BUILD_DIR}/operations/${op}/state.json"
-  if [[ -f "${blocker_state}" ]]; then
-    jq -r '.epic_id // empty' "${blocker_state}"
-  fi
-}
+# Note: Blocking is now tracked in wok, not state.json
+# Use v0_is_blocked, v0_get_first_open_blocker from v0-common.sh
 
 create_done_script() {
   local target_dir="$1"
@@ -188,6 +168,25 @@ check_hold_before_phase() {
   if sm_is_held "${NAME}"; then
     log "Operation is held, pausing worker"
     sm_emit_event "${NAME}" "hold:paused" "Worker paused due to hold"
+    return 1
+  fi
+  return 0
+}
+
+# Check wok blockers before starting new phases
+# Returns 0 if can proceed, 1 if blocked
+check_wok_blockers() {
+  local epic_id
+  epic_id=$(get_state epic_id)
+  [[ -z "${epic_id}" ]] || [[ "${epic_id}" == "null" ]] && return 0
+
+  if v0_is_blocked "${epic_id}"; then
+    local blocker
+    blocker=$(v0_get_first_open_blocker "${epic_id}")
+    local blocker_name
+    blocker_name=$(v0_blocker_to_op_name "${blocker}")
+    log "Operation is blocked by '${blocker_name}', pausing worker"
+    sm_emit_event "${NAME}" "blocked:paused" "Worker paused waiting for ${blocker_name}"
     return 1
   fi
   return 0
@@ -348,18 +347,7 @@ EOF
     fi
   fi
 
-  # Add blocked-by dependency in wk if --after was specified
-  AFTER_OP=$(get_state after)
-  if [[ -n "${FEATURE_ID}" ]] && [[ -n "${AFTER_OP}" ]] && [[ "${AFTER_OP}" != "null" ]]; then
-    BLOCKER_ISSUE_ID=$(get_blocker_issue_id "${AFTER_OP}")
-    if [[ -n "${BLOCKER_ISSUE_ID}" ]] && [[ "${BLOCKER_ISSUE_ID}" != "null" ]]; then
-      if wk dep "${FEATURE_ID}" blocked-by "${BLOCKER_ISSUE_ID}" 2>/dev/null; then
-        emit_event "dep:added" "Added blocked-by: ${BLOCKER_ISSUE_ID}"
-      else
-        emit_event "dep:failed" "Failed to add blocked-by: ${BLOCKER_ISSUE_ID}"
-      fi
-    fi
-  fi
+  # Note: blocked-by dependencies are added in v0-build, not here
 
   # Add labels to the issue
   LABELS=()
@@ -522,6 +510,7 @@ main() {
       check_hold_before_phase || exit 0
       run_plan_phase || exit 1
       check_hold_before_phase || exit 0
+      check_wok_blockers || exit 0
       run_build_phase || exit 1
       ;;
     planned)
@@ -547,15 +536,15 @@ main() {
       fi
       sm_transition_to_queued "${NAME}" "${FEATURE_ID}"
       check_hold_before_phase || exit 0
+      check_wok_blockers || exit 0
       run_build_phase || exit 1
       ;;
     queued)
       check_hold_before_phase || exit 0
+      check_wok_blockers || exit 0
       run_build_phase || exit 1
       ;;
-    blocked)
-      log "Operation is blocked, waiting for dependency"
-      ;;
+    # Note: blocked phase removed in v2 - blocking checked via wok at check_wok_blockers
     failed|interrupted|cancelled)
       log "Recovering from ${PHASE} state"
       # Use state machine to determine resume phase and clear error
@@ -565,6 +554,7 @@ main() {
       sm_emit_event "${NAME}" "worker:recovered" "Resuming from ${PHASE} at ${RESUME_PHASE}"
       case "${RESUME_PHASE}" in
         queued)
+          check_wok_blockers || exit 0
           run_build_phase || exit 1
           ;;
         planned)
@@ -586,10 +576,12 @@ main() {
             fi
           fi
           sm_transition_to_queued "${NAME}" "${FEATURE_ID}"
+          check_wok_blockers || exit 0
           run_build_phase || exit 1
           ;;
         init)
           run_plan_phase || exit 1
+          check_wok_blockers || exit 0
           run_build_phase || exit 1
           ;;
       esac
