@@ -8,7 +8,7 @@ V0_DATA_DIR := $(or $(XDG_DATA_HOME),$(HOME)/.local/share)/v0
 BATS := $(V0_DATA_DIR)/bats/bats-core/bin/bats
 BATS_LIB_PATH := $(V0_DATA_DIR)/bats
 
-.PHONY: help check test test-file test-package lint lint-scripts lint-tests lint-quality license install
+.PHONY: help check test test-file test-package lint lint-quality license install
 
 # Default target
 help:
@@ -21,44 +21,22 @@ help:
 	@echo "  make test-file FILE=packages/core/tests/foo.bats"
 	@echo ""
 	@echo "Linting:"
-	@echo "  make lint            Run lint on all scripts"
+	@echo "  make lint            Run shellcheck (incremental, cached)"
 	@echo "  make check           Run lint and all tests"
 	@echo ""
 	@echo "Maintenance:"
 	@echo "  make license         Add license headers to source files"
 
 # Run lint and all tests
-check: lint test
+check: lint-quality lint test
 
-# Lint scripts with ShellCheck
-lint: lint-quality lint-scripts lint-tests
+# Lint with shellcheck (incremental)
+lint:
+	./scripts/lint
 
 # Enforce LOC limits, suppress rules, etc
 lint-quality:
 	quench check
-
-# Lint bin and lib files with ShellCheck
-lint-scripts:
-	@if ! command -v shellcheck >/dev/null 2>&1; then \
-		echo "Error: shellcheck not found. Install with: brew install shellcheck"; \
-		exit 1; \
-	fi
-	@echo "Linting bin/ scripts..."
-	@shellcheck -x bin/v0-*
-	@echo "Linting packages/*/lib/ files..."
-	@find packages/*/lib -maxdepth 1 -name "*.sh" -type f | xargs shellcheck -x
-	@echo "All scripts pass ShellCheck!"
-
-# Lint test files with ShellCheck
-lint-tests:
-	@if ! command -v shellcheck >/dev/null 2>&1; then \
-		echo "Error: shellcheck not found. Install with: brew install shellcheck"; \
-		exit 1; \
-	fi
-	@echo "Linting test files..."
-	@find packages/*/tests tests -name "*.bats" -type f | xargs shellcheck -x -S warning -e SC1090,SC2155,SC2164,SC2178
-	@shellcheck -x -S warning -e SC1090,SC2155,SC2164,SC2178 packages/test-support/helpers/*.bash
-	@echo "All test files pass ShellCheck!"
 
 # Run all tests (incremental with caching)
 test:
