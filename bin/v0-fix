@@ -42,8 +42,8 @@ Commands:
 
 Options:
   --after <ids>   Block this bug until specified issues complete
-                  Accepts comma-separated IDs (e.g., v0-123,v0-456)
-                  Can be specified multiple times to add more blockers
+                  Accepts operation names or wok ticket IDs
+                  (e.g., auth, v0-123, api-refactor,v0-456)
   --history       Show last 10 completed bugs
   --history=N     Show last N completed bugs
   --history=all   Show all completed bugs
@@ -523,10 +523,23 @@ report_bug() {
 
   # Add blocked-by dependencies if --after was specified
   if [[ ${#AFTER_IDS[@]} -gt 0 ]]; then
-    if ! wk dep "${id}" blocked-by "${AFTER_IDS[@]}" 2>/dev/null; then
-      echo "Warning: Failed to add dependencies"
-    else
-      echo "  Blocked by: ${AFTER_IDS[*]}"
+    # Resolve operation names to wok ticket IDs
+    local resolved_ids=()
+    for after_id in "${AFTER_IDS[@]}"; do
+      local resolved
+      if resolved=$(v0_resolve_to_wok_id "${after_id}"); then
+        resolved_ids+=("${resolved}")
+      else
+        echo "Warning: Could not resolve '${after_id}' to a wok ticket ID (skipping)"
+      fi
+    done
+
+    if [[ ${#resolved_ids[@]} -gt 0 ]]; then
+      if ! wk dep "${id}" blocked-by "${resolved_ids[@]}" 2>/dev/null; then
+        echo "Warning: Failed to add dependencies"
+      else
+        echo "  Blocked by: ${resolved_ids[*]}"
+      fi
     fi
   fi
 

@@ -90,6 +90,35 @@ v0_issue_pattern() {
   echo "${ISSUE_PREFIX}-[a-z0-9]+"
 }
 
+# v0_resolve_to_wok_id <id_or_name>
+# Resolve an operation name or wok ticket ID to a wok ticket ID
+# Returns: wok ticket ID if found, empty if unresolvable
+v0_resolve_to_wok_id() {
+  local input="$1"
+  local issue_pattern
+  issue_pattern=$(v0_issue_pattern)
+
+  # If input matches wok ticket pattern, return as-is
+  if [[ "${input}" =~ ^${issue_pattern}$ ]]; then
+    echo "${input}"
+    return 0
+  fi
+
+  # Otherwise, treat as operation name and look up epic_id
+  local state_file="${BUILD_DIR}/operations/${input}/state.json"
+  if [[ -f "${state_file}" ]]; then
+    local epic_id
+    epic_id=$(jq -r '.epic_id // empty' "${state_file}")
+    if [[ -n "${epic_id}" ]] && [[ "${epic_id}" != "null" ]]; then
+      echo "${epic_id}"
+      return 0
+    fi
+  fi
+
+  # Return empty if unresolvable (will be skipped by caller)
+  return 1
+}
+
 # Expand a branch template by substituting {name} or {id} with a value
 # Usage: v0_expand_branch "$V0_FEATURE_BRANCH" "$NAME"
 # Example: v0_expand_branch "feature/{name}" "auth" -> "feature/auth"

@@ -326,3 +326,122 @@ EOF
     assert_success || assert_failure
     assert_output --partial "Worker" || assert_output --partial "worker" || assert_output --partial "not running" || true
 }
+
+# ============================================================================
+# Operation Name Resolution Tests
+# ============================================================================
+
+@test "v0-chore: --after accepts operation name and resolves to epic_id" {
+    # Create mock wk
+    cat > "${TEST_TEMP_DIR}/mock-v0-bin/wk" <<'EOF'
+#!/bin/bash
+echo "wk $*" >> "$MOCK_CALLS_DIR/wk.calls" 2>/dev/null || true
+if [[ "$1" == "new" ]]; then
+    echo "test-999"
+    exit 0
+fi
+if [[ "$1" == "dep" ]]; then
+    exit 0
+fi
+exit 0
+EOF
+    chmod +x "${TEST_TEMP_DIR}/mock-v0-bin/wk"
+
+    # Create operation with epic_id
+    mkdir -p "${TEST_TEMP_DIR}/project/.v0/build/operations/blocker-op"
+    cat > "${TEST_TEMP_DIR}/project/.v0/build/operations/blocker-op/state.json" <<EOF
+{
+  "name": "blocker-op",
+  "phase": "merged",
+  "epic_id": "test-blocker123"
+}
+EOF
+
+    # Run v0 chore with --after using operation name
+    run "${V0_CHORE}" --after blocker-op "Test chore" 2>&1 || true
+
+    # Verify wk dep was called with resolved epic_id
+    if [[ -f "${MOCK_CALLS_DIR}/wk.calls" ]]; then
+        run cat "${MOCK_CALLS_DIR}/wk.calls"
+        assert_output --partial "blocked-by"
+        assert_output --partial "test-blocker123"
+    fi
+}
+
+@test "v0-chore: --after accepts mix of operation names and wok IDs" {
+    cat > "${TEST_TEMP_DIR}/mock-v0-bin/wk" <<'EOF'
+#!/bin/bash
+echo "wk $*" >> "$MOCK_CALLS_DIR/wk.calls" 2>/dev/null || true
+if [[ "$1" == "new" ]]; then
+    echo "test-999"
+    exit 0
+fi
+if [[ "$1" == "dep" ]]; then
+    exit 0
+fi
+exit 0
+EOF
+    chmod +x "${TEST_TEMP_DIR}/mock-v0-bin/wk"
+
+    # Create operation with epic_id
+    mkdir -p "${TEST_TEMP_DIR}/project/.v0/build/operations/my-op"
+    echo '{"epic_id": "test-op123"}' > "${TEST_TEMP_DIR}/project/.v0/build/operations/my-op/state.json"
+
+    # Run with both operation name and wok ID
+    run "${V0_CHORE}" --after my-op,test-direct456 "Mixed dependencies" 2>&1 || true
+
+    # Both should be passed to wk dep
+    if [[ -f "${MOCK_CALLS_DIR}/wk.calls" ]]; then
+        run cat "${MOCK_CALLS_DIR}/wk.calls"
+        assert_output --partial "test-op123"
+        assert_output --partial "test-direct456"
+    fi
+}
+
+@test "v0-chore: --after warns on unresolvable operation name" {
+    cat > "${TEST_TEMP_DIR}/mock-v0-bin/wk" <<'EOF'
+#!/bin/bash
+if [[ "$1" == "new" ]]; then
+    echo "test-999"
+    exit 0
+fi
+if [[ "$1" == "dep" ]]; then
+    exit 0
+fi
+exit 0
+EOF
+    chmod +x "${TEST_TEMP_DIR}/mock-v0-bin/wk"
+
+    # No operation exists
+    run "${V0_CHORE}" --after nonexistent-op "Chore with bad blocker" 2>&1 || true
+
+    # Should warn about unresolvable ID
+    assert_output --partial "Could not resolve"
+    assert_output --partial "nonexistent-op"
+}
+
+@test "v0-chore: --after skips operations without epic_id" {
+    cat > "${TEST_TEMP_DIR}/mock-v0-bin/wk" <<'EOF'
+#!/bin/bash
+echo "wk $*" >> "$MOCK_CALLS_DIR/wk.calls" 2>/dev/null || true
+if [[ "$1" == "new" ]]; then
+    echo "test-999"
+    exit 0
+fi
+if [[ "$1" == "dep" ]]; then
+    exit 0
+fi
+exit 0
+EOF
+    chmod +x "${TEST_TEMP_DIR}/mock-v0-bin/wk"
+
+    # Create operation without epic_id
+    mkdir -p "${TEST_TEMP_DIR}/project/.v0/build/operations/early-op"
+    echo '{"phase": "init"}' > "${TEST_TEMP_DIR}/project/.v0/build/operations/early-op/state.json"
+
+    run "${V0_CHORE}" --after early-op "Chore blocked by early op" 2>&1 || true
+
+    # Should warn about unresolvable ID
+    assert_output --partial "Could not resolve"
+    assert_output --partial "early-op"
+}

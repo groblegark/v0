@@ -1023,3 +1023,84 @@ Another line"
     assert_success
     assert [ -f "${log_file}" ]
 }
+
+# ============================================================================
+# v0_resolve_to_wok_id() tests
+# ============================================================================
+
+@test "v0_resolve_to_wok_id returns wok ticket ID as-is" {
+    create_v0rc "testproj" "v0"
+    cd "${TEST_TEMP_DIR}/project" || return 1
+    source_lib "v0-common.sh"
+    v0_load_config
+
+    run v0_resolve_to_wok_id "v0-abc123"
+    assert_success
+    assert_output "v0-abc123"
+}
+
+@test "v0_resolve_to_wok_id resolves operation name to epic_id" {
+    create_v0rc "testproj" "v0"
+    cd "${TEST_TEMP_DIR}/project" || return 1
+    source_lib "v0-common.sh"
+    v0_load_config
+
+    # Create operation with epic_id
+    mkdir -p "${BUILD_DIR}/operations/test-op"
+    echo '{"epic_id": "v0-xyz789"}' > "${BUILD_DIR}/operations/test-op/state.json"
+
+    run v0_resolve_to_wok_id "test-op"
+    assert_success
+    assert_output "v0-xyz789"
+}
+
+@test "v0_resolve_to_wok_id fails for unknown operation" {
+    create_v0rc "testproj" "v0"
+    cd "${TEST_TEMP_DIR}/project" || return 1
+    source_lib "v0-common.sh"
+    v0_load_config
+
+    run v0_resolve_to_wok_id "nonexistent-op"
+    assert_failure
+}
+
+@test "v0_resolve_to_wok_id fails for operation without epic_id" {
+    create_v0rc "testproj" "v0"
+    cd "${TEST_TEMP_DIR}/project" || return 1
+    source_lib "v0-common.sh"
+    v0_load_config
+
+    # Create operation without epic_id
+    mkdir -p "${BUILD_DIR}/operations/early-op"
+    echo '{"phase": "init"}' > "${BUILD_DIR}/operations/early-op/state.json"
+
+    run v0_resolve_to_wok_id "early-op"
+    assert_failure
+}
+
+@test "v0_resolve_to_wok_id handles different issue prefixes" {
+    create_v0rc "testproj" "proj"
+    cd "${TEST_TEMP_DIR}/project" || return 1
+    source_lib "v0-common.sh"
+    v0_load_config
+
+    run v0_resolve_to_wok_id "proj-abc123"
+    assert_success
+    assert_output "proj-abc123"
+}
+
+@test "v0_resolve_to_wok_id distinguishes between ID patterns and operation names" {
+    create_v0rc "testproj" "v0"
+    cd "${TEST_TEMP_DIR}/project" || return 1
+    source_lib "v0-common.sh"
+    v0_load_config
+
+    # Create an operation that looks like it could be confused with an ID
+    mkdir -p "${BUILD_DIR}/operations/auth"
+    echo '{"epic_id": "v0-authepic"}' > "${BUILD_DIR}/operations/auth/state.json"
+
+    # 'auth' should be treated as operation name (doesn't match PREFIX-hex pattern)
+    run v0_resolve_to_wok_id "auth"
+    assert_success
+    assert_output "v0-authepic"
+}
