@@ -4,6 +4,11 @@
 # Session monitoring utilities for v0-feature
 # Source this file to get session monitoring functions
 
+# Source grep wrapper for fast pattern matching
+_SESSION_MONITOR_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+# shellcheck source=packages/core/lib/grep.sh
+source "${_SESSION_MONITOR_DIR}/../../../core/lib/grep.sh"
+
 # monitor_plan_session <session> <exit_file> <plan_locations> <idle_event>
 # Monitor a tmux session for plan file creation and idle completion
 # Args:
@@ -84,7 +89,7 @@ monitor_decompose_session() {
   mtime_before=$(stat -f %m "${plan_file}" 2>/dev/null || stat -c %Y "${plan_file}" 2>/dev/null)
 
   local plan_has_feature=""
-  grep -qE "\`${pattern}\`" "${plan_file}" 2>/dev/null && plan_has_feature=1
+  v0_grep_quiet "\`${pattern}\`" "${plan_file}" 2>/dev/null && plan_has_feature=1
 
   while tmux has-session -t "${session}" 2>/dev/null; do
     if [[ -f "${exit_file}" ]]; then
@@ -97,7 +102,7 @@ monitor_decompose_session() {
     mtime_now=$(stat -f %m "${plan_file}" 2>/dev/null || stat -c %Y "${plan_file}" 2>/dev/null)
 
     if [[ "${mtime_now}" != "${mtime_before}" ]] || [[ -n "${plan_has_feature}" ]]; then
-      if grep -qE "\`${pattern}\`" "${plan_file}" 2>/dev/null; then
+      if v0_grep_quiet "\`${pattern}\`" "${plan_file}" 2>/dev/null; then
         local current_mtime
         current_mtime=$(stat -f %m "${plan_file}" 2>/dev/null || stat -c %Y "${plan_file}" 2>/dev/null || echo "0")
         if [[ "${current_mtime}" = "${last_mtime}" ]]; then

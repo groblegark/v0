@@ -24,31 +24,29 @@ Usage: v0 build <name> <prompt> [options]
 Transform a prompt into an autonomous development pipeline.
 
 Options:
-  --enqueue      Plan and create issues but don't launch worker
+  --enqueue      Plan and create issue but don't launch worker
   --resume [p]   Resume an existing operation, optionally from phase p
                  Valid phases: init, planned, queued
   --no-merge     Don't auto-merge when work completes (default: auto-merge)
-  --label <l>    Add label to all created issues (can repeat)
+  --label <l>    Add label to created issue (can repeat)
   --safe         Require permission prompts in worker (default: skip prompts)
   --dry-run      Show what would happen without executing
   --after <op>       Wait for operation to merge before executing
   --eager            With --after: run planning before waiting (default: wait first)
-  --plan <file>      Use existing plan (skips decompose if feature ID present)
-  --foreground       Run plan/decompose/build in foreground (blocking)
+  --plan <file>      Use existing plan file
+  --foreground       Run plan/build in foreground (blocking)
   --attach           Follow worker logs after queuing
 
 Modes:
   Default: Queue build and run in background (exits immediately)
-  --foreground: Plan -> Decompose -> Launch worker -> Auto-merge (blocking)
-  --enqueue: Plan -> Decompose -> Stop (work available for wk ready)
+  --foreground: Plan -> Launch worker -> Auto-merge (blocking)
+  --enqueue: Plan -> Stop (work available for wk ready)
   --resume: Check state and continue from last phase
   --no-merge: Skip automatic merge after completion
   --after: Wait for another operation to merge before executing
     Default: Block immediately, don't start any work until unblocked
-    --eager: Run planning phases first, then block before execution
+    --eager: Run planning first, then block before execution
   --plan: Use existing plan file
-    If plan has feature ID (\$ISSUE_PREFIX-xxx): Skip planning AND decompose, go to execute
-    If no feature ID: Skip planning, run decompose, then execute
 
 Examples:
   v0 build auth "Add JWT authentication"          # Queue and run in background
@@ -564,14 +562,13 @@ else
         emit_event "plan:provided" "Using existing feature ${EXISTING_FEATURE} from ${PLAN_FILE_ARG}"
         PHASE="queued"
       else
-        echo "Warning: Feature ${EXISTING_FEATURE} is ${FEATURE_STATUS}, will re-decompose"
         update_state "phase" '"planned"'
-        emit_event "plan:provided" "Feature ${EXISTING_FEATURE} is ${FEATURE_STATUS}, needs re-decompose"
+        emit_event "plan:provided" "Feature ${EXISTING_FEATURE} is ${FEATURE_STATUS}, will file new issue"
         PHASE="planned"
       fi
     else
       update_state "phase" '"planned"'
-      emit_event "plan:provided" "Copied from ${PLAN_FILE_ARG} (needs decompose)"
+      emit_event "plan:provided" "Copied from ${PLAN_FILE_ARG}"
       PHASE="planned"
     fi
   fi
@@ -730,10 +727,30 @@ EOF
 
   # Use state machine transition to planned phase
   sm_transition_to_planned "${NAME}" "${V0_PLANS_DIR}/${NAME}.md"
-  PHASE="planned"
+
+  # File single feature issue
+  PLAN_FILE="${PLANS_DIR}/${NAME}.md"
+  FEATURE_ID=$(file_plan_issue "${NAME}" "${PLAN_FILE}")
+  if [[ -n "${FEATURE_ID}" ]]; then
+    update_state "epic_id" "\"${FEATURE_ID}\""
+    emit_event "issue:created" "Created feature ${FEATURE_ID}"
+  else
+    emit_event "issue:warning" "Failed to create feature issue"
+  fi
+
+  # Add labels to the issue
+  if [[ -n "${FEATURE_ID}" ]] && [[ ${#LABELS[@]} -gt 0 ]]; then
+    for label in "${LABELS[@]}"; do
+      wk label "${FEATURE_ID}" "${label}" 2>/dev/null || true
+    done
+  fi
+
+  # Transition to queued
+  sm_transition_to_queued "${NAME}" "${FEATURE_ID}"
+  PHASE="queued"
 fi
 
-# Phase 2: Decompose
+# Phase 2: Execute (was Phase 3)
 if [[ "${PHASE}" = "planned" ]]; then
   mkdir -p "${STATE_DIR}/logs"
 
