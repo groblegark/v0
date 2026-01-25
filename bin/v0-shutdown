@@ -379,7 +379,7 @@ if [[ -z "${DRY_RUN}" ]]; then
       echo "  - ${skipped}"
     done <<< "${skipped_branches}"
     echo ""
-    echo "Use 'v0 shutdown --force' to delete them anyway."
+    echo "Use 'v0 stop --force' to delete them anyway."
   else
     echo "Shutdown complete"
   fi
