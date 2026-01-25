@@ -10,6 +10,10 @@
 # Ensure V0_DIR is set
 V0_DIR="${V0_DIR:-$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)}"
 
+# Source grep wrapper for fast pattern matching
+# shellcheck source=packages/core/lib/grep.sh
+source "${V0_DIR}/packages/core/lib/grep.sh"
+
 # nudge_pid_file - Get the PID file path
 # Uses V0_STATE_DIR if available, falls back to current directory
 nudge_pid_file() {
@@ -85,7 +89,7 @@ ensure_nudge_running() {
 # Get all v0 tmux sessions
 # Outputs: session names, one per line
 get_v0_sessions() {
-  tmux list-sessions -F '#{session_name}' 2>/dev/null | grep '^v0-' || true
+  tmux list-sessions -F '#{session_name}' 2>/dev/null | v0_grep '^v0-' || true
 }
 
 # Get Claude project directory for a worktree path
@@ -184,7 +188,7 @@ check_for_api_error() {
 
   # Look for error patterns in recent entries
   # HTTP codes: 401/403 (auth), 429 (rate limit), 500/529 (server error)
-  tail -20 "${session_file}" 2>/dev/null | grep -qE '"error"|"status":\s*(401|403|429|500|529)'
+  tail -20 "${session_file}" 2>/dev/null | v0_grep_quiet '"error"|"status":\s*(401|403|429|500|529)'
 }
 
 # Determine if session is idle and done

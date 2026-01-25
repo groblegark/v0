@@ -104,7 +104,7 @@ include_log_file() {
 # Filter out debug report YAML frontmatter from log content
 # This prevents debug report YAML from being included when logs contain other debug output
 filter_debug_frontmatter() {
-    grep -v -E '^(---|v0-debug-report:|operation:|type:|phase:|status:|machine:|generated_at:)' 2>/dev/null || cat
+    v0_grep_invert '^(---|v0-debug-report:|operation:|type:|phase:|status:|machine:|generated_at:)' 2>/dev/null || cat
 }
 
 # Filter out ANSI escape sequences from log content

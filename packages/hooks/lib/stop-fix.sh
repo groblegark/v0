@@ -35,7 +35,7 @@ IN_PROGRESS_BUGS=$(wk list --type bug --status in_progress -o json 2>/dev/null |
 if [[ -z "$(echo "$IN_PROGRESS_BUGS" | tr -d '[:space:]')" ]]; then
   IN_PROGRESS=0
 else
-  IN_PROGRESS=$(echo "$IN_PROGRESS_BUGS" | grep -c . 2>/dev/null || echo "0")
+  IN_PROGRESS=$(echo "$IN_PROGRESS_BUGS" | v0_grep_count . 2>/dev/null)
 fi
 
 if [ "$IN_PROGRESS" -gt 0 ]; then

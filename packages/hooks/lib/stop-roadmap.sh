@@ -7,6 +7,11 @@
 
 set -e
 
+# Source grep wrapper for fast pattern matching
+_HOOKS_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+# shellcheck source=packages/core/lib/grep.sh
+source "${_HOOKS_DIR}/../../core/lib/grep.sh"
+
 # Read hook input
 INPUT=$(cat)
 STOP_HOOK_ACTIVE=$(echo "${INPUT}" | jq -r '.stop_hook_active // false')
@@ -46,7 +51,7 @@ fi
 
 # Check for uncommitted changes in worktree
 if [[ -n "${V0_WORKTREE}" ]] && [[ -d "${V0_WORKTREE}" ]]; then
-  UNCOMMITTED=$(git -C "${V0_WORKTREE}" status --porcelain 2>/dev/null | grep -cv '^??' || true)
+  UNCOMMITTED=$(git -C "${V0_WORKTREE}" status --porcelain 2>/dev/null | v0_grep_invert '^??' | wc -l | tr -d ' ')
   if [[ "${UNCOMMITTED}" -gt 0 ]]; then
     REPO_NAME=$(basename "${V0_WORKTREE}")
     echo "{\"decision\": \"block\", \"reason\": \"Uncommitted changes in worktree. Run: cd ${REPO_NAME} && git add . && git commit -m \\\"...\\\" && git push ${V0_GIT_REMOTE:-origin}\"}"

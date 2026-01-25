@@ -74,7 +74,7 @@ sm_allowed_transitions() {
 
   case "${phase}" in
     init)          echo "planned blocked failed" ;;
-    planned)       echo "queued blocked failed" ;;
+    planned)       echo "queued executing blocked failed" ;;
     blocked)       echo "init planned queued" ;;
     queued)        echo "executing blocked failed" ;;
     executing)     echo "completed failed interrupted" ;;

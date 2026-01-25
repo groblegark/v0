@@ -15,6 +15,11 @@
 set -e
 
 V0_DIR="$(cd "$(dirname "$0")/.." && pwd)"
+
+# Change to a stable directory early to avoid issues if the original cwd is deleted
+# (can happen when running from temp directories in tests)
+cd "${V0_DIR}"
+
 source "${V0_DIR}/packages/cli/lib/v0-common.sh"
 v0_load_config
 
@@ -77,15 +82,17 @@ do_prune() {
 
     log "Starting pruning..."
 
-    # Run mergeq pruning
+    # Run mergeq pruning (no args needed - uses global BUILD_DIR)
     local mergeq_output
+    # shellcheck disable=SC2119
     mergeq_output=$(v0_prune_mergeq 2>&1) || true
     if [[ -n "${mergeq_output}" ]]; then
         log "${mergeq_output}"
     fi
 
-    # Run log pruning
+    # Run log pruning (no args needed - uses global BUILD_DIR)
     local logs_output
+    # shellcheck disable=SC2119
     logs_output=$(v0_prune_logs 2>&1) || true
     if [[ -n "${logs_output}" ]]; then
         log "${logs_output}"

@@ -4,6 +4,11 @@
 # PostToolUse hook - notify when items start (todo -> in_progress)
 set -e
 
+# Source grep wrapper for fast pattern matching
+_HOOKS_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+# shellcheck source=packages/core/lib/grep.sh
+source "${_HOOKS_DIR}/../../core/lib/grep.sh"
+
 INPUT=$(cat)
 
 # Check if this was a Bash tool call
@@ -14,7 +19,7 @@ TOOL_NAME=$(echo "$INPUT" | jq -r '.tool_name // empty')
 COMMAND=$(echo "$INPUT" | jq -r '.tool_input.command // empty')
 if [[ "$COMMAND" == *"wk start"* ]]; then
   # Extract the issue ID (last argument to wk start)
-  ISSUE_ID=$(echo "$COMMAND" | grep -oE '[a-z0-9]+-[a-z0-9]+' | tail -1)
+  ISSUE_ID=$(echo "$COMMAND" | v0_grep_extract '[a-z0-9]+-[a-z0-9]+' | tail -1)
 
   if [ -n "$ISSUE_ID" ]; then
     LOG_DIR="${V0_BUILD_DIR:-$HOME/.v0/build}/logs"
@@ -26,7 +31,7 @@ if [[ "$COMMAND" == *"wk start"* ]]; then
     # macOS notification (skip if in test mode)
     if [ "${V0_TEST_MODE:-}" != "1" ] && [ "$(uname)" = "Darwin" ] && command -v osascript &> /dev/null; then
       # Get issue type and project for descriptive title
-      issue_type=$(wk show "$ISSUE_ID" 2>/dev/null | head -1 | grep -o '\[[^]]*\]' | tr -d '[]')
+      issue_type=$(wk show "$ISSUE_ID" 2>/dev/null | head -1 | v0_grep_extract '\[[^]]*\]' | tr -d '[]')
       project_name=$(echo "$ISSUE_ID" | cut -d'-' -f1)
 
       # Format title based on issue type

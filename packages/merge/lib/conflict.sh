@@ -6,6 +6,11 @@
 # Depends on: resolve.sh
 # IMPURE: Uses git, tmux, claude
 
+# Source grep wrapper for fast pattern matching
+_MERGE_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+# shellcheck source=packages/core/lib/grep.sh
+source "${_MERGE_DIR}/../../core/lib/grep.sh"
+
 # Expected environment variables:
 # V0_DIR - Path to v0 installation
 # V0_GIT_REMOTE - Git remote name
@@ -26,7 +31,7 @@ mg_has_conflicts() {
 # Returns 0 if has conflicts, 1 if no conflicts
 mg_worktree_has_conflicts() {
     local worktree="$1"
-    git -C "${worktree}" status --porcelain | grep -q '^UU\|^AA\|^DD'
+    git -C "${worktree}" status --porcelain | v0_grep_quiet '^UU\|^AA\|^DD'
 }
 
 # mg_worktree_has_uncommitted <worktree>
@@ -34,7 +39,7 @@ mg_worktree_has_conflicts() {
 # Returns 0 if has uncommitted, 1 if clean
 mg_worktree_has_uncommitted() {
     local worktree="$1"
-    git -C "${worktree}" status --porcelain | grep -qv '^??'
+    git -C "${worktree}" status --porcelain | v0_grep_invert '^??' | v0_grep_quiet .
 }
 
 # mg_commits_on_main <branch>

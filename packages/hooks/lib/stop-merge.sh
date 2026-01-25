@@ -4,6 +4,11 @@
 # Stop hook for merge resolution - verifies conflicts are resolved
 set -e
 
+# Source grep wrapper for fast pattern matching
+_HOOKS_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+# shellcheck source=packages/core/lib/grep.sh
+source "${_HOOKS_DIR}/../../core/lib/grep.sh"
+
 INPUT=$(cat)
 STOP_HOOK_ACTIVE=$(echo "$INPUT" | jq -r '.stop_hook_active // false')
 STOP_REASON=$(echo "$INPUT" | jq -r '.reason // ""')
@@ -28,7 +33,7 @@ if [ -z "$WORKTREE" ] || [ ! -d "$WORKTREE" ]; then
 fi
 
 # Check for unresolved conflicts
-if git -C "$WORKTREE" status --porcelain 2>/dev/null | grep -q '^UU\|^AA\|^DD'; then
+if git -C "$WORKTREE" status --porcelain 2>/dev/null | v0_grep_quiet '^UU\|^AA\|^DD'; then
   echo '{"decision": "block", "reason": "Merge conflicts still exist. Resolve conflicts then run: git add <files> && git rebase --continue"}'
   exit 0
 fi

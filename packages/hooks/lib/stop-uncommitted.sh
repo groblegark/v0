@@ -5,6 +5,11 @@
 # Verifies worktree has no uncommitted changes before allowing exit
 set -e
 
+# Source grep wrapper for fast pattern matching
+_HOOKS_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+# shellcheck source=packages/core/lib/grep.sh
+source "${_HOOKS_DIR}/../../core/lib/grep.sh"
+
 INPUT=$(cat)
 STOP_HOOK_ACTIVE=$(echo "$INPUT" | jq -r '.stop_hook_active // false')
 STOP_REASON=$(echo "$INPUT" | jq -r '.reason // ""')
@@ -29,7 +34,7 @@ if [ -z "$WORKTREE" ] || [ ! -d "$WORKTREE" ]; then
 fi
 
 # Check for uncommitted changes (ignore untracked files)
-if git -C "$WORKTREE" status --porcelain 2>/dev/null | grep -qv '^??'; then
+if git -C "$WORKTREE" status --porcelain 2>/dev/null | v0_grep_invert '^??' | v0_grep_quiet .; then
   REPO_NAME=$(basename "$WORKTREE")
   echo "{\"decision\": \"block\", \"reason\": \"Uncommitted changes remain. Run: cd $REPO_NAME && git status\"}"
   exit 0

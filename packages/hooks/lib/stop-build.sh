@@ -7,6 +7,11 @@
 
 set -e
 
+# Source grep wrapper for fast pattern matching
+_HOOKS_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+# shellcheck source=packages/core/lib/grep.sh
+source "${_HOOKS_DIR}/../../core/lib/grep.sh"
+
 # Read hook input
 INPUT=$(cat)
 STOP_HOOK_ACTIVE=$(echo "$INPUT" | jq -r '.stop_hook_active // false')
@@ -44,8 +49,8 @@ TOTAL_INCOMPLETE=$((OPEN_COUNT + IN_PROGRESS_COUNT))
 if [ "$TOTAL_INCOMPLETE" -gt 0 ]; then
   # Work remains - block stop
   # Get issue IDs (generic pattern - works with any prefix)
-  OPEN_IDS=$(wk list --label "$PLAN_LABEL" --status todo 2>/dev/null | head -3 | grep -oE '[a-zA-Z]+-[a-z0-9]+' | tr '\n' ' ')
-  IN_PROGRESS_IDS=$(wk list --label "$PLAN_LABEL" --status in_progress 2>/dev/null | head -3 | grep -oE '[a-zA-Z]+-[a-z0-9]+' | tr '\n' ' ')
+  OPEN_IDS=$(wk list --label "$PLAN_LABEL" --status todo 2>/dev/null | head -3 | v0_grep_extract '[a-zA-Z]+-[a-z0-9]+' | tr '\n' ' ')
+  IN_PROGRESS_IDS=$(wk list --label "$PLAN_LABEL" --status in_progress 2>/dev/null | head -3 | v0_grep_extract '[a-zA-Z]+-[a-z0-9]+' | tr '\n' ' ')
 
   REASON="Work incomplete for $OP_NAME: $TOTAL_INCOMPLETE issues remain."
   [ -n "$OPEN_IDS" ] && REASON="$REASON Open: $OPEN_IDS."
@@ -58,7 +63,7 @@ fi
 
 # Check for uncommitted changes in worktree
 if [ -n "$V0_WORKTREE" ] && [ -d "$V0_WORKTREE" ]; then
-  UNCOMMITTED=$(git -C "$V0_WORKTREE" status --porcelain 2>/dev/null | grep -v '^??' | wc -l | tr -d ' ')
+  UNCOMMITTED=$(git -C "$V0_WORKTREE" status --porcelain 2>/dev/null | v0_grep_invert '^??' | wc -l | tr -d ' ')
   if [ "$UNCOMMITTED" -gt 0 ]; then
     REPO_NAME=$(basename "$V0_WORKTREE")
     echo "{\"decision\": \"block\", \"reason\": \"Uncommitted changes in worktree. Run: cd $REPO_NAME && git add . && git commit -m \\\"...\\\" && git push ${V0_GIT_REMOTE:-origin}\"}"

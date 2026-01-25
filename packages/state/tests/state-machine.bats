@@ -159,7 +159,7 @@ create_test_state() {
 @test "sm_allowed_transitions returns valid transitions for planned" {
     run sm_allowed_transitions "planned"
     assert_success
-    assert_output "queued blocked failed"
+    assert_output "queued executing blocked failed"
 }
 
 @test "sm_allowed_transitions returns valid transitions for queued" {
