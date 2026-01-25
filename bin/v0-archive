@@ -16,7 +16,7 @@ Usage: v0 archive [options]
 
 Options:
   -n, --dry-run    Show what would be archived without moving
-  -d, --days N     Archive plans older than N days (default: 30)
+  -d, --days N     Archive plans older than N days (default: 7)
   -a, --all        Archive all plans in archive/ (ignores age)
   -f, --force      Skip confirmation prompts
   -h, --help       Show this help message
@@ -25,8 +25,8 @@ The icebox is a separate 'v0/plans' branch managed via git worktree.
 Archived plans are moved there and committed, keeping the main repo clean.
 
 Examples:
-  v0 archive                # Archive plans older than 30 days
-  v0 archive --days 7       # Archive plans older than 7 days
+  v0 archive                # Archive plans older than 7 days
+  v0 archive --days 30      # Archive plans older than 30 days
   v0 archive --all          # Archive all plans
   v0 archive --dry-run      # Preview what would be archived
 EOF
@@ -34,7 +34,7 @@ EOF
 }
 
 # Default configuration
-DAYS=30
+DAYS=7
 DRY_RUN=""
 ALL=""
 FORCE=""
