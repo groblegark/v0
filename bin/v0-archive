@@ -180,7 +180,7 @@ archive_to_icebox() {
     (
       cd "${icebox}"
       git add -A plans/
-      git commit -m "Archive ${archived} plan(s) to icebox" \
+      git commit --no-verify -m "Archive ${archived} plan(s) to icebox" \
         -m "Moved from main repo archive/ by v0 archive"
     ) || echo "Warning: Failed to commit in icebox worktree"
 
@@ -191,7 +191,7 @@ archive_to_icebox() {
     (
       cd "${V0_ROOT}"
       git add -A "${V0_PLANS_DIR}/archive/"
-      git commit -m "Move ${archived} archived plan(s) to icebox" \
+      git commit --no-verify -m "Move ${archived} archived plan(s) to icebox" \
         -m "Plans moved to v0/plans branch by v0 archive"
     ) || echo "Warning: Failed to commit archive cleanup"
   fi

@@ -63,7 +63,7 @@ if git status --porcelain | grep -q '^UU\|^AA\|^DD'; then
 fi
 
 # Commit the merge
-git commit --no-edit || true
+git commit --no-verify --no-edit || true
 
 # Push the result to develop branch explicitly (HEAD may track a worker branch)
 git push "${V0_GIT_REMOTE}" HEAD:"${V0_DEVELOP_BRANCH}"

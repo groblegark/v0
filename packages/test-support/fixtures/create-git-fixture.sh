@@ -27,7 +27,7 @@ git config user.email "test@example.com"
 git config user.name "Test User"
 echo "test" > README.md
 git add README.md
-git commit --quiet -m "Initial commit"
+git commit --no-verify --quiet -m "Initial commit"
 git push --quiet origin HEAD:main 2>/dev/null
 
 cd "$WORK_DIR"
