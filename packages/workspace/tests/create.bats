@@ -170,3 +170,107 @@ setup() {
     assert_failure
     assert_output --partial "Invalid V0_WORKSPACE_MODE"
 }
+
+# ============================================================================
+# Worktree Detection Tests
+# ============================================================================
+
+@test "ws_is_worktree returns false for clone" {
+    ws_ensure_workspace
+    run ws_is_worktree
+    assert_failure
+}
+
+@test "ws_is_worktree returns true for worktree" {
+    export V0_WORKSPACE_MODE="worktree"
+    git -C "$TEST_TEMP_DIR/project" checkout -b temp-branch --quiet
+    ws_ensure_workspace
+
+    run ws_is_worktree
+    assert_success
+}
+
+# ============================================================================
+# Config Match Tests
+# ============================================================================
+
+@test "ws_matches_config returns true when config matches" {
+    ws_ensure_workspace
+    run ws_matches_config
+    assert_success
+}
+
+@test "ws_matches_config fails when mode mismatches (clone exists, worktree expected)" {
+    # Create clone workspace
+    ws_ensure_workspace
+
+    # Change mode to worktree
+    export V0_WORKSPACE_MODE="worktree"
+
+    run ws_matches_config
+    assert_failure
+    assert_output --partial "clone but config expects worktree"
+}
+
+@test "ws_matches_config fails when branch mismatches" {
+    ws_ensure_workspace
+
+    # Change expected branch
+    export V0_DEVELOP_BRANCH="v0/develop"
+
+    run ws_matches_config
+    assert_failure
+    assert_output --partial "but config expects 'v0/develop'"
+}
+
+# ============================================================================
+# Auto-Recreate on Config Change Tests
+# ============================================================================
+
+@test "ws_ensure_workspace recreates when mode changes from clone to worktree" {
+    # Create clone workspace first
+    ws_ensure_workspace
+    assert_dir_exists "$V0_WORKSPACE_DIR"
+    # Verify it's a clone (.git is directory)
+    run test -d "$V0_WORKSPACE_DIR/.git"
+    assert_success
+
+    # Switch V0_ROOT to temp branch so worktree can use main
+    git -C "$TEST_TEMP_DIR/project" checkout -b temp-branch --quiet
+
+    # Change mode to worktree
+    export V0_WORKSPACE_MODE="worktree"
+
+    # Should auto-recreate
+    run ws_ensure_workspace
+    assert_success
+    assert_output --partial "Recreating workspace"
+
+    # Verify it's now a worktree (.git is file)
+    run test -f "$V0_WORKSPACE_DIR/.git"
+    assert_success
+}
+
+@test "ws_ensure_workspace recreates when branch changes" {
+    ws_ensure_workspace
+    local old_branch
+    old_branch=$(git -C "$V0_WORKSPACE_DIR" rev-parse --abbrev-ref HEAD)
+    assert_equal "$old_branch" "main"
+
+    # Create and push new develop branch in V0_ROOT
+    git -C "$TEST_TEMP_DIR/project" checkout -b v0/develop --quiet
+    git -C "$TEST_TEMP_DIR/project" checkout main --quiet
+
+    # Change expected branch
+    export V0_DEVELOP_BRANCH="v0/develop"
+
+    # Should auto-recreate
+    run ws_ensure_workspace
+    assert_success
+    assert_output --partial "Recreating workspace"
+
+    # Verify branch changed
+    local new_branch
+    new_branch=$(git -C "$V0_WORKSPACE_DIR" rev-parse --abbrev-ref HEAD)
+    assert_equal "$new_branch" "v0/develop"
+}

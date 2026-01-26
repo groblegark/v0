@@ -3,7 +3,7 @@
 # Copyright (c) 2026 Alfred Jean LLC
 # workspace/create.sh - Workspace creation (worktree and clone modes)
 #
-# Depends on: paths.sh
+# Depends on: paths.sh, validate.sh
 # IMPURE: Uses git, file system operations
 
 # Expected environment variables:
@@ -101,13 +101,19 @@ ws_create_clone() {
 }
 
 # ws_ensure_workspace
-# Idempotent function that creates workspace if missing
+# Idempotent function that creates workspace if missing or mismatched
+# Validates workspace matches current config (mode + branch)
 # Uses V0_WORKSPACE_MODE to determine creation method
 # Returns: 0 on success, 1 on failure
 ws_ensure_workspace() {
-  # Check if workspace already exists and is valid
+  # Check if workspace already exists, is valid, AND matches current config
   if ws_is_valid_workspace; then
-    return 0
+    if ws_matches_config; then
+      return 0
+    fi
+    # Config mismatch - need to recreate
+    echo "Recreating workspace to match current config..." >&2
+    ws_remove_workspace
   fi
 
   # Remove invalid workspace directory if it exists

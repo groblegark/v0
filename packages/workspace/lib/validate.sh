@@ -43,6 +43,37 @@ ws_is_on_develop() {
   [[ "${current_branch}" == "${V0_DEVELOP_BRANCH}" ]]
 }
 
+# ws_matches_config
+# Check if workspace matches current V0_WORKSPACE_MODE and V0_DEVELOP_BRANCH
+# Returns: 0 if matches, 1 if mismatch (workspace should be recreated)
+ws_matches_config() {
+  # Check workspace type matches configured mode
+  local is_worktree=0
+  ws_is_worktree && is_worktree=1
+
+  if [[ "${V0_WORKSPACE_MODE}" == "worktree" ]]; then
+    if [[ "${is_worktree}" -ne 1 ]]; then
+      echo "Note: Workspace is a clone but config expects worktree mode" >&2
+      return 1
+    fi
+  else
+    if [[ "${is_worktree}" -eq 1 ]]; then
+      echo "Note: Workspace is a worktree but config expects clone mode" >&2
+      return 1
+    fi
+  fi
+
+  # Check workspace is on the correct branch
+  if ! ws_is_on_develop; then
+    local current_branch
+    current_branch=$(ws_get_current_branch)
+    echo "Note: Workspace is on '${current_branch}' but config expects '${V0_DEVELOP_BRANCH}'" >&2
+    return 1
+  fi
+
+  return 0
+}
+
 # ws_get_current_branch
 # Get the current branch of the workspace
 # Returns: branch name

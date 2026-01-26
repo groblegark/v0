@@ -13,7 +13,7 @@
 # Get the directory containing this script
 _WS_LIB_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
-# Source workspace modules
+# Source workspace modules (order matters: paths -> validate -> create)
 source "${_WS_LIB_DIR}/paths.sh"
-source "${_WS_LIB_DIR}/create.sh"
 source "${_WS_LIB_DIR}/validate.sh"
+source "${_WS_LIB_DIR}/create.sh"

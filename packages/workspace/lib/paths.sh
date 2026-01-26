@@ -41,6 +41,16 @@ ws_is_valid_workspace() {
   [[ -d "${dir}" ]] && { [[ -d "${dir}/.git" ]] || [[ -f "${dir}/.git" ]]; }
 }
 
+# ws_is_worktree
+# Check if a directory is a git worktree (vs a clone/regular repo)
+# Worktrees have .git as a file pointing to the main repo's .git/worktrees/
+# Args: directory path (defaults to V0_WORKSPACE_DIR)
+# Returns: 0 if worktree, 1 if clone/regular repo
+ws_is_worktree() {
+  local dir="${1:-${V0_WORKSPACE_DIR}}"
+  [[ -f "${dir}/.git" ]]
+}
+
 # ws_get_git_dir
 # Get the actual git directory for the workspace (works for both repos and worktrees)
 # For regular repos: returns .git directory
