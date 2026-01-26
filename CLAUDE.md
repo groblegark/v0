@@ -20,7 +20,6 @@ packages/               # Modular shell library packages
   cli/                  #   Entry point, templates, prompts, build workflow
   test-support/         #   Test helpers, fixtures, mocks
 tests/                  # Integration tests (v0-cancel.bats, v0-merge.bats, etc.)
-vendor/                 # Third-party tools (bats)
 docs/debug/             # Troubleshooting guides
 ```
 

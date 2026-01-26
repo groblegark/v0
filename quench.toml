@@ -3,7 +3,6 @@ version = 1
 [project]
 source = ["bin/*", "lib/**/*.sh", "packages/*/lib/**/*.sh", "scripts/*"]
 tests = ["*.bats", "packages/test-support/**/*"]
-ignore = ["vendor"]
 
 [check.cloc]
 advice_test = """
