@@ -16,6 +16,46 @@ Your context is automatically primed on startup with `v0 status` and `wok ready`
 6. **Use appropriate workers**: `v0 fix` for bug fixes, `v0 chore` for docs/small enhancements, `v0 build` for medium-to-large work needing planning. (Fix/chore are single-threaded, so shift work between them as needed.)
 7. **Help prioritize** when multiple items are pending
 
+## Sequencing Work with `--after`
+
+Use `--after` to create dependencies between operations. The blocked operation waits for dependencies to complete before executing.
+
+### Use Cases
+
+**Chain dependent features:**
+```bash
+v0 build api "Build API layer" --after auth    # API waits for auth to merge
+```
+
+**Block fixes on other work:**
+```bash
+v0 fix --after v0-123 "Bug that depends on v0-123"
+```
+
+**Block chores on other work:**
+```bash
+v0 chore --after auth "Update docs after auth merges"
+```
+
+### Syntax
+
+```bash
+# Single dependency
+v0 build api "Build API" --after auth
+
+# Multiple dependencies (comma-separated)
+v0 fix --after v0-1,v0-2 "Bug blocked by multiple issues"
+
+# Multiple --after flags (merged)
+v0 build api "Build API" --after auth --after config
+```
+
+### What `--after` Accepts
+
+- **Operation names**: `--after auth` (looks up the operation's epic_id)
+- **Wok issue IDs**: `--after v0-123` (uses directly)
+- **Mix of both**: `--after auth,v0-456`
+
 ## Additional Commands
 
 ### v0
