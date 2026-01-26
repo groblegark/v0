@@ -27,11 +27,10 @@ This is a complete shutdown that:
 - Terminates all tmux sessions for this project
 - Kills polling daemons
 - Removes worker worktrees (v0-*-worker)
-- Deletes local v0/worker/* branches
-- Deletes remote v0/worker/* branches
+- Deletes worker branches (*-bugs, *-chores, v0/worker/*)
 - Deletes legacy v0-*-worker branches (old naming convention)
 
-Note: v0/worker/chore and v0/worker/fix branches are checked before deletion.
+Note: Worker branches (bugs/chores) are checked before deletion.
 If they contain commits not in ${V0_DEVELOP_BRANCH:-main}, a warning is shown
 and the branch is preserved. Use --force to delete them anyway.
 
@@ -227,9 +226,10 @@ if [[ -n "${all_worktrees}" ]]; then
   done <<< "${all_worktrees}"
 fi
 
-# Clean up v0/worker/* branches (local and remote)
-local_branches=$(git -C "${V0_ROOT}" branch --list 'v0/worker/*' 2>/dev/null | sed 's/^[* ]*//' || true)
-remote_branches=$(git -C "${V0_ROOT}" branch -r --list "${V0_GIT_REMOTE}/v0/worker/*" 2>/dev/null | sed 's/^[* ]*//' || true)
+# Clean up worker branches (local and remote)
+# Patterns: v0/worker/* (legacy), *-bugs, *-chores (user-specific)
+local_branches=$(git -C "${V0_ROOT}" branch --list 'v0/worker/*' '*-bugs' '*-chores' 2>/dev/null | sed 's/^[* ]*//' || true)
+remote_branches=$(git -C "${V0_ROOT}" branch -r --list "${V0_GIT_REMOTE}/v0/worker/*" "${V0_GIT_REMOTE}/*-bugs" "${V0_GIT_REMOTE}/*-chores" 2>/dev/null | sed 's/^[* ]*//' || true)
 
 # Track branches skipped due to unmerged commits
 skipped_branches=""
@@ -237,13 +237,15 @@ skipped_branches=""
 if [[ -n "${local_branches}" ]]; then
   found_anything=1
   echo ""
-  echo "Cleaning up local v0/worker/* branches..."
+  echo "Cleaning up local worker branches..."
   while IFS= read -r branch; do
     [[ -z "${branch}" ]] && continue
 
-    # Check if this is a chore or fix branch that needs merge verification
-    if [[ "${branch}" == "v0/worker/chore" || "${branch}" == "v0/worker/fix" ]]; then
-      # Check if branch is merged (is an ancestor of main)
+    # Check if this is a worker branch that needs merge verification
+    # Patterns: v0/worker/chore, v0/worker/fix (legacy), *-bugs, *-chores (user-specific)
+    if [[ "${branch}" == "v0/worker/chore" || "${branch}" == "v0/worker/fix" || \
+          "${branch}" == *-bugs || "${branch}" == *-chores ]]; then
+      # Check if branch is merged (is an ancestor of develop branch)
       if ! git -C "${V0_ROOT}" merge-base --is-ancestor "${branch}" "${V0_DEVELOP_BRANCH}" 2>/dev/null; then
         if [[ -z "${FORCE}" ]]; then
           echo "Warning: ${branch} has commits not in ${V0_DEVELOP_BRANCH}, skipping (use --force to delete)"
@@ -267,14 +269,16 @@ fi
 if [[ -n "${remote_branches}" ]]; then
   found_anything=1
   echo ""
-  echo "Cleaning up remote v0/worker/* branches..."
+  echo "Cleaning up remote worker branches..."
   while IFS= read -r branch; do
     [[ -z "${branch}" ]] && continue
     # Remove remote prefix to get the branch name for deletion
     branch_name="${branch#"${V0_GIT_REMOTE}"/}"
 
-    # Check if this is a chore or fix branch that needs merge verification
-    if [[ "${branch_name}" == "v0/worker/chore" || "${branch_name}" == "v0/worker/fix" ]]; then
+    # Check if this is a worker branch that needs merge verification
+    # Patterns: v0/worker/chore, v0/worker/fix (legacy), *-bugs, *-chores (user-specific)
+    if [[ "${branch_name}" == "v0/worker/chore" || "${branch_name}" == "v0/worker/fix" || \
+          "${branch_name}" == *-bugs || "${branch_name}" == *-chores ]]; then
       # Check if the remote branch is merged (fetch first to ensure we have the ref)
       if ! git -C "${V0_ROOT}" merge-base --is-ancestor "${branch}" "${V0_DEVELOP_BRANCH}" 2>/dev/null; then
         if [[ -z "${FORCE}" ]]; then

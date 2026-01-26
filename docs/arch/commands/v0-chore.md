@@ -5,7 +5,7 @@
 ## Workflow
 
 **Start worker:**
-1. Create worktree at `v0/worker/chore` branch
+1. Create worktree at `${V0_DEVELOP_BRANCH}-chores` branch (e.g., `v0/agent/alice-a3f2-chores`)
 2. Setup hooks and helper scripts
 3. Start polling loop and launch Claude in tmux
 

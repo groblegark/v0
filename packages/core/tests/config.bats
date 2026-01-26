@@ -52,6 +52,40 @@ setup() {
 }
 
 # ============================================================================
+# v0_worker_branch() tests
+# ============================================================================
+
+@test "v0_worker_branch returns bugs suffix for fix type" {
+    V0_DEVELOP_BRANCH="v0/agent/alice-1234"
+    result=$(v0_worker_branch "fix")
+    [[ "$result" == "v0/agent/alice-1234-bugs" ]]
+}
+
+@test "v0_worker_branch returns chores suffix for chore type" {
+    V0_DEVELOP_BRANCH="v0/agent/alice-1234"
+    result=$(v0_worker_branch "chore")
+    [[ "$result" == "v0/agent/alice-1234-chores" ]]
+}
+
+@test "v0_worker_branch works with v0/develop branch" {
+    V0_DEVELOP_BRANCH="v0/develop"
+    result=$(v0_worker_branch "fix")
+    [[ "$result" == "v0/develop-bugs" ]]
+}
+
+@test "v0_worker_branch defaults to main when V0_DEVELOP_BRANCH unset" {
+    unset V0_DEVELOP_BRANCH
+    result=$(v0_worker_branch "fix")
+    [[ "$result" == "main-bugs" ]]
+}
+
+@test "v0_worker_branch handles custom worker types" {
+    V0_DEVELOP_BRANCH="v0/agent/bob-5678"
+    result=$(v0_worker_branch "custom")
+    [[ "$result" == "v0/agent/bob-5678-custom" ]]
+}
+
+# ============================================================================
 # v0_infer_workspace_mode() tests
 # ============================================================================
 

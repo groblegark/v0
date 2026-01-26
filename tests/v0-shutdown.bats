@@ -184,7 +184,7 @@ EOF
     echo "${project_dir}"
 }
 
-@test "shutdown warns about unmerged v0/worker/chore branch" {
+@test "shutdown warns about unmerged v0/worker/chore branch (legacy)" {
     local project_dir
     project_dir=$(setup_git_project_with_branches)
 
@@ -207,7 +207,30 @@ EOF
     assert_output --partial "some branches preserved"
 }
 
-@test "shutdown warns about unmerged v0/worker/fix branch" {
+@test "shutdown warns about unmerged user-specific chores branch" {
+    local project_dir
+    project_dir=$(setup_git_project_with_branches)
+
+    # Create user-specific chores branch with unmerged commits
+    (
+        cd "${project_dir}" || return 1
+        git checkout -b v0/agent/test-user-chores --quiet
+        echo "chore work" > chore.txt
+        git add chore.txt
+        git commit --quiet -m "Chore work"
+        git checkout main --quiet
+    )
+
+    run env -u PROJECT -u ISSUE_PREFIX -u V0_ROOT bash -c '
+        cd "'"${project_dir}"'" || exit 1
+        "'"${PROJECT_ROOT}"'/bin/v0-shutdown" 2>&1
+    '
+    assert_success
+    assert_output --partial "Warning: v0/agent/test-user-chores has commits not in main, skipping"
+    assert_output --partial "some branches preserved"
+}
+
+@test "shutdown warns about unmerged v0/worker/fix branch (legacy)" {
     local project_dir
     project_dir=$(setup_git_project_with_branches)
 
@@ -230,7 +253,30 @@ EOF
     assert_output --partial "some branches preserved"
 }
 
-@test "shutdown deletes merged v0/worker/chore branch without warning" {
+@test "shutdown warns about unmerged user-specific bugs branch" {
+    local project_dir
+    project_dir=$(setup_git_project_with_branches)
+
+    # Create user-specific bugs branch with unmerged commits
+    (
+        cd "${project_dir}" || return 1
+        git checkout -b v0/agent/test-user-bugs --quiet
+        echo "fix work" > fix.txt
+        git add fix.txt
+        git commit --quiet -m "Fix work"
+        git checkout main --quiet
+    )
+
+    run env -u PROJECT -u ISSUE_PREFIX -u V0_ROOT bash -c '
+        cd "'"${project_dir}"'" || exit 1
+        "'"${PROJECT_ROOT}"'/bin/v0-shutdown" 2>&1
+    '
+    assert_success
+    assert_output --partial "Warning: v0/agent/test-user-bugs has commits not in main, skipping"
+    assert_output --partial "some branches preserved"
+}
+
+@test "shutdown deletes merged v0/worker/chore branch without warning (legacy)" {
     local project_dir
     project_dir=$(setup_git_project_with_branches)
 
@@ -255,7 +301,32 @@ EOF
     refute_output --partial "some branches preserved"
 }
 
-@test "shutdown --force deletes unmerged v0/worker/chore branch" {
+@test "shutdown deletes merged user-specific chores branch without warning" {
+    local project_dir
+    project_dir=$(setup_git_project_with_branches)
+
+    # Create user-specific chores branch and merge it to main
+    (
+        cd "${project_dir}" || return 1
+        git checkout -b v0/agent/test-user-chores --quiet
+        echo "chore work" > chore.txt
+        git add chore.txt
+        git commit --quiet -m "Chore work"
+        git checkout main --quiet
+        git merge v0/agent/test-user-chores --quiet -m "Merge chore"
+    )
+
+    run env -u PROJECT -u ISSUE_PREFIX -u V0_ROOT bash -c '
+        cd "'"${project_dir}"'" || exit 1
+        "'"${PROJECT_ROOT}"'/bin/v0-shutdown" 2>&1
+    '
+    assert_success
+    assert_output --partial "Deleting local branch: v0/agent/test-user-chores"
+    refute_output --partial "Warning:"
+    refute_output --partial "some branches preserved"
+}
+
+@test "shutdown --force deletes unmerged v0/worker/chore branch (legacy)" {
     local project_dir
     project_dir=$(setup_git_project_with_branches)
 
@@ -276,6 +347,30 @@ EOF
     assert_success
     assert_output --partial "Warning: v0/worker/chore has commits not in main, deleting anyway (--force)"
     assert_output --partial "Deleting local branch: v0/worker/chore"
+    refute_output --partial "some branches preserved"
+}
+
+@test "shutdown --force deletes unmerged user-specific bugs branch" {
+    local project_dir
+    project_dir=$(setup_git_project_with_branches)
+
+    # Create user-specific bugs branch with unmerged commits
+    (
+        cd "${project_dir}" || return 1
+        git checkout -b v0/agent/test-user-bugs --quiet
+        echo "fix work" > fix.txt
+        git add fix.txt
+        git commit --quiet -m "Fix work"
+        git checkout main --quiet
+    )
+
+    run env -u PROJECT -u ISSUE_PREFIX -u V0_ROOT bash -c '
+        cd "'"${project_dir}"'" || exit 1
+        "'"${PROJECT_ROOT}"'/bin/v0-shutdown" --force 2>&1
+    '
+    assert_success
+    assert_output --partial "Warning: v0/agent/test-user-bugs has commits not in main, deleting anyway (--force)"
+    assert_output --partial "Deleting local branch: v0/agent/test-user-bugs"
     refute_output --partial "some branches preserved"
 }
 

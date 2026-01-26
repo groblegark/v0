@@ -16,6 +16,19 @@ v0_generate_user_branch() {
   echo "v0/agent/${username}-${shortid}"
 }
 
+# Generate worker branch name from develop branch
+# v0_worker_branch "fix"   → v0/agent/alice-a3f2-bugs
+# v0_worker_branch "chore" → v0/agent/alice-a3f2-chores
+v0_worker_branch() {
+  local worker_type="$1"  # "fix" or "chore"
+  local develop="${V0_DEVELOP_BRANCH:-main}"
+  case "${worker_type}" in
+    fix) echo "${develop}-bugs" ;;
+    chore) echo "${develop}-chores" ;;
+    *) echo "${develop}-${worker_type}" ;;
+  esac
+}
+
 # Infer workspace mode based on develop branch
 # Returns: "worktree" or "clone"
 v0_infer_workspace_mode() {

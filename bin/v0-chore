@@ -6,7 +6,6 @@ set -e
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 V0_DIR="$(dirname "${SCRIPT_DIR}")"
 ROOT_DIR="$(pwd)"  # Current directory where command was invoked
-WORKER_BRANCH="v0/worker/chore"
 
 # Source shared utilities
 source "${V0_DIR}/packages/cli/lib/v0-common.sh"
@@ -19,6 +18,10 @@ if v0_find_project_root >/dev/null 2>&1; then
 else
     v0_load_standalone_config
 fi
+
+# Worker branch derived from develop branch (must be after config load)
+# In standalone mode, V0_DEVELOP_BRANCH is empty so this becomes "/chores"
+WORKER_BRANCH=$(v0_worker_branch "chore")
 
 # Initialize namespaced session names (must be after config load)
 if v0_is_standalone; then
