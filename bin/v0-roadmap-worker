@@ -258,21 +258,13 @@ SETTINGS_EOF
   create_done_script "${TREE_DIR}" "${NAME}" "${IDEA_ID}"
   create_incomplete_script "${TREE_DIR}" "${NAME}"
 
-  # Create on-complete script
+  # Create on-complete script (display only - worker handles state updates)
   cat > "${TREE_DIR}/.claude/on-complete.sh" <<WRAPPER
 #!/bin/bash
-STATE_FILE="${STATE_FILE}"
 ROADMAP_NAME="${NAME}"
 
 # Count queued features
 QUEUED_COUNT=\$(wk list --label "roadmap:\${ROADMAP_NAME}" 2>/dev/null | wc -l | tr -d ' ')
-
-# Get list of queued feature names
-QUEUED_FEATURES=\$(wk list --label "roadmap:\${ROADMAP_NAME}" 2>/dev/null | grep -oE '[a-zA-Z]+-[a-z0-9]+' | tr '\n' ' ')
-
-# Update state with queued features
-tmp=\$(mktemp)
-jq ".features_queued = [\$(echo \${QUEUED_FEATURES} | tr ' ' '\n' | grep -v '^$' | sed 's/.*/"&"/' | paste -sd, -)] | .phase = \"completed\" | .completed_at = \"$(date -u +%Y-%m-%dT%H:%M:%SZ)\"" "\${STATE_FILE}" > "\${tmp}" && mv "\${tmp}" "\${STATE_FILE}"
 
 echo ""
 echo "=== Roadmap Orchestration Complete ==="
@@ -293,7 +285,7 @@ WRAPPER
   CLAUDE_ARGS="--model opus --dangerously-skip-permissions --allow-dangerously-skip-permissions"
 
   tmux new-session -d -s "${SESSION}" -c "${TREE_DIR}" \
-    "V0_ROADMAP_NAME='${NAME}' V0_IDEA_ID='${IDEA_ID}' V0_ROOT='${V0_ROOT}' claude ${CLAUDE_ARGS} 'Orchestrate the roadmap. Follow instructions in CLAUDE.md and ROADMAP.md.'; \
+    "V0_ROADMAP_NAME='${NAME}' V0_IDEA_ID='${IDEA_ID}' V0_ROOT='${V0_ROOT}' V0_WORKTREE='${WORKTREE}' claude ${CLAUDE_ARGS} 'Orchestrate the roadmap. Follow instructions in CLAUDE.md and ROADMAP.md.'; \
      '${TREE_DIR}/.claude/on-complete.sh'; \
      echo ''; echo 'Session complete. Closing in 5 seconds...'; sleep 5"
 
@@ -309,7 +301,8 @@ WRAPPER
   QUEUED_COUNT=$(wk list --label "roadmap:${NAME}" 2>/dev/null | wc -l | tr -d ' ')
   if [[ "${QUEUED_COUNT}" -gt 0 ]]; then
     emit_event "orchestrate:complete" "${QUEUED_COUNT} features queued for roadmap"
-    update_state "phase" '"orchestrating"'
+    update_state "phase" '"completed"'
+    update_state "completed_at" "\"$(date -u +%Y-%m-%dT%H:%M:%SZ)\""
     log "Roadmap orchestration complete. ${QUEUED_COUNT} features queued."
   else
     emit_event "orchestrate:warning" "No features were queued"
@@ -327,10 +320,8 @@ main() {
     init|planning)
       run_orchestration_phase || exit 1
       ;;
-    orchestrating)
-      log "Roadmap is already orchestrating (features have been queued)"
-      ;;
-    completed)
+    orchestrating|completed)
+      # orchestrating is legacy - both mean "done"
       log "Roadmap orchestration already completed"
       ;;
     failed|interrupted)

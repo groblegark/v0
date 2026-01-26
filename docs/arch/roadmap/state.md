@@ -16,14 +16,11 @@ flowchart TD
     init --> planning
 
     planning["planning<br/>(agent running)"]
-    planning -->|"features queued"| orchestrating
+    planning -->|"features queued"| completed
     planning -->|error| failed
     planning -->|signal| interrupted
 
-    orchestrating["orchestrating<br/>(features executing)"]
-    orchestrating -->|"all done"| completed
-
-    completed["completed<br/>(success)"]
+    completed["completed<br/>(features queued)"]
     failed["failed<br/>(error occurred)"]
     interrupted["interrupted<br/>(signal received)"]
 
@@ -39,8 +36,7 @@ flowchart TD
 |-------|-------------|
 | `init` | Initial state. Roadmap created but orchestration has not started. |
 | `planning` | Claude agent is running in tmux session, decomposing roadmap into features. |
-| `orchestrating` | Features have been queued with `v0 feature --after`. Waiting for execution. |
-| `completed` | Roadmap orchestration finished. All features queued and tracked. |
+| `completed` | Roadmap orchestration finished. Features queued for independent execution. |
 
 ### Error States
 
@@ -62,7 +58,7 @@ When starting a new roadmap:
 6. ROADMAP.md instructions copied to worktree
 7. Claude agent launched in tmux session
 
-### Planning Phase (`planning` → `orchestrating`)
+### Planning Phase (`planning` → `completed`)
 
 The Claude agent:
 1. Explores the codebase to understand structure
@@ -71,14 +67,9 @@ The Claude agent:
 4. Commits any roadmap documentation to the branch
 5. Calls `./done` script to signal completion
 
-When features are detected (via `wk list --label roadmap:${name}`):
-- Phase transitions to `orchestrating`
-- Feature IDs stored in `features_queued` array
-
-### Completion (`orchestrating` → `completed`)
-
-When all queued features have been executed:
+When the agent exits and features are detected (via `wk list --label roadmap:${name}`):
 - Phase transitions to `completed`
+- Feature IDs stored in `features_queued` array
 - `completed_at` timestamp recorded
 
 ## Error Recovery
@@ -105,16 +96,16 @@ Note: Unlike operations, roadmaps restart from `init` on recovery rather than re
   "type": "roadmap",
   "machine": "hostname",
   "roadmap_description": "Rewrite the entire frontend in React",
-  "phase": "orchestrating",
+  "phase": "completed",
   "idea_id": "proj-abc123",
   "epics": [],
   "milestones": [],
   "features_queued": ["proj-def456", "proj-ghi789"],
   "created_at": "2026-01-19T00:00:00Z",
-  "completed_at": null,
+  "completed_at": "2026-01-19T01:30:00Z",
   "planning_session": "v0-proj-rewrite-roadmap",
   "worktree": "/path/to/worktree/repo",
-  "worker_pid": 12345,
+  "worker_pid": null,
   "worker_log": "/path/to/roadmaps/rewrite/logs/worker.log"
 }
 ```
@@ -134,7 +125,7 @@ Note: Unlike operations, roadmaps restart from `init` on recovery rather than re
 | `completed_at` | ISO 8601 timestamp when orchestration completed |
 | `planning_session` | Tmux session name for the planning agent |
 | `worktree` | Path to worktree where agent runs |
-| `worker_pid` | PID of background worker process |
+| `worker_pid` | PID of background worker process (null when not running) |
 | `worker_log` | Path to worker log file |
 
 ## Stop Hook Behavior
@@ -143,11 +134,16 @@ The `stop-roadmap.sh` hook prevents premature exit:
 
 | Condition | Decision | Reason |
 |-----------|----------|--------|
-| No features queued | Block | Orchestration incomplete |
-| Uncommitted changes | Block | Must commit before exit |
+| No roadmap context | Approve | Not a v0 roadmap session |
 | System stop (auth, credits) | Approve | Infrastructure issue |
 | Stop hook already active | Approve | Prevent infinite loops |
+| No features queued | Block | Orchestration incomplete |
+| Uncommitted changes | Block | Must commit before exit |
 | Features queued, clean worktree | Approve | Orchestration complete |
+
+Environment variables used by stop hook:
+- `V0_ROADMAP_NAME`: Roadmap identifier
+- `V0_WORKTREE`: Path to worktree for uncommitted changes check
 
 ## Worker Lifecycle
 
@@ -160,11 +156,23 @@ The background worker (`v0-roadmap-worker`) manages the state machine:
 │ 1. Load state from state.json                   │
 │ 2. Check current phase                          │
 │ 3. If init/planning: run orchestration          │
-│ 4. If orchestrating: already done               │
+│ 4. If completed: already done, exit             │
 │ 5. If failed/interrupted: reset to init, retry  │
 │ 6. Update worker_pid on exit                    │
 └─────────────────────────────────────────────────┘
 ```
+
+## Status Display
+
+`v0 status` shows roadmaps only during active phases:
+
+| Phase | Shown in Status | Indicator |
+|-------|-----------------|-----------|
+| `init` | Yes | (dim) |
+| `planning` | Yes | (active) if tmux running, (bg-worker) if worker running |
+| `completed` | No | - |
+| `failed` | No | Use `v0 roadmap <name> --resume` to recover |
+| `interrupted` | No | Use `v0 roadmap <name> --resume` to recover |
 
 ## Relationship to Operations
 

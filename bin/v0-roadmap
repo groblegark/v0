@@ -163,6 +163,7 @@ init_state() {
   "milestones": [],
   "features_queued": [],
   "created_at": "$(date -u +%Y-%m-%dT%H:%M:%SZ)",
+  "completed_at": null,
   "planning_session": null,
   "worktree": null,
   "worker_pid": null,

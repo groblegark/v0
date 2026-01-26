@@ -80,8 +80,8 @@ show_active_roadmaps() {
     _fields=$(jq -r '[.phase, .name, .roadmap_description, .idea_id, .worker_pid, .machine, .planning_session] | map(. // "") | join("|")' "${state_file}")
     IFS='|' read -r phase name desc idea_id worker_pid machine session <<< "${_fields}"
 
-    # Only show during planning/orchestrating phases
-    if [[ "${phase}" = "planning" ]] || [[ "${phase}" = "orchestrating" ]] || [[ "${phase}" = "init" ]]; then
+    # Only show during active phases (init/planning)
+    if [[ "${phase}" = "planning" ]] || [[ "${phase}" = "init" ]]; then
 
       # Truncate description for display
       local desc_short="${desc:0:40}"
@@ -112,7 +112,6 @@ show_active_roadmaps() {
     local phase_color=""
     case "${phase}" in
       planning) phase_color="${C_YELLOW}" ;;
-      orchestrating) phase_color="${C_CYAN}" ;;
       init) phase_color="${C_DIM}" ;;
     esac
     printf "  %-20s ${phase_color}%-15s${C_RESET}%b  %s\n" "${name}:" "${phase}" "${status_icon}" "${C_DIM}(${desc})${C_RESET}"
