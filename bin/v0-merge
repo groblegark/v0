@@ -9,7 +9,20 @@ set -e
 
 V0_DIR="$(cd "$(dirname "$0")/.." && pwd)"
 source "${V0_DIR}/packages/cli/lib/v0-common.sh"
+
+# Save inherited BUILD_DIR before v0_load_config potentially overwrites it.
+# When running from the workspace (e.g., called by mergeq daemon), v0_load_config
+# sets BUILD_DIR based on the workspace's .v0.rc, but we need to preserve the
+# main repo's BUILD_DIR so we can access operation state files.
+_INHERITED_BUILD_DIR="${BUILD_DIR:-}"
+
 v0_load_config
+
+# Restore inherited BUILD_DIR if it was set by parent process (e.g., mergeq daemon)
+# This ensures we access state files in the main repo, not the workspace
+if [[ -n "${_INHERITED_BUILD_DIR}" ]]; then
+    export BUILD_DIR="${_INHERITED_BUILD_DIR}"
+fi
 
 # Ensure workspace exists for merge operations
 # All merges happen in the workspace, not V0_ROOT

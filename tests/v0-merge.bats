@@ -392,6 +392,53 @@ EOF
     assert_output --partial "previously failed to merge"
 }
 
+@test "v0-merge: verification_failed with null merge_commit and no resources auto-completes" {
+    local project_dir
+    project_dir=$(setup_isolated_project)
+
+    # Initialize git repo
+    cd "${project_dir}"
+    git init --quiet
+    git config user.email "test@test.com"
+    git config user.name "Test"
+    echo "initial" > file.txt
+    git add file.txt
+    git commit --quiet -m "Initial commit"
+
+    # Get the default branch name
+    local default_branch
+    default_branch=$(git rev-parse --abbrev-ref HEAD)
+
+    # Update .v0.rc to use the correct develop branch
+    echo "V0_DEVELOP_BRANCH=\"${default_branch}\"" >> "${project_dir}/.v0.rc"
+
+    # Create operation state with verification_failed status and NULL merge_commit
+    # This simulates the bug where v0-merge succeeded but didn't record merge_commit
+    mkdir -p "${project_dir}/.v0/build/operations/test-op"
+    cat > "${project_dir}/.v0/build/operations/test-op/state.json" <<EOF
+{
+    "name": "test-op",
+    "phase": "pending_merge",
+    "worktree": "/nonexistent/path",
+    "branch": "feature/not-existing",
+    "merge_status": "verification_failed",
+    "merge_commit": null,
+    "merge_error": "No merge_commit in state - possible v0-merge bug"
+}
+EOF
+
+    run env -u PROJECT -u ISSUE_PREFIX -u V0_ROOT -u BUILD_DIR -u MERGEQ_DIR bash -c '
+        cd "'"${project_dir}"'" || exit 1
+        "'"${V0_MERGE}"'" test-op 2>&1
+    '
+    # Should auto-complete since merge_commit is null and all resources are gone
+    # (this indicates v0-merge completed but failed to record the commit)
+    assert_failure  # Still returns failure exit code
+    assert_output --partial "verification failed but all resources cleaned up"
+    assert_output --partial "Assuming merge succeeded"
+    assert_output --partial "is now marked as merged"
+}
+
 @test "v0-merge: verification_failed with remote branch already merged cleans up" {
     local project_dir
     project_dir=$(setup_isolated_project)
