@@ -202,8 +202,13 @@ run_orchestration_phase() {
   emit_event "orchestrate:setup" "Creating CLAUDE.md and hooks"
 
   # Create CLAUDE.md from roadmap template
-  M4_ARGS="-D ROADMAP_NAME=${NAME} -D ROADMAP_DESCRIPTION=$(printf '%s' "${DESCRIPTION}" | sed 's/"/\\"/g') -D IDEA_ID=${IDEA_ID:-none} -D V0_GIT_REMOTE=${V0_GIT_REMOTE}"
-  m4 ${M4_ARGS} "${V0_DIR}/packages/cli/lib/templates/claude.roadmap.m4" > "${TREE_DIR}/CLAUDE.md"
+  M4_ARGS=(
+    -D "ROADMAP_NAME=${NAME}"
+    -D "ROADMAP_DESCRIPTION=${DESCRIPTION}"
+    -D "IDEA_ID=${IDEA_ID:-none}"
+    -D "V0_GIT_REMOTE=${V0_GIT_REMOTE}"
+  )
+  m4 "${M4_ARGS[@]}" "${V0_DIR}/packages/cli/lib/templates/claude.roadmap.m4" > "${TREE_DIR}/CLAUDE.md"
   emit_event "claude.md:created" "${TREE_DIR}/CLAUDE.md"
 
   # Copy roadmap prompt as ROADMAP.md
@@ -298,15 +303,22 @@ WRAPPER
   done
 
   # Check if we successfully queued features
-  QUEUED_COUNT=$(wk list --label "roadmap:${NAME}" 2>/dev/null | wc -l | tr -d ' ')
+  FEATURE_IDS=$(wk list --label "roadmap:${NAME}" -o ids 2>/dev/null || true)
+  # Count non-empty lines (grep -c returns 1 when no match, but still outputs 0)
+  QUEUED_COUNT=$(printf '%s\n' "${FEATURE_IDS}" | grep -c . 2>/dev/null) || QUEUED_COUNT=0
   if [[ "${QUEUED_COUNT}" -gt 0 ]]; then
+    # Build JSON array from IDs
+    FEATURES_JSON=$(echo "${FEATURE_IDS}" | jq -R . | jq -s .)
+    update_state "features_queued" "${FEATURES_JSON}"
     emit_event "orchestrate:complete" "${QUEUED_COUNT} features queued for roadmap"
     update_state "phase" '"completed"'
     update_state "completed_at" "\"$(date -u +%Y-%m-%dT%H:%M:%SZ)\""
     log "Roadmap orchestration complete. ${QUEUED_COUNT} features queued."
   else
-    emit_event "orchestrate:warning" "No features were queued"
-    log "Warning: No features were queued for this roadmap"
+    emit_event "orchestrate:failed" "No features were queued"
+    update_state "phase" '"failed"'
+    update_state "error" '"Orchestration completed without queueing any features"'
+    log "Failed: No features were queued for this roadmap"
   fi
 }
 
@@ -320,8 +332,7 @@ main() {
     init|planning)
       run_orchestration_phase || exit 1
       ;;
-    orchestrating|completed)
-      # orchestrating is legacy - both mean "done"
+    completed)
       log "Roadmap orchestration already completed"
       ;;
     failed|interrupted)

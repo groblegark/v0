@@ -296,3 +296,48 @@ teardown() {
     run grep "roadmap:myroadmap" "${MOCK_CALLS_DIR}/wk.calls"
     assert_success
 }
+
+# ============================================================================
+# M4 Template Substitution Tests
+# ============================================================================
+
+@test "v0-roadmap-worker: m4 array expansion preserves spaces in description" {
+    # This test verifies the fix for m4 argument handling with spaces
+    # The worker now uses an array for M4_ARGS to avoid word-splitting
+    #
+    # We test this by simulating the exact code pattern from v0-roadmap-worker
+    # with a mock m4 that logs its arguments
+
+    # Create mock m4 that logs its arguments
+    mkdir -p "${TEST_TEMP_DIR}/mock-bin"
+    cat > "${TEST_TEMP_DIR}/mock-bin/m4" <<'MOCK_EOF'
+#!/bin/bash
+for arg in "$@"; do
+    echo "ARG: $arg"
+done
+MOCK_EOF
+    chmod +x "${TEST_TEMP_DIR}/mock-bin/m4"
+
+    export PATH="${TEST_TEMP_DIR}/mock-bin:${PATH}"
+
+    # Simulate the fixed code pattern from v0-roadmap-worker
+    NAME="test-roadmap"
+    DESCRIPTION="Build a REST API with multiple endpoints"
+    IDEA_ID="test-123"
+    V0_GIT_REMOTE="origin"
+
+    # This is the fixed array-based approach
+    M4_ARGS=(
+        -D "ROADMAP_NAME=${NAME}"
+        -D "ROADMAP_DESCRIPTION=${DESCRIPTION}"
+        -D "IDEA_ID=${IDEA_ID:-none}"
+        -D "V0_GIT_REMOTE=${V0_GIT_REMOTE}"
+    )
+
+    # Run m4 with the array expansion
+    run m4 "${M4_ARGS[@]}" /dev/null
+
+    # Verify the description with spaces was passed as a single argument
+    assert_output --partial "ARG: -D"
+    assert_output --partial "ROADMAP_DESCRIPTION=Build a REST API with multiple endpoints"
+}
