@@ -5,13 +5,13 @@ set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 source "${SCRIPT_DIR}/../packages/cli/lib/v0-common.sh"
-v0_load_config
 
 # Default configuration
 REFRESH_INTERVAL=5
 FILTER_ARGS=()
 OPERATION_NAME=""
 MAX_ITERATIONS=""  # For testing: limit number of watch iterations
+WATCH_ALL=""       # Set to 1 for system-wide watch mode
 
 usage() {
   v0_help <<'EOF'
@@ -23,6 +23,7 @@ Arguments:
   OPERATION             Watch a specific operation by name
 
 Options:
+  --all                 Watch all running v0 projects on the system
   -n, --interval SECS   Refresh interval in seconds (default: 5)
   -o, --operation NAME  Watch a specific operation by name
   --fix                 Watch fix worker status only
@@ -38,6 +39,10 @@ EOF
 # Parse arguments
 while [[ $# -gt 0 ]]; do
   case "$1" in
+    --all)
+      WATCH_ALL=1
+      shift
+      ;;
     -n|--interval)
       REFRESH_INTERVAL="$2"
       shift 2
@@ -77,6 +82,123 @@ if ! [[ "${REFRESH_INTERVAL}" =~ ^[0-9]+$ ]] || [[ "${REFRESH_INTERVAL}" -lt 1 ]
   echo "Error: Interval must be a positive integer" >&2
   exit 1
 fi
+
+# System-wide watch mode
+if [[ -n "${WATCH_ALL}" ]]; then
+  V0_STATE_BASE="${XDG_STATE_HOME:-${HOME}/.local/state}/v0"
+
+  # Discover running projects
+  discover_running_projects() {
+    for root_file in "${V0_STATE_BASE}"/*/.v0.root; do
+      [[ ! -f "${root_file}" ]] && continue
+      local project_dir
+      project_dir=$(dirname "${root_file}")
+      local project
+      project=$(basename "${project_dir}")
+      [[ "${project}" = "standalone" ]] && continue
+
+      local v0_root
+      v0_root=$(cat "${root_file}")
+      [[ ! -d "${v0_root}" ]] && continue
+
+      # Check for active tmux sessions (v0-${project}-*)
+      if tmux list-sessions -F '#{session_name}' 2>/dev/null | v0_grep -q "^v0-${project}-"; then
+        echo "${project}:${v0_root}"
+        continue
+      fi
+
+      # Check for daemon PID files (mergeq, fix, chore)
+      local build_dir="${v0_root}/.v0/build"
+      for daemon_dir in mergeq fix chore; do
+        local pid_file="${build_dir}/${daemon_dir}/.daemon.pid"
+        if [[ -f "${pid_file}" ]]; then
+          local pid
+          pid=$(cat "${pid_file}")
+          if [[ -n "${pid}" ]] && kill -0 "${pid}" 2>/dev/null; then
+            echo "${project}:${v0_root}"
+            break
+          fi
+        fi
+      done
+    done
+  }
+
+  # Get terminal width (copy of logic from show_header)
+  get_terminal_width() {
+    local width
+    if [[ -n "${COLUMNS+set}" ]]; then
+      width="${COLUMNS}"
+      if ! [[ "${width}" =~ ^[0-9]+$ ]] || [[ "${width}" -lt 1 ]]; then
+        width=80
+      fi
+    else
+      width=$( { stty size </dev/tty | awk '{print $2}'; } 2>/dev/null ) || width=""
+      if ! [[ "${width}" =~ ^[0-9]+$ ]] || [[ "${width}" -lt 1 ]]; then
+        width=$( { tput cols </dev/tty; } 2>/dev/null ) || width=""
+      fi
+      if ! [[ "${width}" =~ ^[0-9]+$ ]] || [[ "${width}" -lt 1 ]]; then
+        width=$(tput cols 2>/dev/null) || width=""
+      fi
+      if ! [[ "${width}" =~ ^[0-9]+$ ]] || [[ "${width}" -lt 1 ]]; then
+        width=80
+      fi
+    fi
+    echo "${width}"
+  }
+
+  # Show header with timestamp for system-wide watch
+  show_all_header() {
+    local now version width
+    now=$(date '+%Y-%m-%d %H:%M:%S')
+    version=$(cat "${SCRIPT_DIR}/../VERSION" 2>/dev/null || echo "unknown")
+    width=$(get_terminal_width)
+    echo -e "v0 ${C_DIM}${C_LAVENDER}${version}${C_RESET} | ${C_BOLD}System Watch${C_RESET} | ${C_CYAN}${now}${C_RESET} | ${C_DIM}Ctrl+C to exit${C_RESET}"
+    local bar=""
+    for ((i=0; i<width; i++)); do bar+="═"; done
+    printf '%s\n' "${bar}"
+  }
+
+  trap 'echo; exit 0' INT TERM
+
+  iteration=0
+  while true; do
+    [[ -t 1 ]] && clear
+    show_all_header
+
+    # Get running projects
+    projects=$(discover_running_projects)
+
+    if [[ -z "${projects}" ]]; then
+      echo ""
+      echo -e "${C_DIM}No running v0 projects found${C_RESET}"
+      echo ""
+      echo "Projects are registered when you run v0 commands (start, build, etc.)"
+      echo "Start a project with: v0 start"
+    else
+      while IFS=':' read -r project v0_root; do
+        [[ -z "${project}" ]] && continue
+        echo ""
+        echo -e "${C_BOLD}▶ ${project}${C_RESET} ${C_DIM}(${v0_root})${C_RESET}"
+        echo ""
+        # Run v0 status from the project directory
+        (cd "${v0_root}" && "${SCRIPT_DIR}/v0-status" --no-hints --max-ops 5 2>/dev/null) | sed 's/^/  /' || true
+      done <<< "${projects}"
+    fi
+
+    # Check iteration limit (for testing)
+    ((iteration++)) || true
+    if [[ -n "${MAX_ITERATIONS}" && "${iteration}" -ge "${MAX_ITERATIONS}" ]]; then
+      break
+    fi
+
+    sleep "${REFRESH_INTERVAL}"
+  done
+
+  exit 0
+fi
+
+# Regular project-specific watch mode - requires config
+v0_load_config
 
 # Show header with timestamp
 show_header() {

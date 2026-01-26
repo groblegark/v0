@@ -484,6 +484,13 @@ if [[ -z "${DRY_RUN}" ]]; then
     if [[ -d "${V0_STATE_DIR}/workspace" ]]; then
       rmdir "${V0_STATE_DIR}/workspace" 2>/dev/null || true
     fi
+
+    # Remove project registration (unregister from v0 watch --all)
+    root_file="${V0_STATE_DIR}/.v0.root"
+    if [[ -f "${root_file}" ]]; then
+      rm -f "${root_file}"
+      echo "Removed project registration"
+    fi
   fi
 
   # Handle --drop-everything: remove all state
@@ -557,6 +564,10 @@ else
     fi
     if [[ -d "${V0_STATE_DIR}/tree" ]]; then
       echo "  Would remove worktrees: ${V0_STATE_DIR}/tree"
+    fi
+    root_file="${V0_STATE_DIR}/.v0.root"
+    if [[ -f "${root_file}" ]]; then
+      echo "  Would remove project registration: ${root_file}"
     fi
   fi
 

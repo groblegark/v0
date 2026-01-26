@@ -154,6 +154,7 @@ Think of it as a project manager who knows v0 inside and out.
 v0 talk          # Interactive Haiku for quick questions
 v0 status        # Show all operations
 v0 watch         # Continuously refresh status
+v0 watch --all   # Watch all running projects (works from anywhere)
 v0 attach fix    # Attach to a worker (fix, chore, mergeq or <feature>)
 v0 coffee        # Keep computer awake
 v0 prune         # Clean up completed state

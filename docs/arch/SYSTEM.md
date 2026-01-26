@@ -64,6 +64,7 @@ See: [v0-startup](commands/v0-startup.md), [v0-shutdown](commands/v0-shutdown.md
 | File | Purpose |
 |------|---------|
 | `.v0.rc` | Project configuration |
+| `.v0.root` | Project root path (for `v0 watch --all`) |
 | `state.json` | Operation state (per-operation) |
 | `queue.json` | Merge queue entries |
 | `.daemon.pid` | Worker process ID |

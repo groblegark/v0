@@ -317,3 +317,100 @@ EOF
     '
     assert_output --partial "bar_length_valid=true"
 }
+
+# ============================================================================
+# System-wide watch (--all) tests
+# ============================================================================
+
+@test "watch --help shows --all option" {
+    local project_dir
+    project_dir=$(setup_isolated_project)
+
+    run env -u PROJECT -u ISSUE_PREFIX -u V0_ROOT bash -c '
+        cd "'"$project_dir"'"
+        "'"$PROJECT_ROOT"'/bin/v0-watch" --help
+    '
+    assert_success
+    assert_output --partial "--all"
+    assert_output --partial "Watch all running"
+}
+
+@test "watch --all works outside project directory" {
+    # Create a temp directory that is NOT a v0 project
+    local non_project_dir="$TEST_TEMP_DIR/not-a-project"
+    mkdir -p "$non_project_dir"
+
+    # Use custom XDG_STATE_HOME to avoid interfering with real state
+    local test_state_dir="$TEST_TEMP_DIR/state"
+    mkdir -p "$test_state_dir"
+
+    run env -u PROJECT -u ISSUE_PREFIX -u V0_ROOT XDG_STATE_HOME="$test_state_dir" bash -c '
+        cd "'"$non_project_dir"'"
+        "'"$PROJECT_ROOT"'/bin/v0-watch" --all --max-iterations 1 2>&1
+    '
+    assert_success
+    # Should show "No running v0 projects" or system watch header, NOT "Not in a v0 project"
+    refute_output --partial "Not in a v0 project"
+    refute_output --partial "No .v0.rc found"
+    assert_output --partial "System Watch"
+}
+
+@test "watch --all shows 'No running projects' when none exist" {
+    # Create a temp directory that is NOT a v0 project
+    local non_project_dir="$TEST_TEMP_DIR/not-a-project"
+    mkdir -p "$non_project_dir"
+
+    # Use custom XDG_STATE_HOME with no projects
+    local test_state_dir="$TEST_TEMP_DIR/state"
+    mkdir -p "$test_state_dir/v0"
+
+    run env -u PROJECT -u ISSUE_PREFIX -u V0_ROOT XDG_STATE_HOME="$test_state_dir" bash -c '
+        cd "'"$non_project_dir"'"
+        "'"$PROJECT_ROOT"'/bin/v0-watch" --all --max-iterations 1 2>&1
+    '
+    assert_success
+    assert_output --partial "No running v0 projects found"
+}
+
+@test "v0_register_project creates .v0.root file" {
+    local project_dir
+    project_dir=$(setup_isolated_project)
+
+    # Use custom XDG_STATE_HOME
+    local test_state_dir="$TEST_TEMP_DIR/state"
+    mkdir -p "$test_state_dir"
+
+    # Run v0 status to trigger registration
+    run env -u PROJECT -u ISSUE_PREFIX -u V0_ROOT XDG_STATE_HOME="$test_state_dir" bash -c '
+        cd "'"$project_dir"'"
+        "'"$PROJECT_ROOT"'/bin/v0-status" 2>&1 || true
+        # Check if .v0.root was created
+        root_file="'"$test_state_dir"'/v0/myproject/.v0.root"
+        if [[ -f "$root_file" ]]; then
+            echo "root_file_exists=true"
+            echo "root_file_content=$(cat "$root_file")"
+        else
+            echo "root_file_exists=false"
+        fi
+    '
+    assert_output --partial "root_file_exists=true"
+    assert_output --partial "root_file_content=$project_dir"
+}
+
+@test "v0 watch --all routed correctly from main v0 command" {
+    # Create a temp directory that is NOT a v0 project
+    local non_project_dir="$TEST_TEMP_DIR/not-a-project"
+    mkdir -p "$non_project_dir"
+
+    # Use custom XDG_STATE_HOME
+    local test_state_dir="$TEST_TEMP_DIR/state"
+    mkdir -p "$test_state_dir/v0"
+
+    run env -u PROJECT -u ISSUE_PREFIX -u V0_ROOT XDG_STATE_HOME="$test_state_dir" bash -c '
+        cd "'"$non_project_dir"'"
+        "'"$PROJECT_ROOT"'/bin/v0" watch --all --max-iterations 1 2>&1
+    '
+    assert_success
+    # Should show system watch header, not project-not-found error
+    assert_output --partial "System Watch"
+}

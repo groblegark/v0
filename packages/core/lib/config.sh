@@ -182,6 +182,9 @@ v0_load_config() {
   export V0_WORKTREE_INIT
   export V0_GIT_REMOTE V0_AGENT_REMOTE_DIR
   export V0_WORKSPACE_MODE V0_WORKSPACE_DIR
+
+  # Register project root for system-wide discovery (v0 watch --all)
+  v0_register_project
 }
 
 # Load standalone configuration (no .v0.rc required)
@@ -204,6 +207,23 @@ v0_load_standalone_config() {
 # Check if we're in standalone mode
 v0_is_standalone() {
     [[ "${V0_STANDALONE:-0}" == "1" ]]
+}
+
+# Register project root for system-wide discovery (v0 watch --all)
+# Creates ~/.local/state/v0/${PROJECT}/.v0.root
+v0_register_project() {
+  [[ -z "${V0_ROOT:-}" ]] && return 0
+  [[ -z "${V0_STATE_DIR:-}" ]] && return 0
+
+  local root_file="${V0_STATE_DIR}/.v0.root"
+
+  # Create state dir if needed
+  mkdir -p "${V0_STATE_DIR}"
+
+  # Only write if different (avoid unnecessary disk writes)
+  if [[ ! -f "${root_file}" ]] || [[ "$(cat "${root_file}" 2>/dev/null)" != "${V0_ROOT}" ]]; then
+    echo "${V0_ROOT}" > "${root_file}"
+  fi
 }
 
 # Detect the best default branch for development
