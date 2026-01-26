@@ -71,3 +71,11 @@ load '../packages/test-support/helpers/test_helper'
     assert_output --partial "v0 mayor"
     assert_output --partial "--model sonnet"
 }
+
+@test "v0 mayor requires project directory" {
+    # Run from non-project directory
+    cd /tmp
+    run "${PROJECT_ROOT}/bin/v0-mayor" 2>&1
+    assert_failure
+    assert_output --partial "Not in a v0 project directory"
+}
