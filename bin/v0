@@ -22,7 +22,7 @@ PROJECT_COMMANDS="plan tree merge mergeq status build feature resume fix attach 
 STANDALONE_COMMANDS="chore"
 
 # Commands that never need config
-NO_CONFIG_COMMANDS="init help version coffee talk prime"
+NO_CONFIG_COMMANDS="init help version coffee talk prime mayor"
 
 # Source common functions for standalone mode checking
 source "${V0_DIR}/packages/cli/lib/v0-common.sh"
@@ -92,6 +92,7 @@ Commands:
 
   prime         Quick-start guide (run after context loss)
   talk          Open claude with haiku model for quick conversations
+  mayor         Launch Claude as orchestration assistant
   coffee        Keep computer awake
   issue         Alias for 'wk' issue tracker (see 'wk --help')
 
@@ -219,7 +220,7 @@ case "${CMD}" in
     exec "${V0_DIR}/bin/v0-${CMD}" "$@"
     ;;
   # No-config commands
-  talk|coffee|prime)
+  talk|coffee|prime|mayor)
     exec "${V0_DIR}/bin/v0-${CMD}" "$@"
     ;;
   self-debug)
