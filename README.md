@@ -167,8 +167,13 @@ While attached to tmux: scroll with `Ctrl-b [`, exit scroll with `q`, detach wit
 
 ## Configuration
 
-Running `v0 init` creates a `.v0.rc` file with sensible defaults. You can override
-these by editing the file or by passing flags to `v0 init`:
+Running `v0 init` creates:
+- `.v0.rc` - Project configuration (commit this)
+- `.v0.profile.rc` - User-specific settings like your unique branch (gitignored)
+
+If you provide `--develop`, only `.v0.rc` is created with the branch inline.
+
+You can override settings by editing the files or by passing flags to `v0 init`:
 
 | Setting | Init Flag | Default |
 |---------|-----------|---------|
