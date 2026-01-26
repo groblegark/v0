@@ -30,8 +30,8 @@
 - [v0-self-debug](commands/v0-self-debug.md) - Debug reports
 - [v0-self-update](commands/v0-self-update.md) - Update v0
 - [v0-self-version](commands/v0-self-version.md) - Version info
-- [v0-shutdown](commands/v0-shutdown.md) - Stop workers
-- [v0-startup](commands/v0-startup.md) - Start workers
+- [v0-start](commands/v0-start.md) - Start workers
+- [v0-stop](commands/v0-stop.md) - Stop workers
 - [v0-status](commands/v0-status.md) - Show status
 - [v0-talk](commands/v0-talk.md) - Quick Claude conversations
 - [v0-tree](commands/v0-tree.md) - Worktree management
