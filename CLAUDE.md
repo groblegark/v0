@@ -20,7 +20,11 @@ packages/               # Modular shell library packages
   cli/                  #   Entry point, templates, prompts, build workflow
   test-support/         #   Test helpers, fixtures, mocks
 tests/                  # Integration tests (v0-cancel.bats, v0-merge.bats, etc.)
-docs/debug/             # Troubleshooting guides
+docs/arch/              # Architecture documentation
+  SYSTEM.md             #   Workers, processes, directories, env vars
+  WORKSPACE.md          #   Clone vs worktree workspace modes
+  commands/             #   Command reference (v0-start.md, v0-merge.md, ...)
+  ...
 ```
 
 ## Package Layers
