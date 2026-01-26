@@ -39,49 +39,17 @@ Your context is automatically primed on startup with `v0 status` and `wok ready`
 
 ## Sequencing Work with `--after`
 
-### When You DON'T Need `--after`
-
-Single-threaded workers (fix, chore) naturally queue work sequentially. Each task finishes before the next one starts. No explicit dependencies needed:
+**Skip `--after` for fix/chore** - Single-threaded workers auto-queue. Only use `--after` for cross-worker or cross-feature dependencies (waits for merge):
 
 ```bash
-v0 fix "First bug"
-v0 fix "Second bug"   # Automatically runs after first completes - no --after needed
-```
+# Cross-worker: chore waits for fix to merge
+v0 chore --after v0-123 "Update docs after fix merges"
 
-### When You DO Need `--after`
-
-Use `--after` for **cross-worker** or **cross-feature** dependencies where one operation must wait for another to **merge** before starting:
-
-**Cross-worker dependency** (chore waits for fix worker's merge):
-```bash
-v0 fix "Fix auth bug"
-v0 chore --after v0-123 "Update docs after fix merges"  # Different worker - needs --after
-```
-
-**Cross-feature dependency** (one feature depends on another's merged code):
-```bash
-v0 build auth "Build auth system"
-v0 build api "Build API layer" --after auth    # API needs auth's merged code
-```
-
-### Syntax
-
-```bash
-# Single dependency
+# Cross-feature: API needs auth's merged code
 v0 build api "Build API" --after auth
-
-# Multiple dependencies (comma-separated)
-v0 fix --after v0-1,v0-2 "Bug blocked by multiple issues"
-
-# Multiple --after flags (merged)
-v0 build api "Build API" --after auth --after config
 ```
 
-### What `--after` Accepts
-
-- **Operation names**: `--after auth` (looks up the operation's epic_id)
-- **Wok issue IDs**: `--after v0-123` (uses directly)
-- **Mix of both**: `--after auth,v0-456`
+Accepts operation names (`--after auth`), issue IDs (`--after v0-123`), or comma-separated lists.
 
 ## Issue Tracking
 
