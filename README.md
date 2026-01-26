@@ -138,7 +138,6 @@ For guided, conversational orchestration, use the mayor:
 
 ```bash
 v0 mayor                 # Start interactive session
-v0 mayor --model sonnet  # Use faster model
 ```
 
 The mayor is Claude running with full v0 context. It helps you:
