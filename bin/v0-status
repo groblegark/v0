@@ -676,45 +676,6 @@ if [[ -n "${LIST}" ]] || [[ -n "${BLOCKED}" ]]; then
     fi
     [[ "${merges_empty}" != true ]] && echo ""
 
-    # Auto-start nudge if anything else is running but nudge is not
-    # This ensures nudge monitors active sessions without requiring explicit start
-    if ! nudge_running; then
-      # Check if anything else is actively running
-      something_running=false
-
-      # Check coffee
-      if coffee_is_running; then
-        something_running=true
-      fi
-
-      # Check fix/chore workers
-      if [[ "${something_running}" = false ]]; then
-        if [[ "${fix_status:-stopped}" != "stopped" ]] || [[ "${chore_status:-stopped}" != "stopped" ]]; then
-          something_running=true
-        fi
-      fi
-
-      # Check mergeq daemon
-      if [[ "${something_running}" = false ]]; then
-        mergeq_pid_check="${BUILD_DIR}/mergeq/.daemon.pid"
-        if [[ -f "${mergeq_pid_check}" ]] && kill -0 "$(cat "${mergeq_pid_check}" 2>/dev/null)" 2>/dev/null; then
-          something_running=true
-        fi
-      fi
-
-      # Check for active v0-* tmux sessions (from operations)
-      if [[ "${something_running}" = false ]] && [[ -n "${all_sessions}" ]]; then
-        if echo "${all_sessions}" | v0_grep_quiet '^v0-'; then
-          something_running=true
-        fi
-      fi
-
-      # Start nudge if something is running
-      if [[ "${something_running}" = true ]]; then
-        ensure_nudge_running 2>/dev/null || true
-      fi
-    fi
-
     # Show coffee and nudge status on one line
     coffee_status=""
     nudge_status=""
