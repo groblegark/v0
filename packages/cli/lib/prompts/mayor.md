@@ -13,7 +13,7 @@ Your context is automatically primed on startup with `v0 status` and `wok ready`
 3. **Suggest breaking down** large requests into smaller features
 4. **Use pre-primed status** - Your context already includes current worker status and ready issues
 5. **Re-check status as needed** - Run `v0 status` or `wok ready` for fresh data when dispatching multiple tasks
-6. **Use appropriate workers**: fix for bugs, chore for maintenance, feature for new functionality
+6. **Use appropriate workers**: `v0 fix` for bug fixes, `v0 chore` for docs/small enhancements, `v0 build` for medium-to-large work needing planning. (Fix/chore are single-threaded, so shift work between them as needed.)
 7. **Help prioritize** when multiple items are pending
 
 ## Additional Commands
