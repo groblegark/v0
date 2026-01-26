@@ -300,7 +300,7 @@ if [[ -n "${LIST}" ]] || [[ -n "${BLOCKED}" ]]; then
   # Determine effective limit: --max-ops overrides, otherwise show all (use very high number)
   effective_limit="${MAX_OPS:-99999}"
   if [[ ${#state_files[@]} -gt 0 ]]; then
-    while IFS=$'\t' read -r name op_type phase created machine completed merge_queued merge_status merged_at completed_at epic_id session worker_pid held held_at merge_resumed worktree_missing merge_commit created_epoch completed_epoch merged_epoch held_epoch; do
+    while IFS=$'\t' read -r name op_type phase created machine completed merge_queued merge_status merged_at completed_at epic_id session worker_pid held held_at merge_resumed worktree_missing merge_commit created_epoch completed_epoch merged_epoch held_epoch updated_epoch; do
       # Handle META line for max name length and pruning stats
       if [[ "${name}" = "META" ]]; then
         max_name_len="${op_type}"  # op_type field contains max_name_len for META
@@ -457,7 +457,7 @@ if [[ -n "${LIST}" ]] || [[ -n "${BLOCKED}" ]]; then
       display_time=$(format_operation_time "${mq_updated}" "${now_epoch}")
     else
       # Fast path: use pre-computed epoch values (eliminates N date -j calls)
-      last_epoch=$(get_last_updated_epoch "${phase}" "${created_epoch}" "${completed_epoch}" "${merged_epoch}" "${held_epoch}")
+      last_epoch=$(get_last_updated_epoch "${phase}" "${created_epoch}" "${completed_epoch}" "${merged_epoch}" "${held_epoch}" "${updated_epoch}")
       display_time=$(format_epoch_time "${last_epoch}" "${now_epoch}")
     fi
     printf "  %-${max_name_len}s %b%b%b%b%b ${C_DIM}(%s)${C_RESET}\n" "${display_name}" "${display_phase}" "${status_icon}" "${after_icon}" "${hold_icon}" "${merge_icon}" "${display_time}"
@@ -540,7 +540,8 @@ if [[ -n "${LIST}" ]] || [[ -n "${BLOCKED}" ]]; then
         (.created_at | to_epoch),
         ((.completed_at // "") | to_epoch),
         ((.merged_at // "") | to_epoch),
-        ((.held_at // "") | to_epoch)
+        ((.held_at // "") | to_epoch),
+        ((.updated_at // "") | to_epoch)
       ] | @tsv)
     ' "${state_files[@]}")
 

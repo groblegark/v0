@@ -555,21 +555,24 @@ is_session_active() {
 # get_last_updated_timestamp tests (last-updated timestamps feature)
 # ============================================================================
 
-# Copy of function from v0-status for testing
+# Copy of function from timestamps.sh for testing
 get_last_updated_timestamp() {
     local phase="$1"
     local created_at="$2"
     local completed_at="$3"
     local merged_at="$4"
     local held_at="$5"
+    local updated_at="${6:-}"
 
     case "${phase}" in
         merged)
-            # Prefer merged_at, fall back to completed_at, then created_at
+            # Prefer merged_at, fall back to completed_at, then updated_at, then created_at
             if [[ -n "${merged_at}" && "${merged_at}" != "null" ]]; then
                 echo "${merged_at}"
             elif [[ -n "${completed_at}" && "${completed_at}" != "null" ]]; then
                 echo "${completed_at}"
+            elif [[ -n "${updated_at}" && "${updated_at}" != "null" ]]; then
+                echo "${updated_at}"
             else
                 echo "${created_at}"
             fi
@@ -578,6 +581,8 @@ get_last_updated_timestamp() {
             # Show when it was completed
             if [[ -n "${completed_at}" && "${completed_at}" != "null" ]]; then
                 echo "${completed_at}"
+            elif [[ -n "${updated_at}" && "${updated_at}" != "null" ]]; then
+                echo "${updated_at}"
             else
                 echo "${created_at}"
             fi
@@ -586,13 +591,19 @@ get_last_updated_timestamp() {
             # Show when it was put on hold
             if [[ -n "${held_at}" && "${held_at}" != "null" ]]; then
                 echo "${held_at}"
+            elif [[ -n "${updated_at}" && "${updated_at}" != "null" ]]; then
+                echo "${updated_at}"
             else
                 echo "${created_at}"
             fi
             ;;
         *)
-            # For init, planned, queued, executing, etc. - use created_at
-            echo "${created_at}"
+            # For init, planned, queued, executing, etc. - prefer updated_at, fall back to created_at
+            if [[ -n "${updated_at}" && "${updated_at}" != "null" ]]; then
+                echo "${updated_at}"
+            else
+                echo "${created_at}"
+            fi
             ;;
     esac
 }
@@ -621,26 +632,50 @@ get_last_updated_timestamp() {
     assert_output "2026-01-04T10:00:00Z"
 }
 
-@test "get_last_updated_timestamp returns created_at for init phase" {
-    run get_last_updated_timestamp "init" "2026-01-01T10:00:00Z" "null" "null" "null"
+@test "get_last_updated_timestamp returns updated_at for init phase when available" {
+    run get_last_updated_timestamp "init" "2026-01-01T10:00:00Z" "null" "null" "null" "2026-01-02T10:00:00Z"
+    assert_success
+    assert_output "2026-01-02T10:00:00Z"
+}
+
+@test "get_last_updated_timestamp falls back to created_at for init phase when updated_at is null" {
+    run get_last_updated_timestamp "init" "2026-01-01T10:00:00Z" "null" "null" "null" "null"
     assert_success
     assert_output "2026-01-01T10:00:00Z"
 }
 
-@test "get_last_updated_timestamp returns created_at for planned phase" {
-    run get_last_updated_timestamp "planned" "2026-01-01T10:00:00Z" "null" "null" "null"
+@test "get_last_updated_timestamp returns updated_at for planned phase when available" {
+    run get_last_updated_timestamp "planned" "2026-01-01T10:00:00Z" "null" "null" "null" "2026-01-02T10:00:00Z"
+    assert_success
+    assert_output "2026-01-02T10:00:00Z"
+}
+
+@test "get_last_updated_timestamp falls back to created_at for planned phase when updated_at is null" {
+    run get_last_updated_timestamp "planned" "2026-01-01T10:00:00Z" "null" "null" "null" "null"
     assert_success
     assert_output "2026-01-01T10:00:00Z"
 }
 
-@test "get_last_updated_timestamp returns created_at for queued phase" {
-    run get_last_updated_timestamp "queued" "2026-01-01T10:00:00Z" "null" "null" "null"
+@test "get_last_updated_timestamp returns updated_at for queued phase when available" {
+    run get_last_updated_timestamp "queued" "2026-01-01T10:00:00Z" "null" "null" "null" "2026-01-02T10:00:00Z"
+    assert_success
+    assert_output "2026-01-02T10:00:00Z"
+}
+
+@test "get_last_updated_timestamp falls back to created_at for queued phase when updated_at is null" {
+    run get_last_updated_timestamp "queued" "2026-01-01T10:00:00Z" "null" "null" "null" "null"
     assert_success
     assert_output "2026-01-01T10:00:00Z"
 }
 
-@test "get_last_updated_timestamp returns created_at for executing phase" {
-    run get_last_updated_timestamp "executing" "2026-01-01T10:00:00Z" "null" "null" "null"
+@test "get_last_updated_timestamp returns updated_at for executing phase when available" {
+    run get_last_updated_timestamp "executing" "2026-01-01T10:00:00Z" "null" "null" "null" "2026-01-02T10:00:00Z"
+    assert_success
+    assert_output "2026-01-02T10:00:00Z"
+}
+
+@test "get_last_updated_timestamp falls back to created_at for executing phase when updated_at is null" {
+    run get_last_updated_timestamp "executing" "2026-01-01T10:00:00Z" "null" "null" "null" "null"
     assert_success
     assert_output "2026-01-01T10:00:00Z"
 }

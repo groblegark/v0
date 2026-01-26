@@ -63,8 +63,8 @@ _sm_do_transition() {
   local from_phase
   from_phase=$(sm_get_phase "${op}")
 
-  # Build update command
-  local args=("${op}" "phase" "\"${to_phase}\"")
+  # Build update command - always set updated_at on every transition
+  local args=("${op}" "phase" "\"${to_phase}\"" "updated_at" "\"$(date -u +%Y-%m-%dT%H:%M:%SZ)\"")
   while [[ $# -gt 0 ]]; do
     args+=("$1" "$2")
     shift 2
