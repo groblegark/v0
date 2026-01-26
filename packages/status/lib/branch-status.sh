@@ -45,9 +45,9 @@ show_branch_status() {
     # Nothing to display if in sync
     [[ "${agent_ahead}" = "0" ]] && [[ "${agent_behind}" = "0" ]] && return 1
 
-    # Check if TTY for colors
+    # Check if TTY for colors (or force color enabled)
     local is_tty=""
-    [[ -t 1 ]] && is_tty=1
+    { [[ -t 1 ]] || [[ -n "${V0_FORCE_COLOR:-}" ]]; } && is_tty=1
 
     # Build display string from agent's perspective
     local display=""
