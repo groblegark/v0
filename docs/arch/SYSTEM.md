@@ -69,6 +69,67 @@ See: [v0-startup](commands/v0-startup.md), [v0-shutdown](commands/v0-shutdown.md
 | `.daemon.pid` | Worker process ID |
 | `daemon.log` | Worker output log |
 
+## Git Remote Architecture
+
+v0 uses a configurable git remote (`V0_GIT_REMOTE`) for all push/fetch operations. By default, this is a **local bare repository** rather than the shared origin.
+
+### Local Agent Remote (Default)
+
+When you run `v0 init`, it creates a local bare git repository:
+
+```
+~/.local/state/v0/${PROJECT}/remotes/agent.git
+```
+
+**Initialization steps:**
+1. Creates bare clone: `git clone --bare ${V0_ROOT} ${agent_dir}`
+2. Adds remote to project: `git remote add agent ${agent_dir}`
+3. Sets `V0_GIT_REMOTE="agent"` in `.v0.rc`
+
+**Benefits:**
+- Worker branches don't pollute shared origin
+- Multiple users can run v0 without branch conflicts
+- Faster push/fetch (local filesystem)
+- Works offline
+
+**Workflow:**
+```
+User Branch ←──v0 pull──→ Agent Branch (local) ──manual push──→ Origin
+            ───v0 push──→
+```
+
+### Shared Origin Remote
+
+To use the traditional shared remote instead:
+
+```bash
+# During init
+v0 init --remote origin
+
+# Or edit .v0.rc
+V0_GIT_REMOTE="origin"
+```
+
+**When to use origin:**
+- CI/CD environments (no persistent local state)
+- Team wants centralized branch visibility
+- Single-user projects where simplicity preferred
+
+**Workflow:**
+```
+User Branch ←──v0 pull──→ Agent Branch (origin)
+            ───v0 push──→
+```
+
+### Remote Configuration Summary
+
+| Setting | `V0_GIT_REMOTE="agent"` | `V0_GIT_REMOTE="origin"` |
+|---------|-------------------------|--------------------------|
+| Worker branches | Local only | Visible to team |
+| Multi-user safe | Yes (isolated) | Requires coordination |
+| Offline capable | Yes | No |
+| Setup | Automatic (`v0 init`) | `v0 init --remote origin` |
+
 ## Environment Variables
 
 ### Required (set by `.v0.rc`)
