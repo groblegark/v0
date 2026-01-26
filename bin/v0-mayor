@@ -47,11 +47,18 @@ done
 PROMPT_FILE="${V0_DIR}/packages/cli/lib/prompts/mayor.md"
 PROMPT="$(cat "${PROMPT_FILE}")"
 
-# Create temporary settings for mayor session with auto-priming hooks
-MAYOR_SETTINGS_DIR="${TMPDIR:-/tmp}/v0-mayor-$$"
+# Load project config to get V0_ROOT
+if ! v0_load_config false; then
+    echo "Error: Not in a v0 project directory. Run 'v0 init' first." >&2
+    exit 1
+fi
+
+# Ensure .claude directory exists in project root
+MAYOR_SETTINGS_DIR="${V0_ROOT}"
 mkdir -p "${MAYOR_SETTINGS_DIR}/.claude"
 
-cat > "${MAYOR_SETTINGS_DIR}/.claude/settings.local.json" <<'SETTINGS'
+# Write fresh settings for this mayor session
+cat > "${MAYOR_SETTINGS_DIR}/.claude/settings.mayor.json" <<'SETTINGS'
 {
   "permissions": {
     "allow": ["Bash(v0 *)", "Bash(wok *)", "Bash(bd *)", "Read", "Edit(*/plans/*)", "Write"]
@@ -83,22 +90,6 @@ cat > "${MAYOR_SETTINGS_DIR}/.claude/settings.local.json" <<'SETTINGS'
 }
 SETTINGS
 
-# Initialize wok workspace link if v0 project has wok tracking
-# This allows the mayor to create/manage bugs from the temp directory
-if [[ -d "${V0_DIR}/.wok" ]]; then
-  # Get prefix from wok config, default to "v0"
-  WOK_PREFIX=$(grep '^prefix' "${V0_DIR}/.wok/config.toml" 2>/dev/null | sed 's/prefix *= *"\(.*\)"/\1/' || echo "v0")
-  wok init --workspace "${V0_DIR}/.wok" --prefix "${WOK_PREFIX}" --path "${MAYOR_SETTINGS_DIR}" >/dev/null 2>&1 || true
-fi
-
-# Cleanup function for temporary settings
-cleanup() {
-  rm -rf "${MAYOR_SETTINGS_DIR}"
-}
-trap cleanup EXIT
-
-# Run claude from the temp settings directory to ensure a fresh session each time.
-# Claude identifies sessions by project directory, so using a unique temp dir (with PID)
-# ensures SessionStart hooks fire on each invocation rather than resuming stale sessions.
-cd "${MAYOR_SETTINGS_DIR}"
-exec claude --model "${MODEL}" --settings ".claude/settings.local.json" "${PROMPT}" "$@"
+# Run Claude from project directory with mayor-specific settings
+cd "${V0_ROOT}"
+exec claude --model "${MODEL}" --settings ".claude/settings.mayor.json" "${PROMPT}" "$@"
