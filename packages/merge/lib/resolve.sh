@@ -258,6 +258,49 @@ mg_resolve_operation_to_worktree() {
                 fi
             fi
 
+            # Final fallback for verification_failed: if merge_commit is NULL (not just
+            # failed verification) AND both worktree and branch are gone, the merge likely
+            # succeeded but verification failed due to a bug (e.g., BUILD_DIR pointing to
+            # wrong location causing merge_commit to not be recorded).
+            # Auto-complete in this case since cleanup only happens after successful push.
+            #
+            # NOTE: If merge_commit exists but verification failed, that's a real failure
+            # (commit exists but isn't on main) - do NOT auto-complete in that case.
+            if [[ "${merge_status}" = "verification_failed" ]] && \
+               { [[ -z "${merge_commit}" ]] || [[ "${merge_commit}" = "null" ]]; }; then
+                local has_worktree_or_branch=false
+
+                # Check if worktree still exists
+                if [[ -n "${worktree}" ]] && [[ "${worktree}" != "null" ]] && [[ -d "${worktree}" ]]; then
+                    has_worktree_or_branch=true
+                fi
+
+                # Check if branch exists locally or remotely
+                if [[ -n "${branch}" ]] && [[ "${branch}" != "null" ]]; then
+                    if git -C "${main_repo}" show-ref --verify --quiet "refs/heads/${branch}" 2>/dev/null || \
+                       git -C "${main_repo}" show-ref --verify --quiet "refs/remotes/${V0_GIT_REMOTE}/${branch}" 2>/dev/null; then
+                        has_worktree_or_branch=true
+                    fi
+                fi
+
+                if [[ "${has_worktree_or_branch}" = false ]]; then
+                    # Both worktree and branch are gone - merge likely succeeded
+                    echo "Operation '${op_name}' verification failed but all resources cleaned up."
+                    echo "Assuming merge succeeded (cleanup only happens after successful push)..."
+
+                    # Update mergeq entry to completed
+                    if [[ -f "${QUEUE_FILE:-}" ]] && mq_entry_exists "${op_name}"; then
+                        mq_update_entry_status "${op_name}" "completed" 2>/dev/null || true
+                    fi
+
+                    # Transition operation to merged state
+                    sm_transition_to_merged "${op_name}" 2>/dev/null || true
+
+                    echo "Operation '${op_name}' is now marked as merged."
+                    return 1
+                fi
+            fi
+
             echo "Error: Operation '${op_name}' previously failed to merge (status: ${merge_status})" >&2
             echo "" >&2
             echo "The worktree and branch have been cleaned up." >&2
