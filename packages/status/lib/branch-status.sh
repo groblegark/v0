@@ -67,8 +67,8 @@ show_branch_status() {
             [[ -n "${display}" ]] && display="${display} "
             display="${display}⇣${agent_behind}"
         fi
-        # If behind at all, label is "behind" (even if also ahead)
-        state_label="behind"
+        # Only set "behind" label if not already "ahead" (ahead takes priority)
+        [[ -z "${state_label}" ]] && state_label="behind"
     fi
 
     # Determine suggestion based on agent's status

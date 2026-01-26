@@ -116,15 +116,15 @@ EOF
     refute_output --partial "ahead"
 }
 
-@test "show_branch_status shows 'behind' label when diverged (behind takes priority)" {
-    # Agent ahead by 2, behind by 3 - "behind" label takes priority
+@test "show_branch_status shows 'ahead' label when diverged (ahead takes priority)" {
+    # Agent ahead by 2, behind by 3 - "ahead" label takes priority
     setup_git_mock "feature-branch" "2" "3"
 
     run show_branch_status
     assert_success
     assert_output --partial "⇡2"
     assert_output --partial "⇣3"
-    assert_output --partial "behind"
+    assert_output --partial "ahead"
 }
 
 # ============================================================================
