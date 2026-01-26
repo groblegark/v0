@@ -668,8 +668,8 @@ if [[ -n "${LIST}" ]] || [[ -n "${BLOCKED}" ]]; then
         merge_status_text="stopped"
       fi
 
-      # In short mode, skip if Stopped or None
-      if [[ -z "${SHORT}" ]] || { [[ "${merge_status_text}" != "stopped" ]] && [[ "${merge_status_text}" != "none" ]]; }; then
+      # In short mode, skip unless actively processing (hide polling, stopped, none)
+      if [[ -z "${SHORT}" ]] || [[ "${merge_status_text}" == "active" ]]; then
         # Display merge header based on status
         case "${merge_status_text}" in
           active)  echo -e "Merges: ${C_CYAN}Active${C_RESET}" ;;
@@ -700,7 +700,7 @@ if [[ -n "${LIST}" ]] || [[ -n "${BLOCKED}" ]]; then
         fi
       fi
     fi
-    [[ "${merges_empty}" != true ]] && [[ -z "${SHORT}" || "${merge_status_text}" == "active" || "${merge_status_text}" == "polling" ]] && echo ""
+    [[ "${merges_empty}" != true ]] && [[ -z "${SHORT}" || "${merge_status_text}" == "active" ]] && echo ""
 
     # Show coffee and nudge status on one line (unless --short mode)
     if [[ -z "${SHORT}" ]]; then
