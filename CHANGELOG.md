@@ -32,6 +32,8 @@ Collaboration-friendly release: agents now work in isolation with user-specific 
 
 - **`v0 mayor` command**: Interactive orchestration assistant for high-level project guidance.
 
+- **`v0 watch --all` flag**: System-wide project monitoring across all v0-enabled repositories.
+
 - **`--force` flag for `v0 resume`**: Bypass blockers when resuming operations.
 
 - **`--drop-workspace` and `--drop-everything` flags for `v0 stop`**: Clean up workspaces and agent branches on shutdown.
@@ -75,6 +77,8 @@ Collaboration-friendly release: agents now work in isolation with user-specific 
 - Inherited `BUILD_DIR` preserved when merge daemon runs in workspace.
 - Extra blank line after 'Plans: None' in status output.
 - Merging behavior for bugs and chores.
+- `v0 mayor` now starts a fresh session each invocation.
+- Batch log pruning to avoid per-line subprocess spawning.
 
 ## [0.2.2] - 2026-01-24
 

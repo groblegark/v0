@@ -134,19 +134,21 @@ Completed plans are archived to `plans/archive/`.
 
 ### Mayor (Interactive Orchestration)
 
-For guided, conversational orchestration, use the mayor:
+For conversational orchestration, use the mayor:
 
 ```bash
 v0 mayor                 # Start interactive session
 ```
 
-The mayor is Claude running with full v0 context. It helps you:
-- Plan features and break down complex requests
-- Dispatch work to the right workers (fix, chore, build)
-- Monitor progress and manage running operations
-- Organize and prioritize across multiple workstreams
+The mayor is Claude with full v0 context, pre-loaded with your current status.
 
-Think of it as a project manager who knows v0 inside and out.
+**Use it when you want to:**
+- Describe what you want in plain language and let it dispatch appropriate workers
+- Get help breaking down a vague idea into concrete tasks
+- Ask "what should I work on next?" when you have a backlog
+- Manage dependencies between features
+
+**How to interact:** Just describe what you want. The mayor dispatches work to background workers and tracks progress - it doesn't implement directly. Ask follow-up questions, request status checks, or describe new work as the conversation progresses.
 
 ### Other Commands
 
