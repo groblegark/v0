@@ -19,23 +19,29 @@ Your context is automatically primed on startup with `v0 status` and `wok ready`
 
 ## Sequencing Work with `--after`
 
-Use `--after` to create dependencies between operations. The blocked operation waits for dependencies to complete before executing.
+### When You DON'T Need `--after`
 
-### Use Cases
+Single-threaded workers (fix, chore) naturally queue work sequentially. Each task finishes before the next one starts. No explicit dependencies needed:
 
-**Chain dependent features:**
 ```bash
-v0 build api "Build API layer" --after auth    # API waits for auth to merge
+v0 fix "First bug"
+v0 fix "Second bug"   # Automatically runs after first completes - no --after needed
 ```
 
-**Block fixes on other work:**
+### When You DO Need `--after`
+
+Use `--after` for **cross-worker** or **cross-feature** dependencies where one operation must wait for another to **merge** before starting:
+
+**Cross-worker dependency** (chore waits for fix worker's merge):
 ```bash
-v0 fix --after v0-123 "Bug that depends on v0-123"
+v0 fix "Fix auth bug"
+v0 chore --after v0-123 "Update docs after fix merges"  # Different worker - needs --after
 ```
 
-**Block chores on other work:**
+**Cross-feature dependency** (one feature depends on another's merged code):
 ```bash
-v0 chore --after auth "Update docs after auth merges"
+v0 build auth "Build auth system"
+v0 build api "Build API layer" --after auth    # API needs auth's merged code
 ```
 
 ### Syntax
