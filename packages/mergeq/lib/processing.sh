@@ -175,6 +175,11 @@ mq_process_branch_merge() {
         mq_emit_event "merge:completed" "${branch}"
         echo "[$(date +%H:%M:%S)] Merge completed: ${branch}"
 
+        # Trigger dependent operations now that this issue is merged
+        if [[ -n "${issue_id}" ]]; then
+            mq_trigger_dependents_by_issue "${issue_id}"
+        fi
+
         return 0
     else
         # Conflict detected - attempt automatic resolution with AI
@@ -190,6 +195,12 @@ mq_process_branch_merge() {
             mq_log_event "merge:completed: ${branch} (branch, after resolution)"
             mq_emit_event "merge:completed" "${branch}"
             echo "[$(date +%H:%M:%S)] Merge completed (after automatic resolution): ${branch}"
+
+            # Trigger dependent operations now that this issue is merged
+            if [[ -n "${issue_id}" ]]; then
+                mq_trigger_dependents_by_issue "${issue_id}"
+            fi
+
             return 0
         fi
 
@@ -366,6 +377,32 @@ mq_resume_waiting_operation() {
 
     # Resume the operation in background
     "${V0_DIR}/bin/v0-feature" "${op}" --resume &
+}
+
+# mq_trigger_dependents_by_issue <issue_id>
+# Find and resume operations blocked by the given issue
+# Used for branch merges where we have the issue_id but no operation state
+mq_trigger_dependents_by_issue() {
+    local issue_id="$1"
+    [[ -z "${issue_id}" ]] && return 0
+
+    # Query wok for issues that this one blocks
+    local blocking_ids
+    blocking_ids=$(wk show "${issue_id}" -o json 2>/dev/null | jq -r '.blocking // [] | .[]')
+    [[ -z "${blocking_ids}" ]] && return 0
+
+    local blocked_id
+    for blocked_id in ${blocking_ids}; do
+        # Resolve to operation name
+        local op_name
+        op_name=$(v0_blocker_to_op_name "${blocked_id}")
+
+        # Check if this is a known operation with a state file
+        if [[ -f "${BUILD_DIR}/operations/${op_name}/state.json" ]]; then
+            echo "[$(date +%H:%M:%S)] Unblocking dependent operation: ${op_name}"
+            mq_resume_waiting_operation "${op_name}"
+        fi
+    done
 }
 
 # mq_process_once
