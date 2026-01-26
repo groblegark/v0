@@ -687,6 +687,7 @@ cleanup() {
 
 main() {
     local bust_target=""
+    local bust_requested=false
     local targets=""
     local init_only=false
 
@@ -698,14 +699,13 @@ main() {
                 shift
                 ;;
             --bust)
+                bust_requested=true
                 if [[ -n "${2:-}" && ! "$2" =~ ^- ]]; then
                     bust_target="$2"
                     shift 2
                 else
-                    log_error "--bust requires a TARGET argument"
-                    log_error "Usage: scripts/test --bust <target>"
-                    log_error "Example: scripts/test --bust v0-merge"
-                    exit 1
+                    # --bust without immediate target; will use first target later
+                    shift
                 fi
                 ;;
             --verbose|-v)
@@ -740,16 +740,22 @@ main() {
     HASH_CACHE_DIR=$(mktemp -d)
     trap cleanup EXIT
 
+    # Resolve --bust target from targets if not specified inline
+    if [[ "$bust_requested" == true && -z "$bust_target" ]]; then
+        bust_target=$(echo "$targets" | awk '{print $1}')
+        if [[ -z "$bust_target" ]]; then
+            log_error "--bust requires a TARGET argument"
+            log_error "Usage: scripts/test --bust <target>"
+            log_error "Example: scripts/test --bust v0-merge"
+            exit 1
+        fi
+    fi
+
     # Bust cache if requested
     if [[ -n "$bust_target" ]]; then
-        if [[ "$bust_target" == "all" ]]; then
-            log_info "Clearing all test caches..."
-            rm -rf "$CACHE_DIR"
-        else
-            log_info "Clearing cache for: $bust_target"
-            rm -f "$CACHE_DIR/$bust_target.hash"
-            rm -f "$CACHE_DIR/integration/$bust_target.hash"
-        fi
+        log_info "Clearing cache for: $bust_target"
+        rm -f "$CACHE_DIR/$bust_target.hash"
+        rm -f "$CACHE_DIR/integration/$bust_target.hash"
     fi
 
     # Check packages directory exists

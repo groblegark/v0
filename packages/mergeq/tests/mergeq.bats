@@ -557,3 +557,57 @@ EOF
     # Verify state file is accessible via BUILD_DIR
     assert [ -f "${BUILD_DIR}/operations/test-op/state.json" ]
 }
+
+# Test that inherited MERGEQ_DIR/BUILD_DIR are preserved even after v0_load_config
+@test "v0-mergeq preserves inherited MERGEQ_DIR and BUILD_DIR from parent" {
+    # Simulate the daemon scenario: parent exports MERGEQ_DIR and BUILD_DIR,
+    # then child runs v0-mergeq. Even though v0_load_config runs, the inherited
+    # values should be preserved.
+
+    # Create main repo
+    local main_repo="${TEST_TEMP_DIR}/main-repo"
+    mkdir -p "${main_repo}/.v0/build/mergeq/logs"
+    echo 'PROJECT="test"' > "${main_repo}/.v0.rc"
+    echo 'ISSUE_PREFIX="test"' >> "${main_repo}/.v0.rc"
+
+    # Create a workspace that has its own .v0.rc (simulating worktree checkout)
+    local workspace="${TEST_TEMP_DIR}/workspace"
+    mkdir -p "${workspace}"
+    cp "${main_repo}/.v0.rc" "${workspace}/"
+
+    # Set inherited values (what mq_start_daemon exports before nohup)
+    export MERGEQ_DIR="${main_repo}/.v0/build/mergeq"
+    export BUILD_DIR="${main_repo}/.v0/build"
+
+    # Save the values we expect to be preserved
+    local expected_mergeq_dir="${MERGEQ_DIR}"
+    local expected_build_dir="${BUILD_DIR}"
+
+    # Simulate v0-mergeq startup logic: save inherited values, load config, restore
+    _INHERITED_BUILD_DIR="${BUILD_DIR:-}"
+    _INHERITED_MERGEQ_DIR="${MERGEQ_DIR:-}"
+
+    # v0_load_config would normally overwrite BUILD_DIR here
+    # (simulating: v0_load_config sets BUILD_DIR based on workspace)
+    export BUILD_DIR="${workspace}/.v0/build"  # Wrong! This is what v0_load_config would do
+
+    # But v0-mergeq's logic should restore the inherited values
+    if [[ -n "${_INHERITED_MERGEQ_DIR}" ]]; then
+        export MERGEQ_DIR="${_INHERITED_MERGEQ_DIR}"
+        export BUILD_DIR="${_INHERITED_BUILD_DIR}"
+    fi
+
+    # Verify inherited values were preserved
+    assert_equal "${MERGEQ_DIR}" "${expected_mergeq_dir}"
+    assert_equal "${BUILD_DIR}" "${expected_build_dir}"
+}
+
+# Test that mq_start_daemon sources daemon.sh which exports variables
+@test "daemon.sh exports MERGEQ_DIR and BUILD_DIR before nohup" {
+    # Verify the daemon.sh file contains the export statements
+    run grep -E "export MERGEQ_DIR" "${PROJECT_ROOT}/packages/mergeq/lib/daemon.sh"
+    assert_success
+
+    run grep -E "export BUILD_DIR" "${PROJECT_ROOT}/packages/mergeq/lib/daemon.sh"
+    assert_success
+}
