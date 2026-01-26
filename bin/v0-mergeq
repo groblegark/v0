@@ -23,6 +23,8 @@ v0_load_config
 if [[ -z "${MERGEQ_DIR:-}" ]]; then
     MAIN_REPO=$(v0_find_main_repo)
     export MERGEQ_DIR="${MAIN_REPO}/${V0_BUILD_DIR}/mergeq"
+    # BUILD_DIR must also point to main repo, not workspace, so state files are found
+    export BUILD_DIR="${MAIN_REPO}/${V0_BUILD_DIR}"
 fi
 export QUEUE_FILE="${MERGEQ_DIR}/queue.json"
 export QUEUE_LOCK="${MERGEQ_DIR}/.queue.lock"

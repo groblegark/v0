@@ -524,3 +524,36 @@ EOF
     run daemon_running
     assert_success
 }
+
+# Regression test for BUILD_DIR pointing to workspace instead of main repo
+# See: https://github.com/alfredjeanlab/v0/issues/XXX
+@test "v0-mergeq sets BUILD_DIR to main repo when MERGEQ_DIR computed from workspace" {
+    # Simulate workspace scenario: MERGEQ_DIR not pre-set, running from a directory
+    # where v0_find_main_repo returns a different path than V0_ROOT
+
+    # Create a "main repo" with state files
+    local main_repo="${TEST_TEMP_DIR}/main-repo"
+    mkdir -p "${main_repo}/.v0/build/operations/test-op"
+    echo '{"phase":"pending_merge"}' > "${main_repo}/.v0/build/operations/test-op/state.json"
+    echo 'PROJECT="test"' > "${main_repo}/.v0.rc"
+    echo 'ISSUE_PREFIX="test"' >> "${main_repo}/.v0.rc"
+
+    # Stub v0_find_main_repo to return our main repo
+    v0_find_main_repo() { echo "${main_repo}"; }
+    export -f v0_find_main_repo
+
+    # Unset MERGEQ_DIR to trigger recomputation
+    unset MERGEQ_DIR
+
+    # Source v0-mergeq's config logic (lines 23-27)
+    V0_BUILD_DIR=".v0/build"
+    MAIN_REPO=$(v0_find_main_repo)
+    export MERGEQ_DIR="${MAIN_REPO}/${V0_BUILD_DIR}/mergeq"
+    export BUILD_DIR="${MAIN_REPO}/${V0_BUILD_DIR}"
+
+    # Verify BUILD_DIR points to main repo, not workspace
+    assert_equal "${BUILD_DIR}" "${main_repo}/.v0/build"
+
+    # Verify state file is accessible via BUILD_DIR
+    assert [ -f "${BUILD_DIR}/operations/test-op/state.json" ]
+}

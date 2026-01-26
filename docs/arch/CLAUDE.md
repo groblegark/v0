@@ -1,5 +1,9 @@
 # Architecture Documentation
 
+## System Overview
+- [SYSTEM.md](SYSTEM.md) - Workers, processes, directories, env vars
+- [WORKSPACE.md](WORKSPACE.md) - Clone vs worktree workspace modes
+
 ## State Machines
 - [operations/state.md](operations/state.md) - Features, fixes, chores lifecycle
 - [mergeq/state.md](mergeq/state.md) - Merge queue processing
