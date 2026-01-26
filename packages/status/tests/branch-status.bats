@@ -250,6 +250,20 @@ EOF
     assert_output --partial "⇣2"
 }
 
+@test "show_branch_status uses colors when V0_FORCE_COLOR is set" {
+    # Agent ahead by 3 (left=3)
+    setup_git_mock "feature-branch" "3" "0"
+
+    # Force color output even when not a TTY
+    export V0_FORCE_COLOR=1
+
+    run show_branch_status
+    assert_success
+    # Should include ANSI color codes when V0_FORCE_COLOR is set
+    assert_output --partial $'\033[32m'  # C_GREEN
+    assert_output --partial "⇡3"
+}
+
 # ============================================================================
 # Error Handling Tests
 # ============================================================================
