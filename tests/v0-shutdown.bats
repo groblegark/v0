@@ -98,7 +98,7 @@ EOF
     run "${PROJECT_ROOT}/bin/v0" --help
     assert_success
     assert_output --partial "stop"
-    assert_output --partial "Stop all v0 processes"
+    assert_output --partial "Stop worker(s)"
 }
 
 @test "shutdown is a hidden alias for stop" {

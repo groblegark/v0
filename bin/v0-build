@@ -276,6 +276,8 @@ if [[ -n "${RESUME}" ]]; then
     echo "Error: No operation found for '${NAME}'"
     exit 1
   fi
+  # Ensure state is migrated to current schema (converts blocked phase, etc.)
+  sm_ensure_current_schema "${NAME}"
   PHASE=$(get_state phase)
   PROMPT=$(get_state prompt)
   if [[ -n "${RESUME_PHASE}" ]]; then
@@ -305,6 +307,7 @@ if [[ -n "${RESUME}" ]]; then
     WAS_HELD=1
     echo "Clearing hold on '${NAME}'..."
     sm_clear_hold "${NAME}"
+    echo "Hold cleared"
   fi
 
   echo "Resuming '${NAME}' from phase: ${PHASE}"

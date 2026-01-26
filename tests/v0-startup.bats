@@ -108,7 +108,7 @@ EOF
     run "$PROJECT_ROOT/bin/v0" --help
     assert_success
     assert_output --partial "start"
-    assert_output --partial "Start workers"
+    assert_output --partial "Start worker(s)"
 }
 
 @test "startup is a hidden alias for start" {

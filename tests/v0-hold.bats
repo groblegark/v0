@@ -430,8 +430,7 @@ EOF
     assert_success
     assert_output --partial "Clearing hold"
     assert_output --partial "Hold cleared"
-    assert_output --partial "ready at phase: init"
-    assert_output --partial "v0 feature testop --resume"
+    assert_output --partial "Resuming 'testop' from phase: init"
 
     # Verify hold was cleared
     run jq -r '.held' "${project_dir}/.v0/build/operations/testop/state.json"
@@ -481,7 +480,7 @@ EOF
     assert_success
     assert_output --partial "Clearing hold"
     assert_output --partial "Hold cleared"
-    assert_output --partial "ready at phase: queued"
+    assert_output --partial "Resuming 'testop' from phase: queued"
 
     # Verify hold was cleared
     run jq -r '.held' "${project_dir}/.v0/build/operations/testop/state.json"
@@ -526,9 +525,10 @@ EOF
         cd "'"${project_dir}"'" || exit 1
         "'"${PROJECT_ROOT}"'/bin/v0-feature" testop --resume --dry-run
     '
-    # Command will fail because no plan file exists, but that's OK - we're checking it proceeded
-    # Should proceed past blocked state (not exit early like held operations)
-    assert_output --partial "has merged, proceeding"
+    # Command succeeds - schema migration converts blocked -> init, then dry-run proceeds
+    assert_success
+    # Should show it resumed from converted phase (blocked -> init via schema migration)
+    assert_output --partial "Resuming 'testop' from phase: init"
     # Should NOT show the "Hold cleared" message (because it wasn't held)
     refute_output --partial "Hold cleared"
     # Should show it attempted to continue with the next phase (dry-run output)
