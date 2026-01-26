@@ -706,8 +706,11 @@ EOF
 
     v0_init_config "${test_dir}"
 
-    # Should use v0/agent/{username}-{id} pattern
-    run grep 'V0_DEVELOP_BRANCH="v0/agent/' "${test_dir}/.v0.rc"
+    # Should use v0/agent/{username}-{id} pattern in .v0.profile.rc (auto-generated)
+    run grep 'V0_DEVELOP_BRANCH="v0/agent/' "${test_dir}/.v0.profile.rc"
+    assert_success
+    # .v0.rc should source the profile instead
+    run grep 'source.*\.v0\.profile\.rc' "${test_dir}/.v0.rc"
     assert_success
 }
 
@@ -756,12 +759,12 @@ EOF
     # Run init (should generate v0/agent/{username}-{id})
     v0_init_config "${test_dir}"
 
-    # Verify .v0.rc contains v0/agent/* pattern
-    run grep 'V0_DEVELOP_BRANCH="v0/agent/' "${test_dir}/.v0.rc"
+    # Verify .v0.profile.rc contains v0/agent/* pattern (auto-generated branch)
+    run grep 'V0_DEVELOP_BRANCH="v0/agent/' "${test_dir}/.v0.profile.rc"
     assert_success
 }
 
-@test "v0_init_config writes explicit user branch to .v0.rc" {
+@test "v0_init_config writes user branch to .v0.profile.rc when auto-generated" {
     local test_dir="${TEST_TEMP_DIR}/new-project"
     init_mock_git_repo "${test_dir}"
     cd "${test_dir}" || return 1
@@ -774,12 +777,14 @@ EOF
 
     v0_init_config "${test_dir}"
 
-    # Should contain explicit V0_DEVELOP_BRANCH="v0/agent/*"
-    run grep 'V0_DEVELOP_BRANCH="v0/agent/' "${test_dir}/.v0.rc"
+    # Should contain explicit V0_DEVELOP_BRANCH="v0/agent/*" in profile
+    run grep 'V0_DEVELOP_BRANCH="v0/agent/' "${test_dir}/.v0.profile.rc"
     assert_success
-    # Should NOT be commented
-    run grep -E '^# V0_DEVELOP_BRANCH=' "${test_dir}/.v0.rc"
-    assert_failure
+    # .v0.rc should have a comment about profile and source line
+    run grep '# V0_DEVELOP_BRANCH defined in .v0.profile.rc' "${test_dir}/.v0.rc"
+    assert_success
+    run grep 'source.*\.v0\.profile\.rc' "${test_dir}/.v0.rc"
+    assert_success
 }
 
 @test "v0_init_config preserves existing v0/develop branch" {

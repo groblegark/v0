@@ -64,6 +64,7 @@ See: [v0-start](commands/v0-start.md), [v0-stop](commands/v0-stop.md)
 | File | Purpose |
 |------|---------|
 | `.v0.rc` | Project configuration |
+| `.v0.profile.rc` | User-specific config (gitignored) |
 | `.v0.root` | Project root path (for `v0 watch --all`) |
 | `state.json` | Operation state (per-operation) |
 | `queue.json` | Merge queue entries |
@@ -155,7 +156,7 @@ User Branch ←──v0 pull──→ Agent Branch (origin)
 
 | Variable | Description | Default |
 |----------|-------------|---------|
-| `V0_DEVELOP_BRANCH` | Target branch for merges | `v0/agent/{username}-{id}` |
+| `V0_DEVELOP_BRANCH` | Target branch for merges | `v0/agent/{username}-{id}` (in `.v0.profile.rc` if auto-generated) |
 | `V0_WORKSPACE_MODE` | `"worktree"` or `"clone"` | (auto-detected) |
 | `V0_GIT_REMOTE` | Git remote name | `"agent"` |
 | `V0_FEATURE_BRANCH` | Feature branch pattern | `"feature/{name}"` |

@@ -140,6 +140,12 @@ v0_load_config() {
   # Load project config (overrides defaults)
   source "${V0_ROOT}/.v0.rc"
 
+  # Source profile if exists and V0_DEVELOP_BRANCH still at default
+  # (handles case where .v0.rc doesn't have the source line yet)
+  if [[ "${V0_DEVELOP_BRANCH}" == "main" ]] && [[ -f "${V0_ROOT}/.v0.profile.rc" ]]; then
+    source "${V0_ROOT}/.v0.profile.rc"
+  fi
+
   # Validate required fields
   if [[ -z "${PROJECT}" ]]; then
     echo "Error: PROJECT not set in .v0.rc" >&2
@@ -378,9 +384,22 @@ v0_init_config() {
     echo "Created .gitignore with .v0/"
   fi
 
-  # Generate unique user-specific branch for new projects
+  # Add .v0.profile.rc to gitignore (user-specific, not committed)
+  if [[ -f "${target_dir}/.gitignore" ]]; then
+    if ! v0_grep_quiet "^\.v0\.profile\.rc$" "${target_dir}/.gitignore"; then
+      echo ".v0.profile.rc" >> "${target_dir}/.gitignore"
+      echo "Added .v0.profile.rc to .gitignore"
+    fi
+  else
+    echo ".v0.profile.rc" > "${target_dir}/.gitignore"
+    echo "Created .gitignore with .v0.profile.rc"
+  fi
+
+  # Track if branch was auto-generated (no --develop provided)
+  local branch_auto_generated=false
   if [[ -z "${develop_branch}" ]]; then
     develop_branch=$(v0_generate_user_branch)
+    branch_auto_generated=true
   fi
 
   # Create the develop branch if it doesn't exist (for v0/* branches)
@@ -395,14 +414,31 @@ v0_init_config() {
   local workspace_mode
   workspace_mode=$(v0_infer_workspace_mode "${develop_branch}")
 
+  # Create .v0.profile.rc for user-specific settings (only if auto-generated)
+  local profile_file="${target_dir}/.v0.profile.rc"
+  if [[ "${branch_auto_generated}" == "true" ]] && [[ ! -f "${profile_file}" ]]; then
+    cat > "${profile_file}" <<EOF
+# v0 user profile (not committed - user-specific settings)
+# This file is sourced by .v0.rc
+
+export V0_DEVELOP_BRANCH="${develop_branch}"
+EOF
+    echo "Created ${profile_file} (gitignored)"
+  fi
+
   # Only create or update .v0.rc if it doesn't exist
   if [[ -f "${config_file}" ]]; then
     echo ".v0.rc already exists in ${target_dir}"
   else
     # Generate config with conditional commenting based on defaults
     local branch_line remote_line workspace_line
-    # Always write branch explicitly (self-documenting config)
-    branch_line="V0_DEVELOP_BRANCH=\"${develop_branch}\"     # Target branch for merges"
+    # Conditionally include branch inline or source from profile
+    if [[ "${branch_auto_generated}" == "true" ]]; then
+      branch_line="# V0_DEVELOP_BRANCH defined in .v0.profile.rc (user-specific)
+[[ -f \"\${V0_ROOT:-\$(dirname \"\${BASH_SOURCE[0]}\")}/.v0.profile.rc\" ]] && source \"\${V0_ROOT:-\$(dirname \"\${BASH_SOURCE[0]}\")}/.v0.profile.rc\""
+    else
+      branch_line="V0_DEVELOP_BRANCH=\"${develop_branch}\"     # Target branch for merges"
+    fi
 
     # Always write the remote explicitly (agent is the new default)
     remote_line="V0_GIT_REMOTE=\"${git_remote}\"        # Git remote for push/fetch (local agent remote)"
