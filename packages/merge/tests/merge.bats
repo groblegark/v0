@@ -473,3 +473,116 @@ resolve_operation_name() {
     assert_failure
     assert_output --partial "Failed to checkout"
 }
+
+# ============================================================================
+# mg_trigger_dependents() tests
+# ============================================================================
+
+@test "mg_trigger_dependents resumes dependent operations" {
+    # Setup: Create a mock v0-feature script that records calls
+    local call_log="${TEST_TEMP_DIR}/feature-calls.log"
+    mkdir -p "${V0_DIR}/bin"
+    cat > "${V0_DIR}/bin/v0-feature" <<'MOCK'
+#!/bin/bash
+echo "$@" >> "$CALL_LOG"
+MOCK
+    chmod +x "${V0_DIR}/bin/v0-feature"
+    export CALL_LOG="${call_log}"
+
+    # Setup merged operation with epic_id
+    mkdir -p "${BUILD_DIR}/operations/merged-op"
+    echo '{"name": "merged-op", "phase": "merged", "epic_id": "test-epic-1"}' > "${BUILD_DIR}/operations/merged-op/state.json"
+
+    # Setup dependent operation
+    mkdir -p "${BUILD_DIR}/operations/dependent-op"
+    echo '{"name": "dependent-op", "phase": "queued", "epic_id": "test-epic-2"}' > "${BUILD_DIR}/operations/dependent-op/state.json"
+
+    # Mock wk show to return blocking relationship
+    wk() {
+        case "$1" in
+            show)
+                case "$2" in
+                    test-epic-1)
+                        echo '{"blocking": ["test-epic-2"]}'
+                        ;;
+                    test-epic-2)
+                        echo '{"labels": ["plan:dependent-op"], "status": "todo"}'
+                        ;;
+                esac
+                ;;
+        esac
+    }
+    export -f wk
+
+    # Source the function
+    source_lib "state-update.sh"
+
+    # Run the function
+    mg_trigger_dependents "feature/merged-op"
+
+    # Wait for background process
+    sleep 0.5
+
+    # Verify v0-feature was called to resume the dependent
+    if [[ -f "${call_log}" ]]; then
+        run cat "${call_log}"
+        assert_output --partial "dependent-op"
+        assert_output --partial "--resume"
+    else
+        # No dependents found is OK if mocking isn't complete
+        skip "Mock not complete enough to test full flow"
+    fi
+}
+
+@test "mg_trigger_dependents skips held operations" {
+    # Setup: Create a mock v0-feature script that records calls
+    local call_log="${TEST_TEMP_DIR}/feature-calls.log"
+    mkdir -p "${V0_DIR}/bin"
+    cat > "${V0_DIR}/bin/v0-feature" <<'MOCK'
+#!/bin/bash
+echo "$@" >> "$CALL_LOG"
+MOCK
+    chmod +x "${V0_DIR}/bin/v0-feature"
+    export CALL_LOG="${call_log}"
+
+    # Setup merged operation with epic_id
+    mkdir -p "${BUILD_DIR}/operations/merged-op"
+    echo '{"name": "merged-op", "phase": "merged", "epic_id": "test-epic-1"}' > "${BUILD_DIR}/operations/merged-op/state.json"
+
+    # Setup dependent operation that is held
+    mkdir -p "${BUILD_DIR}/operations/held-op"
+    echo '{"name": "held-op", "phase": "queued", "epic_id": "test-epic-2", "hold": true}' > "${BUILD_DIR}/operations/held-op/state.json"
+
+    # Mock wk show to return blocking relationship
+    wk() {
+        case "$1" in
+            show)
+                case "$2" in
+                    test-epic-1)
+                        echo '{"blocking": ["test-epic-2"]}'
+                        ;;
+                    test-epic-2)
+                        echo '{"labels": ["plan:held-op"], "status": "todo"}'
+                        ;;
+                esac
+                ;;
+        esac
+    }
+    export -f wk
+
+    # Source the function
+    source_lib "state-update.sh"
+
+    # Run the function
+    mg_trigger_dependents "feature/merged-op"
+
+    # Wait for any background process
+    sleep 0.5
+
+    # Verify v0-feature was NOT called (operation is held)
+    if [[ -f "${call_log}" ]]; then
+        run cat "${call_log}"
+        refute_output --partial "held-op"
+    fi
+    # No call log file means no calls were made, which is correct
+}

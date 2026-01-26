@@ -56,9 +56,26 @@ mg_record_merge_commit() {
 
 # mg_trigger_dependents <branch>
 # Trigger dependent operations after successful merge
+# Finds operations blocked by the merged branch and resumes them
 mg_trigger_dependents() {
     local branch="$1"
-    sm_trigger_dependents "$(basename "${branch}")"
+    local op_name
+    op_name=$(basename "${branch}")
+
+    # Find and resume dependent operations
+    local dep_op
+    for dep_op in $(sm_find_dependents "${op_name}" 2>/dev/null); do
+        # Check if operation is held
+        if sm_is_held "${dep_op}" 2>/dev/null; then
+            sm_emit_event "${dep_op}" "unblock:held" "Dependency ${op_name} merged but operation held" 2>/dev/null || true
+            continue
+        fi
+
+        sm_emit_event "${dep_op}" "unblock:triggered" "Blocker ${op_name} merged"
+
+        # Resume the operation in background
+        "${V0_DIR}/bin/v0-feature" "${dep_op}" --resume &
+    done
 }
 
 # mg_notify_merge <project> <branch> [suffix]
