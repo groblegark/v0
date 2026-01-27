@@ -391,6 +391,56 @@ EOF
 }
 
 # ============================================================================
+# --after Dependency Failure Tests
+# ============================================================================
+
+@test "v0-build: --after fails operation when wk dep fails" {
+    # Create blocker operation with epic_id
+    local blocker_dir="${TEST_TEMP_DIR}/project/.v0/build/operations/blocker"
+    mkdir -p "${blocker_dir}"
+    cat > "${blocker_dir}/state.json" <<EOF
+{
+  "name": "blocker",
+  "phase": "merged",
+  "epic_id": "test-blocker123"
+}
+EOF
+
+    # Override wk mock to fail on dep command
+    cat > "${TEST_TEMP_DIR}/mock-v0-bin/wk" <<'MOCK_EOF'
+#!/bin/bash
+echo "wk $*" >> "$MOCK_CALLS_DIR/wk.calls" 2>/dev/null || true
+if [[ "$1" == "show" ]]; then
+    echo '{"status": "open"}'
+    exit 0
+fi
+if [[ "$1" == "new" ]]; then
+    echo "Created test-abc123"
+    exit 0
+fi
+if [[ "$1" == "list" ]]; then
+    exit 0
+fi
+if [[ "$1" == "dep" ]]; then
+    exit 1  # Fail on dep command
+fi
+if [[ "$1" == "init" ]]; then
+    exit 0
+fi
+exit 0
+MOCK_EOF
+    chmod +x "${TEST_TEMP_DIR}/mock-v0-bin/wk"
+
+    # Run v0 build with --after (dry-run)
+    run "${V0_BUILD}" test-op "Test prompt" --after blocker --dry-run 2>&1
+
+    # Should fail because wk dep failed
+    assert_failure
+    assert_output --partial "Error: Failed to add blocked-by dependency"
+    assert_output --partial "wk dep"
+}
+
+# ============================================================================
 # Removed Flag Tests
 # ============================================================================
 

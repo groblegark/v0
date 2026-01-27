@@ -543,6 +543,12 @@ else
                 emit_event "dep:added" "Added blocked-by: ${resolved_id}"
               else
                 emit_event "dep:failed" "Failed to add blocked-by: ${resolved_id}"
+                echo "Error: Failed to add blocked-by dependency: ${resolved_id}"
+                echo ""
+                echo "The feature issue ${EXISTING_FEATURE} was created, but the dependency could not be added."
+                echo "Add it manually with:"
+                echo "  wk dep ${EXISTING_FEATURE} blocked-by ${resolved_id}"
+                exit 1
               fi
             else
               emit_event "dep:skipped" "Could not resolve '${after_op}' to wok ID"
@@ -583,6 +589,12 @@ else
           emit_event "dep:added" "Added blocked-by: ${resolved_id}"
         else
           emit_event "dep:failed" "Failed to add blocked-by: ${resolved_id}"
+          echo "Error: Failed to add blocked-by dependency: ${resolved_id}"
+          echo ""
+          echo "The feature issue ${FEATURE_ID} was created, but the dependency could not be added."
+          echo "Add it manually with:"
+          echo "  wk dep ${FEATURE_ID} blocked-by ${resolved_id}"
+          exit 1
         fi
       else
         emit_event "dep:skipped" "Could not resolve '${after_op}' to wok ID"
