@@ -11,6 +11,7 @@
 
 ## Commands
 - [v0](commands/v0.md) - Main entry point
+- [v0-archive](commands/v0-archive.md) - Move stale plans to icebox
 - [v0-attach](commands/v0-attach.md) - Attach to tmux sessions
 - [v0-cancel](commands/v0-cancel.md) - Cancel operations
 - [v0-chore](commands/v0-chore.md) - Chore worker
@@ -18,6 +19,7 @@
 - [v0-feature](commands/v0-feature.md) - Feature pipeline
 - [v0-fix](commands/v0-fix.md) - Bug fix worker
 - [v0-hold](commands/v0-hold.md) - Pause operations
+- [v0-mayor](commands/v0-mayor.md) - Orchestration assistant
 - [v0-merge](commands/v0-merge.md) - Merge branches
 - [v0-mergeq](commands/v0-mergeq.md) - Merge queue daemon
 - [v0-monitor](commands/v0-monitor.md) - Auto-shutdown monitor
@@ -25,12 +27,16 @@
 - [v0-plan](commands/v0-plan.md) - Create plans
 - [v0-prime](commands/v0-prime.md) - Quick-start guide
 - [v0-prune](commands/v0-prune.md) - Clean up state
+- [v0-pull](commands/v0-pull.md) - Pull changes from agent
+- [v0-push](commands/v0-push.md) - Push changes to agent
 - [v0-roadmap](commands/v0-roadmap.md) - Roadmap orchestration
 - [v0-self](commands/v0-self.md) - Self-management dispatcher
 - [v0-self-debug](commands/v0-self-debug.md) - Debug reports
 - [v0-self-update](commands/v0-self-update.md) - Update v0
 - [v0-self-version](commands/v0-self-version.md) - Version info
+- [v0-shutdown](commands/v0-shutdown.md) - Stop all workers and cleanup
 - [v0-start](commands/v0-start.md) - Start workers
+- [v0-startup](commands/v0-startup.md) - Start all workers
 - [v0-stop](commands/v0-stop.md) - Stop workers
 - [v0-status](commands/v0-status.md) - Show status
 - [v0-talk](commands/v0-talk.md) - Quick Claude conversations

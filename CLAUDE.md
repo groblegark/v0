@@ -13,6 +13,7 @@ packages/               # Modular shell library packages
   workspace/            #   Workspace management for merge operations
   state/                #   State machine for operation lifecycle
   mergeq/               #   Merge queue management
+  pushpull/             #   Bidirectional sync (v0 pull/push)
   merge/                #   Merge conflict resolution
   worker/               #   Worker utilities: nudge, coffee, try-catch
   hooks/                #   Claude Code hooks (stop-*.sh, notify-progress.sh)
@@ -31,7 +32,7 @@ docs/arch/              # Architecture documentation
 
 Packages follow a layered dependency model (see `packages/CLAUDE.md`):
 - **Layer 0**: core
-- **Layer 1**: workspace, state, mergeq
+- **Layer 1**: workspace, state, mergeq, pushpull
 - **Layer 2**: merge, worker
 - **Layer 3**: hooks, status
 - **Layer 4**: cli (includes build workflow)
