@@ -270,7 +270,7 @@ if [[ -n "${LIST}" ]] || [[ -n "${BLOCKED}" ]]; then
   fi
 
   if [[ ${#state_files[@]} -gt 0 ]]; then
-    while IFS=$'\t' read -r name op_type phase created machine completed merge_queued merge_status merged_at completed_at epic_id session worker_pid held held_at merge_resumed worktree_missing merge_commit created_epoch completed_epoch merged_epoch held_epoch updated_epoch; do
+    while IFS=$'\t' read -r name op_type phase created machine completed merge_queued merge_status merged_at completed_at epic_id session worker_pid held held_at merge_resumed worktree_missing merge_commit created_epoch completed_epoch merged_epoch held_epoch updated_epoch last_epoch display_date; do
       # Handle META line for max name length and pruning stats
       if [[ "${name}" = "META" ]]; then
         max_name_len="${op_type}"  # op_type field contains max_name_len for META
@@ -431,17 +431,51 @@ if [[ -n "${LIST}" ]] || [[ -n "${BLOCKED}" ]]; then
       # Fallback to timestamp path for queue override (rare)
       display_time=$(format_operation_time "${mq_updated}" "${now_epoch}")
     else
-      # Fast path: use pre-computed epoch values (eliminates N date -j calls)
-      last_epoch=$(get_last_updated_epoch "${phase}" "${created_epoch}" "${completed_epoch}" "${merged_epoch}" "${held_epoch}" "${updated_epoch}")
-      display_time=$(format_epoch_time "${last_epoch}" "${now_epoch}")
+      # Phase 6: Use pre-computed last_epoch and display_date (eliminates bash function calls + date -r)
+      if [[ -z "${last_epoch}" ]] || [[ "${last_epoch}" -eq 0 ]]; then
+        display_time="unknown"
+      else
+        elapsed=$((now_epoch - last_epoch))
+        if [[ "${elapsed}" -lt 43200 ]]; then
+          # < 12 hours: use relative time (pure bash)
+          display_time=$(format_elapsed "${elapsed}")
+        else
+          # >= 12 hours: use pre-computed date string
+          display_time="${display_date:-unknown}"
+        fi
+      fi
     fi
     printf "  %-${max_name_len}s %b%b%b%b%b ${C_DIM}(%s)${C_RESET}\n" "${display_name}" "${display_phase}" "${status_icon}" "${after_icon}" "${hold_icon}" "${merge_icon}" "${display_time}"
-    done < <(jq -rs --argjson limit "${effective_limit}" '
+    done < <(jq -rs --argjson limit "${effective_limit}" --argjson now_epoch "${now_epoch}" '
       # Phase 2: Helper function to convert ISO 8601 timestamp to epoch
       # Handles timestamps like "2026-01-22T10:30:45.123Z"
       def to_epoch:
         if . == null or . == "" or . == "null" then 0
         else (sub("\\.[0-9]+"; "") | strptime("%Y-%m-%dT%H:%M:%SZ") | mktime) // 0
+        end;
+
+      # Phase 6: Get the last-updated epoch based on phase (mirrors get_last_updated_epoch)
+      def get_last_epoch:
+        . as $op |
+        ($op.created_at | to_epoch) as $created |
+        (($op.completed_at // "") | to_epoch) as $completed |
+        (($op.merged_at // "") | to_epoch) as $merged |
+        (($op.held_at // "") | to_epoch) as $held |
+        (($op.updated_at // "") | to_epoch) as $updated |
+        if $op.phase == "merged" then
+          if $merged > 0 then $merged elif $completed > 0 then $completed elif $updated > 0 then $updated else $created end
+        elif $op.phase == "completed" or $op.phase == "pending_merge" then
+          if $completed > 0 then $completed elif $updated > 0 then $updated else $created end
+        elif $op.phase == "held" then
+          if $held > 0 then $held elif $updated > 0 then $updated else $created end
+        else
+          if $updated > 0 then $updated else $created end
+        end;
+
+      # Phase 6: Format epoch as date string (YYYY-MM-DD) - eliminates N date -r calls
+      def to_date_str:
+        if . == 0 then ""
+        else (. | strflocaltime("%Y-%m-%d"))
         end;
 
       # Priority classification for limit pruning
@@ -516,7 +550,10 @@ if [[ -n "${LIST}" ]] || [[ -n "${BLOCKED}" ]]; then
         ((.completed_at // "") | to_epoch),
         ((.merged_at // "") | to_epoch),
         ((.held_at // "") | to_epoch),
-        ((.updated_at // "") | to_epoch)
+        ((.updated_at // "") | to_epoch),
+        # Phase 6: Pre-computed last-updated epoch and date string (eliminates N date -r calls)
+        (. | get_last_epoch),
+        (. | get_last_epoch | to_date_str)
       ] | @tsv)
     ' "${state_files[@]}")
 
