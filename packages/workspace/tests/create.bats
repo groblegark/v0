@@ -443,29 +443,37 @@ setup() {
     mkdir -p "$TEST_TEMP_DIR/project/.wok"
     echo 'prefix = "test"' > "$TEST_TEMP_DIR/project/.wok/config.toml"
 
-    # Track wk init calls
-    WK_INIT_PATH=""
-    wk() {
-        if [[ "$1" == "init" ]]; then
-            local prev=""
-            for arg in "$@"; do
-                if [[ "$prev" == "--path" ]]; then
-                    WK_INIT_PATH="$arg"
-                fi
-                prev="$arg"
-            done
-            # Create config.toml to indicate success
-            mkdir -p "$WK_INIT_PATH/.wok"
-            echo 'workspace = "/mock"' > "$WK_INIT_PATH/.wok/config.toml"
+    # Create a mock wk script that tracks calls
+    local mock_wk_log="$TEST_TEMP_DIR/wk-calls.log"
+    mkdir -p "$TEST_TEMP_DIR/mock-bin"
+    cat > "$TEST_TEMP_DIR/mock-bin/wk" <<'MOCK_WK'
+#!/bin/bash
+echo "$@" >> "$WK_MOCK_LOG"
+if [[ "$1" == "init" ]]; then
+    # Find --path argument
+    local prev=""
+    for arg in "$@"; do
+        if [[ "$prev" == "--path" ]]; then
+            mkdir -p "$arg/.wok"
+            echo 'workspace = "/mock"' > "$arg/.wok/config.toml"
         fi
-        return 0
-    }
-    export -f wk
-    export WK_INIT_PATH
+        prev="$arg"
+    done
+fi
+exit 0
+MOCK_WK
+    chmod +x "$TEST_TEMP_DIR/mock-bin/wk"
+    export PATH="$TEST_TEMP_DIR/mock-bin:$PATH"
+    export WK_MOCK_LOG="$mock_wk_log"
 
     run ws_create_clone
     assert_success
 
-    # wk init should have been called with the workspace path
-    assert_equal "$WK_INIT_PATH" "$V0_WORKSPACE_DIR"
+    # wk init should have been called with --path pointing to workspace
+    assert_file_exists "$mock_wk_log"
+    run cat "$mock_wk_log"
+    assert_output --partial "init"
+    assert_output --partial "--path"
+    # Verify config.toml was created in workspace (by our mock)
+    assert_file_exists "$V0_WORKSPACE_DIR/.wok/config.toml"
 }

@@ -519,3 +519,50 @@ EOF
     # Should use BUILD_DIR from .v0.rc (TEST_TEMP_DIR/project/.v0/build)
     assert [ -d "${TEST_TEMP_DIR}/project/.v0/build/operations/test-op" ]
 }
+
+@test "v0-build-worker: respects inherited BUILD_DIR over worktree config" {
+    # This tests the fix for the bug where v0-build-worker didn't preserve
+    # inherited BUILD_DIR when launched from a workspace context (e.g., by
+    # mg_trigger_dependents during merge). Without the fix, v0-build-worker
+    # would call v0_load_config which overwrites BUILD_DIR based on the
+    # workspace's .v0.rc, causing "No operation found" errors.
+
+    local V0_BUILD_WORKER="${PROJECT_ROOT}/bin/v0-build-worker"
+
+    # Create a "workspace" directory with its own .v0.rc
+    local workspace="${TEST_TEMP_DIR}/workspace"
+    mkdir -p "${workspace}/.v0/build/operations"
+    cat > "${workspace}/.v0.rc" <<EOF
+PROJECT="workspace-project"
+ISSUE_PREFIX="ws"
+BUILD_DIR="${workspace}/.v0/build"
+V0_ROOT="${workspace}"
+V0_PLANS_DIR="plans"
+EOF
+    mkdir -p "${workspace}/plans"
+
+    # Initialize git in workspace
+    (cd "${workspace}" && git init --quiet -b main && git config user.email "test@example.com" && git config user.name "Test")
+
+    # Create operation state in MAIN project (where it should be found)
+    local main_build="${TEST_TEMP_DIR}/project/.v0/build"
+    mkdir -p "${main_build}/operations/test-op/logs"
+    cat > "${main_build}/operations/test-op/state.json" <<EOF
+{
+  "name": "test-op",
+  "phase": "completed",
+  "prompt": "Test"
+}
+EOF
+
+    # Set inherited BUILD_DIR pointing to main project
+    export BUILD_DIR="${main_build}"
+
+    # Run v0-build-worker from workspace directory
+    # It should find the operation in inherited BUILD_DIR, not workspace's
+    cd "${workspace}"
+    run "${V0_BUILD_WORKER}" test-op 2>&1
+
+    # Should NOT get "No operation found" error
+    refute_output --partial "No operation found"
+}
