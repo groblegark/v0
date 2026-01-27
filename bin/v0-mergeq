@@ -12,11 +12,13 @@ source "${V0_DIR}/packages/cli/lib/v0-common.sh"
 source "${V0_DIR}/packages/cli/lib/history-format.sh"
 source "${V0_DIR}/packages/worker/lib/nudge-common.sh"
 
-# Save inherited BUILD_DIR before v0_load_config potentially overwrites it.
-# When the daemon starts in the workspace, v0_load_config sets BUILD_DIR based
-# on the workspace's .v0.rc, but we need to preserve the main repo's BUILD_DIR.
+# Save inherited variables before v0_load_config potentially overwrites them.
+# When the daemon starts in the workspace, v0_load_config may load wrong values:
+# - BUILD_DIR/MERGEQ_DIR: workspace's .v0.rc sets these to workspace paths
+# - V0_DEVELOP_BRANCH: workspace lacks .v0.profile.rc (gitignored), so defaults to "main"
 _INHERITED_BUILD_DIR="${BUILD_DIR:-}"
 _INHERITED_MERGEQ_DIR="${MERGEQ_DIR:-}"
+_INHERITED_DEVELOP_BRANCH="${V0_DEVELOP_BRANCH:-}"
 
 v0_load_config
 
@@ -28,10 +30,14 @@ v0_load_config
 # mq_start_daemon), use the inherited values. Otherwise compute from scratch.
 # This is important because v0_find_main_repo() doesn't work correctly when
 # running from an invalid workspace (returns workspace path instead of main repo).
+#
+# Similarly, V0_DEVELOP_BRANCH must be inherited because the workspace lacks
+# .v0.profile.rc (gitignored), causing v0_load_config to default to "main".
 if [[ -n "${_INHERITED_MERGEQ_DIR}" ]]; then
     # Restore inherited values (they point to main repo, not workspace)
     export MERGEQ_DIR="${_INHERITED_MERGEQ_DIR}"
     export BUILD_DIR="${_INHERITED_BUILD_DIR}"
+    [[ -n "${_INHERITED_DEVELOP_BRANCH}" ]] && export V0_DEVELOP_BRANCH="${_INHERITED_DEVELOP_BRANCH}"
 else
     MAIN_REPO=$(v0_find_main_repo)
     export MERGEQ_DIR="${MAIN_REPO}/${V0_BUILD_DIR}/mergeq"

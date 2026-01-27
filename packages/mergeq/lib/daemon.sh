@@ -60,13 +60,18 @@ mq_start_daemon() {
     # Start the daemon from the workspace directory
     # The workspace is dedicated to merge operations and is always on V0_DEVELOP_BRANCH
     #
-    # IMPORTANT: Export MERGEQ_DIR and BUILD_DIR so the child process inherits
-    # the correct paths. The v0-mergeq script checks if these are already set
-    # (lines 23-28) and skips recomputation. Without this, if the workspace
-    # becomes invalid later, v0_find_main_repo() would return the workspace path
-    # instead of the main repo, causing state files to be written to wrong location.
+    # IMPORTANT: Export key variables so the child process inherits them.
+    # The v0-mergeq script checks if these are already set and skips recomputation.
+    # Without this:
+    # - BUILD_DIR/MERGEQ_DIR: if workspace becomes invalid, v0_find_main_repo()
+    #   would return workspace path instead of main repo, causing state files
+    #   to be written to wrong location
+    # - V0_DEVELOP_BRANCH: workspace doesn't have .v0.profile.rc (gitignored),
+    #   so config loading defaults to "main" instead of user's branch, causing
+    #   workspace mismatch detection and failed recreation attempts
     export MERGEQ_DIR
     export BUILD_DIR
+    export V0_DEVELOP_BRANCH
     local old_pwd="${PWD}"
     cd "${V0_WORKSPACE_DIR}"
     nohup "${V0_DIR}/bin/v0-mergeq" --watch >> "${DAEMON_LOG_FILE}" 2>&1 &
