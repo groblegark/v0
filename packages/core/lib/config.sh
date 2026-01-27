@@ -142,8 +142,20 @@ v0_load_config() {
 
   # Source profile if exists and V0_DEVELOP_BRANCH still at default
   # (handles case where .v0.rc doesn't have the source line yet)
-  if [[ "${V0_DEVELOP_BRANCH}" == "main" ]] && [[ -f "${V0_ROOT}/.v0.profile.rc" ]]; then
-    source "${V0_ROOT}/.v0.profile.rc"
+  # For worktrees, look for .v0.profile.rc in the main repo since it's gitignored
+  if [[ "${V0_DEVELOP_BRANCH}" == "main" ]]; then
+    local profile_search_dir="${V0_ROOT}"
+    # If V0_ROOT is a worktree, check the main repo for .v0.profile.rc
+    if [[ -f "${V0_ROOT}/.git" ]]; then
+      local main_repo
+      main_repo=$(v0_find_main_repo "${V0_ROOT}")
+      if [[ -n "${main_repo}" ]] && [[ "${main_repo}" != "${V0_ROOT}" ]]; then
+        profile_search_dir="${main_repo}"
+      fi
+    fi
+    if [[ -f "${profile_search_dir}/.v0.profile.rc" ]]; then
+      source "${profile_search_dir}/.v0.profile.rc"
+    fi
   fi
 
   # Validate required fields

@@ -305,6 +305,41 @@ EOF
     assert_output "main"
 }
 
+@test "v0_load_config finds .v0.profile.rc in main repo when running from worktree" {
+    # Create main repo with .v0.rc and .v0.profile.rc
+    init_mock_git_repo "${TEST_TEMP_DIR}/project"
+    cd "${TEST_TEMP_DIR}/project" || return 1
+    create_v0rc "testproject" "testp"
+
+    # Commit .v0.rc so it appears in worktrees
+    git add .v0.rc
+    git commit -m "Add .v0.rc"
+
+    # Create .v0.profile.rc with custom develop branch (gitignored file, not committed)
+    cat > "${TEST_TEMP_DIR}/project/.v0.profile.rc" <<'EOF'
+export V0_DEVELOP_BRANCH="v0/agent/test-user-1234"
+EOF
+
+    # Create a worktree (simulating agent workspace)
+    mkdir -p "${TEST_TEMP_DIR}/worktrees"
+    git worktree add -b feature-branch "${TEST_TEMP_DIR}/worktrees/feature"
+
+    # Verify .v0.profile.rc does NOT exist in worktree (it's gitignored)
+    [[ ! -f "${TEST_TEMP_DIR}/worktrees/feature/.v0.profile.rc" ]]
+
+    # Verify .v0.rc DOES exist in worktree (it's committed)
+    [[ -f "${TEST_TEMP_DIR}/worktrees/feature/.v0.rc" ]]
+
+    # Load config from worktree
+    cd "${TEST_TEMP_DIR}/worktrees/feature" || return 1
+    source_lib "v0-common.sh"
+
+    v0_load_config
+
+    # Should have loaded V0_DEVELOP_BRANCH from main repo's .v0.profile.rc
+    assert_equal "${V0_DEVELOP_BRANCH}" "v0/agent/test-user-1234"
+}
+
 # ============================================================================
 # v0_issue_pattern() tests
 # ============================================================================
