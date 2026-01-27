@@ -13,7 +13,7 @@ _status_get_blocker_display() {
 
   # Single wk call to get blockers
   local issue_json
-  issue_json=$(wk show "${epic_id}" -o json 2>/dev/null) || return
+  issue_json=$(wk show "${epic_id}" -o json 2>/dev/null) || return 0
 
   local blockers
   blockers=$(echo "${issue_json}" | jq -r '.blockers // []')

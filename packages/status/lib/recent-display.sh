@@ -43,7 +43,7 @@ get_completed_bugs() {
   local json_output limit_arg=""
   [[ -n "${limit}" ]] && limit_arg="--limit ${limit}"
   # Use wk list filter to efficiently get only recently updated bugs
-  json_output=$(wk list --type bug --status "done" --output json -q "updated < ${since_hours}h" ${limit_arg:+"${limit_arg}"} 2>/dev/null) || return
+  json_output=$(wk list --type bug --status "done" --output json -q "updated < ${since_hours}h" ${limit_arg:+"${limit_arg}"} 2>/dev/null) || return 0
   [[ -z "${json_output}" ]] && return
 
   # wk list --format json doesn't include updated_at, so we fetch from wk show for display
@@ -68,7 +68,7 @@ get_completed_chores() {
   local json_output limit_arg=""
   [[ -n "${limit}" ]] && limit_arg="--limit ${limit}"
   # Use wk list filter to efficiently get only recently updated chores
-  json_output=$(wk list --type chore --status "done" --output json -q "updated < ${since_hours}h" ${limit_arg:+"${limit_arg}"} 2>/dev/null) || return
+  json_output=$(wk list --type chore --status "done" --output json -q "updated < ${since_hours}h" ${limit_arg:+"${limit_arg}"} 2>/dev/null) || return 0
   [[ -z "${json_output}" ]] && return
 
   # wk list --format json doesn't include updated_at, so we fetch from wk show for display
