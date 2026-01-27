@@ -427,6 +427,22 @@ mq_process_once() {
     mq_process_merge "${op}"
 }
 
+# mq_recover_stuck_processing
+# Reset any PROCESSING entries to PENDING
+# Called at daemon startup to recover from crashes
+mq_recover_stuck_processing() {
+    local processing_ops
+    processing_ops=$(mq_get_operations_by_status "${MQ_STATUS_PROCESSING}")
+
+    if [[ -n "${processing_ops}" ]]; then
+        for op in ${processing_ops}; do
+            echo "[$(date +%H:%M:%S)] Recovering stuck entry: ${op} (was processing, now pending)"
+            mq_update_entry_status "${op}" "${MQ_STATUS_PENDING}"
+            mq_log_event "recovery:stuck: ${op} (processing -> pending)"
+        done
+    fi
+}
+
 # mq_process_watch
 # Continuous mode - poll for ready operations
 mq_process_watch() {
@@ -436,6 +452,9 @@ mq_process_watch() {
 
     echo "[$(date +%H:%M:%S)] Starting merge queue daemon (poll interval: ${poll_interval}s)"
     mq_log_event "daemon:started"
+
+    # Recover any entries stuck in PROCESSING from previous crashed runs
+    mq_recover_stuck_processing
 
     # Log clean exit on termination
     _mq_cleanup_daemon() {
