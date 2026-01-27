@@ -44,7 +44,10 @@ case "$1" in
         exit 0
         ;;
     "label")
-        # Silent success for label commands
+        # Output to stdout if MOCK_WK_LABEL_OUTPUT is set (for testing redirection)
+        if [ -n "$MOCK_WK_LABEL_OUTPUT" ]; then
+            echo "$MOCK_WK_LABEL_OUTPUT"
+        fi
         exit 0
         ;;
     "show")

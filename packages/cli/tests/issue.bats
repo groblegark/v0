@@ -157,3 +157,29 @@ EOF
     assert_success
     assert_output "mock-abc1"
 }
+
+# ============================================================================
+# Stdout redirection tests (regression for wk label stdout corruption)
+# ============================================================================
+
+@test "create_feature_issue suppresses wk label stdout" {
+    # When wk label outputs to stdout, it should be suppressed
+    # so only the issue ID is returned
+    export MOCK_WK_NEW_ID="test-id1"
+    export MOCK_WK_LABEL_OUTPUT="Label added successfully"
+
+    run create_feature_issue "test-op"
+    assert_success
+    # Output should be ONLY the issue ID, not contaminated by wk label output
+    assert_output "test-id1"
+}
+
+@test "file_plan_issue suppresses wk label stdout" {
+    echo "# Plan" > "${TEST_TEMP_DIR}/plan.md"
+    export MOCK_WK_NEW_ID="test-id2"
+    export MOCK_WK_LABEL_OUTPUT="Label added successfully"
+
+    run file_plan_issue "test-op" "${TEST_TEMP_DIR}/plan.md"
+    assert_success
+    assert_output "test-id2"
+}

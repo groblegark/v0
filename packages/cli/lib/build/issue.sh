@@ -30,7 +30,7 @@ create_feature_issue() {
 
   # Add plan label so issue can be resolved to operation name
   # This is needed for dependency tracking when blocked operations are resumed
-  if ! wk label "${issue_id}" "plan:${name}" 2>/dev/null; then
+  if ! wk label "${issue_id}" "plan:${name}" >/dev/null 2>&1; then
     echo "create_feature_issue: warning: failed to add label to ${issue_id}" >&2
   fi
 
@@ -81,12 +81,12 @@ file_plan_issue() {
   fi
 
   # Set the description (plan content)
-  if ! wk edit "${issue_id}" description "${description}" 2>/dev/null; then
+  if ! wk edit "${issue_id}" description "${description}" >/dev/null 2>&1; then
     echo "file_plan_issue: warning: failed to set description for ${issue_id}" >&2
   fi
 
   # Add label
-  if ! wk label "${issue_id}" "plan:${name}" 2>/dev/null; then
+  if ! wk label "${issue_id}" "plan:${name}" >/dev/null 2>&1; then
     echo "file_plan_issue: warning: failed to add label to ${issue_id}" >&2
   fi
 
