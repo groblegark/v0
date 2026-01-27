@@ -59,6 +59,7 @@ Options:
   --enqueue <op>   Alias for --add
   --once           Process one merge and exit
   --watch          Continuous mode (runs in foreground)
+  --restart        Restart the merge queue daemon
 
 Helper functions (for internal use):
   --dequeue        Get next pending merge (outputs operation name)
@@ -121,6 +122,11 @@ while [[ $# -gt 0 ]]; do
             shift 3
             ;;
         -h|--help) usage ;;
+        restart)
+            # Hidden subcommand: 'v0 mergeq restart' -> 'v0 mergeq --restart'
+            ACTION="restart"
+            shift
+            ;;
         *)
             echo "Unknown option: $1"
             usage
