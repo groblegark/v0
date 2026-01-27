@@ -241,6 +241,30 @@ Feature operations run in tmux sessions:
 | `v0-${PROJECT}-chore-worker` | Chore worker |
 | `v0-${PROJECT}-merge-${branch}` | Conflict resolution |
 
+#### Tmux Environment Inheritance
+
+Tmux sessions inherit environment from the **tmux server**, not from the process that created
+the session. The server's environment is set when it first starts (typically from the first
+project you work on).
+
+**Invariant:** Scripts running inside tmux sessions must not trust inherited `MERGEQ_DIR` or
+`BUILD_DIR`. These scripts must either:
+1. Clear these variables and let `v0_load_config` recompute them from `V0_ROOT`
+2. Pass `V0_ROOT` explicitly and unset the inherited values
+
+```bash
+unset MERGEQ_DIR BUILD_DIR; V0_ROOT="${BUILD_ROOT}" v0-mergeq --enqueue "${OP_NAME}"
+```
+
+**Contrast with daemon inheritance:** Daemon processes (merge queue, fix worker) legitimately
+inherit these variables from their parent. The parent explicitly exports correct values before
+`nohup`. See [Environment Variable Inheritance](#environment-variable-inheritance) below.
+
+| Context | Inheritance Source | Trust Inherited Values? |
+|---------|-------------------|------------------------|
+| Daemon child process | Parent (via `nohup`) | Yes |
+| Tmux session script | Tmux server | No |
+
 ### Worker Branches
 
 Worker branches are derived from `V0_DEVELOP_BRANCH` using a hyphenated suffix:

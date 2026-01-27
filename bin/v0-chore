@@ -22,7 +22,7 @@ fi
 
 # Source branch status and warn if develop has unpulled commits (skipped in standalone)
 source "${V0_DIR}/packages/status/lib/branch-status.sh"
-warn_branch_behind
+warn_branch_behind || true
 
 # Worker branch derived from develop branch (must be after config load)
 # In standalone mode, V0_DEVELOP_BRANCH is empty so this becomes "/chores"
@@ -277,8 +277,10 @@ cat > "\${STATE_DIR}/state.json" <<STATE_EOF
 STATE_EOF
 
 # Queue for merge with issue ID tracking (for logging/debugging)
+# Clear inherited MERGEQ_DIR/BUILD_DIR to prevent cross-project contamination
+# (tmux server may have inherited these from a different project)
 echo "Queueing for merge..."
-"${V0_DIR}/bin/v0-mergeq" --enqueue "\${BRANCH}" --issue-id "\${CHORE_ID}"
+unset MERGEQ_DIR BUILD_DIR; "${V0_DIR}/bin/v0-mergeq" --enqueue "\${BRANCH}" --issue-id "\${CHORE_ID}"
 
 # Transfer ownership to merge queue
 (cd "\${WORKTREE_ROOT}" && wk edit "\${CHORE_ID}" assignee "worker:mergeq")

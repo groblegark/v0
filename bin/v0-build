@@ -39,7 +39,7 @@ source "${V0_DIR}/packages/cli/lib/build/issue.sh"
 source "${V0_DIR}/packages/status/lib/branch-status.sh"
 
 # Warn if develop branch has commits not pulled yet
-warn_branch_behind
+warn_branch_behind || true
 
 usage() {
   v0_help <<'EOF'

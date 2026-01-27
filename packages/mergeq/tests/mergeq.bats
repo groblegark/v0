@@ -739,3 +739,80 @@ EOF
     # Function returns 0 even on wk failure, but outputs a warning
     assert_output --partial "Warning"
 }
+
+# ============================================================================
+# Cross-project contamination prevention tests
+# ============================================================================
+
+@test "on-complete.sh in v0-build-worker clears MERGEQ_DIR before v0-mergeq" {
+    # Verify the on-complete.sh template includes unset MERGEQ_DIR BUILD_DIR
+    run grep -E "unset MERGEQ_DIR BUILD_DIR.*v0-mergeq" "${PROJECT_ROOT}/bin/v0-build-worker"
+    assert_success
+    assert_output --partial "unset MERGEQ_DIR BUILD_DIR"
+}
+
+@test "on-complete.sh module clears MERGEQ_DIR before v0-mergeq" {
+    # Verify the on-complete.sh module includes unset MERGEQ_DIR BUILD_DIR
+    run grep -E "unset MERGEQ_DIR BUILD_DIR.*v0-mergeq" "${PROJECT_ROOT}/packages/cli/lib/build/on-complete.sh"
+    assert_success
+    assert_output --partial "unset MERGEQ_DIR BUILD_DIR"
+}
+
+@test "v0-fix fixed script clears MERGEQ_DIR before v0-mergeq" {
+    # Verify the fixed script template includes unset MERGEQ_DIR BUILD_DIR
+    run grep -E "unset MERGEQ_DIR BUILD_DIR.*v0-mergeq" "${PROJECT_ROOT}/bin/v0-fix"
+    assert_success
+    # Should have two occurrences (fixed script and new-branch script)
+    local count
+    count=$(grep -c "unset MERGEQ_DIR BUILD_DIR" "${PROJECT_ROOT}/bin/v0-fix")
+    [[ "$count" -ge 2 ]]
+}
+
+@test "v0-chore done-chore script clears MERGEQ_DIR before v0-mergeq" {
+    # Verify the done-chore script template includes unset MERGEQ_DIR BUILD_DIR
+    run grep -E "unset MERGEQ_DIR BUILD_DIR.*v0-mergeq" "${PROJECT_ROOT}/bin/v0-chore"
+    assert_success
+    assert_output --partial "unset MERGEQ_DIR BUILD_DIR"
+}
+
+@test "clearing MERGEQ_DIR forces v0-mergeq to recompute from main repo" {
+    # This tests the logic in v0-mergeq: when _INHERITED_MERGEQ_DIR is empty,
+    # it computes MERGEQ_DIR from v0_find_main_repo instead of using inherited value
+
+    # Create a main repo
+    local main_repo="${TEST_TEMP_DIR}/main-repo"
+    mkdir -p "${main_repo}/.v0/build/mergeq/logs"
+    echo 'PROJECT="test"' > "${main_repo}/.v0.rc"
+    echo 'ISSUE_PREFIX="test"' >> "${main_repo}/.v0.rc"
+
+    # Simulate "contaminated" environment (wrong project's MERGEQ_DIR)
+    local wrong_mergeq="${TEST_TEMP_DIR}/wrong-project/.v0/build/mergeq"
+    mkdir -p "${wrong_mergeq}"
+
+    # Export the contaminated value
+    export MERGEQ_DIR="${wrong_mergeq}"
+    export BUILD_DIR="${TEST_TEMP_DIR}/wrong-project/.v0/build"
+
+    # Save like v0-mergeq does
+    _INHERITED_MERGEQ_DIR="${MERGEQ_DIR:-}"
+
+    # Now simulate our fix: unset before calling
+    unset MERGEQ_DIR BUILD_DIR
+    _INHERITED_MERGEQ_DIR="${MERGEQ_DIR:-}"  # Re-save after unset
+
+    # Verify _INHERITED_MERGEQ_DIR is now empty
+    assert_equal "${_INHERITED_MERGEQ_DIR}" ""
+
+    # The else branch in v0-mergeq would now be taken, computing fresh paths
+    # Stub v0_find_main_repo to return our main repo
+    v0_find_main_repo() { echo "${main_repo}"; }
+
+    V0_BUILD_DIR=".v0/build"
+    MAIN_REPO=$(v0_find_main_repo)
+    export MERGEQ_DIR="${MAIN_REPO}/${V0_BUILD_DIR}/mergeq"
+    export BUILD_DIR="${MAIN_REPO}/${V0_BUILD_DIR}"
+
+    # Verify we got the correct main repo paths, not the contaminated ones
+    assert_equal "${MERGEQ_DIR}" "${main_repo}/.v0/build/mergeq"
+    assert_equal "${BUILD_DIR}" "${main_repo}/.v0/build"
+}

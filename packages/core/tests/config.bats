@@ -238,3 +238,112 @@ setup() {
     assert_success
     [[ $(echo "$output" | wc -l | tr -d ' ') -eq 1 ]]
 }
+
+# ============================================================================
+# v0_load_config auto-create agent remote tests
+# ============================================================================
+
+@test "v0_load_config auto-creates agent remote when missing" {
+    local project_dir="${TEST_TEMP_DIR}/project"
+    local state_dir="${TEST_TEMP_DIR}/state"
+
+    # Create a git repo with .v0.rc configured for agent remote
+    mkdir -p "${project_dir}"
+    git -C "${project_dir}" init --initial-branch=main
+    git -C "${project_dir}" commit --allow-empty -m "Initial commit"
+
+    cat > "${project_dir}/.v0.rc" <<EOF
+PROJECT="testproj"
+ISSUE_PREFIX="test"
+V0_GIT_REMOTE="agent"
+EOF
+
+    # Verify agent remote does NOT exist yet
+    run git -C "${project_dir}" remote get-url agent
+    assert_failure
+
+    # Set up environment for v0_load_config
+    cd "${project_dir}" || return 1
+    export XDG_STATE_HOME="${state_dir}"
+
+    # Source config.sh which defines v0_load_config
+    source "${PROJECT_ROOT}/packages/core/lib/grep.sh"
+    source "${PROJECT_ROOT}/packages/core/lib/config.sh"
+
+    # Call v0_load_config - this should auto-create the agent remote
+    v0_load_config
+
+    # Verify agent remote now exists
+    run git -C "${project_dir}" remote get-url agent
+    assert_success
+    assert_output --partial "remotes/agent.git"
+}
+
+@test "v0_load_config skips agent remote creation when remote already exists" {
+    local project_dir="${TEST_TEMP_DIR}/project"
+    local state_dir="${TEST_TEMP_DIR}/state"
+    local agent_dir="${state_dir}/v0/testproj/remotes/agent.git"
+
+    # Create a git repo
+    mkdir -p "${project_dir}"
+    git -C "${project_dir}" init --initial-branch=main
+    git -C "${project_dir}" commit --allow-empty -m "Initial commit"
+
+    cat > "${project_dir}/.v0.rc" <<EOF
+PROJECT="testproj"
+ISSUE_PREFIX="test"
+V0_GIT_REMOTE="agent"
+EOF
+
+    # Pre-create the agent remote
+    mkdir -p "${agent_dir}"
+    git -C "${project_dir}" clone --bare "${project_dir}" "${agent_dir}" 2>/dev/null
+    git -C "${project_dir}" remote add agent "${agent_dir}"
+
+    # Set up environment
+    cd "${project_dir}" || return 1
+    export XDG_STATE_HOME="${state_dir}"
+
+    # Source and call v0_load_config
+    source "${PROJECT_ROOT}/packages/core/lib/grep.sh"
+    source "${PROJECT_ROOT}/packages/core/lib/config.sh"
+
+    # Should succeed without error (idempotent)
+    run v0_load_config
+    assert_success
+
+    # Verify remote still exists and points to same place
+    run git -C "${project_dir}" remote get-url agent
+    assert_success
+    assert_output "${agent_dir}"
+}
+
+@test "v0_load_config skips agent remote creation when V0_GIT_REMOTE is not agent" {
+    local project_dir="${TEST_TEMP_DIR}/project"
+    local state_dir="${TEST_TEMP_DIR}/state"
+
+    # Create a git repo configured for origin remote
+    mkdir -p "${project_dir}"
+    git -C "${project_dir}" init --initial-branch=main
+    git -C "${project_dir}" commit --allow-empty -m "Initial commit"
+
+    cat > "${project_dir}/.v0.rc" <<EOF
+PROJECT="testproj"
+ISSUE_PREFIX="test"
+V0_GIT_REMOTE="origin"
+EOF
+
+    # Set up environment
+    cd "${project_dir}" || return 1
+    export XDG_STATE_HOME="${state_dir}"
+
+    # Source and call v0_load_config
+    source "${PROJECT_ROOT}/packages/core/lib/grep.sh"
+    source "${PROJECT_ROOT}/packages/core/lib/config.sh"
+
+    v0_load_config
+
+    # Verify agent remote was NOT created (V0_GIT_REMOTE is "origin", not "agent")
+    run git -C "${project_dir}" remote get-url agent
+    assert_failure
+}

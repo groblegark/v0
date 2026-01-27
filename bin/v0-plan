@@ -9,7 +9,7 @@ v0_load_config
 
 # Source branch status and warn if develop has unpulled commits
 source "${V0_DIR}/packages/status/lib/branch-status.sh"
-warn_branch_behind
+warn_branch_behind || true
 
 # Source nudge functions for idle session monitoring
 source "${V0_DIR}/packages/worker/lib/nudge-common.sh"

@@ -193,6 +193,14 @@ v0_load_config() {
     export DISABLE_NOTIFICATIONS=1
   fi
 
+  # Auto-create agent remote if configured but missing (idempotent)
+  # This handles cases where V0_GIT_REMOTE="agent" is set but v0 init was never run
+  if [[ "${V0_GIT_REMOTE}" == "agent" ]] && [[ -n "${V0_ROOT}" ]]; then
+    if ! git -C "${V0_ROOT}" remote get-url agent &>/dev/null; then
+      v0_init_agent_remote "${V0_ROOT}" "${V0_STATE_DIR}" >/dev/null 2>&1 || true
+    fi
+  fi
+
   # Export for subprocesses
   export V0_ROOT PROJECT ISSUE_PREFIX REPO_NAME V0_STATE_DIR BUILD_DIR PLANS_DIR
   export V0_BUILD_DIR V0_PLANS_DIR V0_DEVELOP_BRANCH V0_FEATURE_BRANCH V0_BUGFIX_BRANCH V0_CHORE_BRANCH

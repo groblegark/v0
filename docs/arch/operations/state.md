@@ -142,7 +142,7 @@ wok issue is still open, and marks it done before checking blocking status.
 
 When a merge completes, the following chain triggers dependent operations:
 
-```
+```diagram
 v0-merge (or mergeq daemon)
   └── mg_finalize_merge()
         ├── mg_push_and_verify()      # Push merge to remote
