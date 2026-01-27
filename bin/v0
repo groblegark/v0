@@ -217,7 +217,7 @@ case "${CMD}" in
     exec "${V0_DIR}/bin/v0-watch" "$@"
     ;;
   # Project-required commands
-  plan|tree|merge|mergeq|status|build|fix|attach|cancel|stop|start|prune|monitor|hold|roadmap|pull|push|archive)
+  plan|tree|merge|mergeq|status|build|fix|attach|cancel|stop|start|prune|monitor|hold|roadmap|pull|push|archive|log)
     # Check if we're in a project - if not, show error
     if ! v0_find_project_root >/dev/null 2>&1; then
         v0_check_standalone_mode "${CMD}"
