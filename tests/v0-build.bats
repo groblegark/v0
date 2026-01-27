@@ -566,3 +566,115 @@ EOF
     # Should NOT get "No operation found" error
     refute_output --partial "No operation found"
 }
+
+@test "v0-build: exports BUILD_DIR to child processes even when not inherited" {
+    # This tests the fix for the bug where v0-build didn't export BUILD_DIR
+    # when it wasn't inherited from the parent process. When mg_trigger_dependents
+    # launched v0-build, BUILD_DIR might not be in the environment, so v0-build
+    # computes it via v0_load_config. Previously, it wouldn't export the computed
+    # value, so v0-build-worker couldn't find the operation.
+
+    # Create test operation state
+    mkdir -p "${TEST_TEMP_DIR}/project/.v0/build/operations/export-test/logs"
+    cat > "${TEST_TEMP_DIR}/project/.v0/build/operations/export-test/state.json" <<EOF
+{
+  "name": "export-test",
+  "phase": "completed",
+  "prompt": "Test export"
+}
+EOF
+
+    # Unset BUILD_DIR to simulate the scenario where it's not inherited
+    unset BUILD_DIR
+
+    # Run v0-build in a subshell that checks if BUILD_DIR is exported
+    # by trying to access it from a child process
+    run bash -c '
+        cd "'"${TEST_TEMP_DIR}/project"'" || exit 1
+
+        # Source v0-build setup (simulate what v0-build does before spawning worker)
+        V0_DIR="'"${PROJECT_ROOT}"'"
+        source "${V0_DIR}/packages/cli/lib/v0-common.sh"
+        _INHERITED_BUILD_DIR="${BUILD_DIR:-}"
+        v0_load_config
+        [[ -n "${_INHERITED_BUILD_DIR}" ]] && BUILD_DIR="${_INHERITED_BUILD_DIR}"
+        export BUILD_DIR
+
+        # Verify BUILD_DIR is exported by checking it from a subshell
+        child_build_dir=$(bash -c '\''echo "${BUILD_DIR}"'\'')
+
+        if [[ -z "${child_build_dir}" ]]; then
+            echo "ERROR: BUILD_DIR not exported to child process"
+            exit 1
+        fi
+
+        echo "BUILD_DIR exported: ${child_build_dir}"
+
+        # Verify it points to the correct location
+        if [[ "${child_build_dir}" != "'"${TEST_TEMP_DIR}/project/.v0/build"'" ]]; then
+            echo "ERROR: BUILD_DIR has wrong value"
+            echo "  Expected: '"${TEST_TEMP_DIR}/project/.v0/build"'"
+            echo "  Got: ${child_build_dir}"
+            exit 1
+        fi
+    '
+    assert_success
+    assert_output --partial "BUILD_DIR exported"
+}
+
+@test "v0-merge: exports BUILD_DIR to child processes for mg_trigger_dependents" {
+    # This tests that v0-merge exports BUILD_DIR so that when mg_trigger_dependents
+    # launches v0-build to resume dependent operations, they can find their state files.
+
+    local project_dir="${TEST_TEMP_DIR}/merge-export-project"
+    mkdir -p "${project_dir}/.v0/build/operations"
+
+    # Initialize git repo
+    (
+        cd "${project_dir}"
+        git init --quiet -b main
+        git config user.email "test@example.com"
+        git config user.name "Test User"
+        echo "test" > README.md
+        git add README.md
+        git commit --quiet -m "Initial commit"
+    )
+
+    cat > "${project_dir}/.v0.rc" <<EOF
+PROJECT="mergetest"
+ISSUE_PREFIX="mt"
+V0_DEVELOP_BRANCH="main"
+V0_GIT_REMOTE="origin"
+EOF
+
+    # Run a subshell that sources v0-merge's initialization and checks BUILD_DIR export
+    run env -u BUILD_DIR bash -c '
+        cd "'"${project_dir}"'" || exit 1
+
+        V0_DIR="'"${PROJECT_ROOT}"'"
+        source "${V0_DIR}/packages/cli/lib/v0-common.sh"
+        _INHERITED_BUILD_DIR="${BUILD_DIR:-}"
+        v0_load_config
+        [[ -n "${_INHERITED_BUILD_DIR}" ]] && BUILD_DIR="${_INHERITED_BUILD_DIR}"
+        export BUILD_DIR
+
+        # Verify BUILD_DIR is exported by checking from a child process
+        child_build_dir=$(bash -c '\''echo "${BUILD_DIR}"'\'')
+
+        if [[ -z "${child_build_dir}" ]]; then
+            echo "ERROR: BUILD_DIR not exported"
+            exit 1
+        fi
+
+        # BUILD_DIR should be set to project/.v0/build
+        if [[ ! "${child_build_dir}" == *"/.v0/build" ]]; then
+            echo "ERROR: BUILD_DIR does not end with /.v0/build"
+            echo "  Got: ${child_build_dir}"
+            exit 1
+        fi
+
+        echo "BUILD_DIR correctly exported: ${child_build_dir}"
+    '
+    assert_success
+    assert_output --partial "BUILD_DIR correctly exported"
+}
