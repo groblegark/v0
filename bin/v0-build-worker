@@ -19,13 +19,28 @@ set -e
 
 V0_DIR="$(cd "$(dirname "$0")/.." && pwd)"
 source "${V0_DIR}/packages/cli/lib/v0-common.sh"
+
+# Save inherited values before v0_load_config potentially overwrites them.
+# When launched from a workspace (e.g., by mg_trigger_dependents during merge),
+# v0_load_config finds the workspace's .v0.rc and sets paths based on the workspace.
+# We need to preserve the main repo's BUILD_DIR so we find operation state files.
+_INHERITED_BUILD_DIR="${BUILD_DIR:-}"
+
 v0_load_config
+
+# Restore inherited BUILD_DIR if set by parent process
+if [[ -n "${_INHERITED_BUILD_DIR}" ]]; then
+    export BUILD_DIR="${_INHERITED_BUILD_DIR}"
+fi
 
 # Source nudge functions for idle session monitoring
 source "${V0_DIR}/packages/worker/lib/nudge-common.sh"
 
 # Source issue filing functions
 source "${V0_DIR}/packages/cli/lib/build/issue.sh"
+
+# Source workspace functions for plan commit to V0_DEVELOP_BRANCH
+source "${V0_DIR}/packages/workspace/lib/workspace.sh"
 
 usage() {
   cat <<EOF
@@ -356,22 +371,17 @@ EOF
     return 1
   fi
 
+  # Copy plan to V0_ROOT for user visibility (NOT committed to user's branch)
   if [[ "${PLAN_FOUND}" != "${PLANS_DIR}/${NAME}.md" ]]; then
     /bin/cp "${PLAN_FOUND}" "${PLANS_DIR}/${NAME}.md"
-    emit_event "plan:copied" "Copied from ${PLAN_FOUND} to main repo"
+    emit_event "plan:copied" "Copied to main repo (not committed)"
   fi
 
-  # Auto-commit the plan file (unless already committed or worktree is dirty with other changes)
-  if git -C "${V0_ROOT}" diff --quiet -- "${V0_PLANS_DIR}/${NAME}.md" 2>/dev/null && \
-     git -C "${V0_ROOT}" ls-files --error-unmatch "${V0_PLANS_DIR}/${NAME}.md" &>/dev/null; then
-    emit_event "plan:commit" "Already committed"
-  elif git -C "${V0_ROOT}" check-ignore -q "${V0_PLANS_DIR}/${NAME}.md" 2>/dev/null; then
-    emit_event "plan:commit" "Skipped (gitignored)"
-  elif git -C "${V0_ROOT}" add "${V0_PLANS_DIR}/${NAME}.md" && \
-       git -C "${V0_ROOT}" commit -m "Add plan: ${NAME}" -m "Auto-committed by v0 feature"; then
-    emit_event "plan:commit" "Committed ${V0_PLANS_DIR}/${NAME}.md"
+  # Commit plan to V0_DEVELOP_BRANCH via workspace
+  if ws_commit_plan_to_develop "${NAME}" "${PLAN_FOUND}"; then
+    emit_event "plan:commit" "Committed to ${V0_DEVELOP_BRANCH}"
   else
-    emit_event "plan:commit" "Failed to commit (worktree may have other changes)"
+    emit_event "plan:commit" "Failed to commit to ${V0_DEVELOP_BRANCH}"
   fi
 
   rm -f "${STATE_DIR}/done"
@@ -487,10 +497,15 @@ run_build_phase() {
 }
 SETTINGS_EOF
 
+  # Prefer local plan, fallback to V0_DEVELOP_BRANCH
   PLAN_FILE="${PLANS_DIR}/${NAME}.md"
   if [[ -f "${PLAN_FILE}" ]]; then
     /bin/cp "${PLAN_FILE}" "${TREE_DIR}/PLAN.md"
-    emit_event "plan:copied" "PLAN.md"
+    emit_event "plan:source" "Copied from local ${V0_PLANS_DIR}"
+  elif ws_get_plan_from_develop "${NAME}" "${TREE_DIR}/PLAN.md"; then
+    emit_event "plan:source" "Retrieved from ${V0_DEVELOP_BRANCH}"
+  else
+    log "Warning: Plan file not found locally or on ${V0_DEVELOP_BRANCH}"
   fi
 
   create_done_script "${TREE_DIR}"
