@@ -188,8 +188,11 @@ run_orchestration_phase() {
   { read -r TREE_DIR; read -r WORKTREE; } <<< "${tree_output}"
 
   # Link worktree to main repo's shared workspace for issue management
+  # Initialize in both TREE_DIR (for scripts) and WORKTREE (for Claude agent)
   rm -rf "${TREE_DIR}/.wok"
   link_to_workspace "${TREE_DIR}" "${V0_ROOT}"
+  rm -rf "${WORKTREE}/.wok"
+  link_to_workspace "${WORKTREE}" "${V0_ROOT}"
 
   update_state "worktree" "\"${WORKTREE}\""
 
@@ -295,7 +298,7 @@ WRAPPER
   CLAUDE_ARGS="--model opus --dangerously-skip-permissions --allow-dangerously-skip-permissions"
 
   tmux new-session -d -s "${SESSION}" -c "${TREE_DIR}" \
-    "V0_ROADMAP_NAME='${NAME}' V0_IDEA_ID='${IDEA_ID}' V0_ROOT='${V0_ROOT}' V0_WORKTREE='${WORKTREE}' V0_GIT_REMOTE='${V0_GIT_REMOTE}' claude ${CLAUDE_ARGS} 'Orchestrate the roadmap. Follow instructions in CLAUDE.md and ROADMAP.md.'; \
+    "V0_ROADMAP_NAME='${NAME}' V0_IDEA_ID='${IDEA_ID}' V0_ROOT='${V0_ROOT}' BUILD_DIR='${BUILD_DIR}' V0_DEVELOP_BRANCH='${V0_DEVELOP_BRANCH}' V0_WORKTREE='${WORKTREE}' V0_GIT_REMOTE='${V0_GIT_REMOTE}' claude ${CLAUDE_ARGS} 'Orchestrate the roadmap. Follow instructions in CLAUDE.md and ROADMAP.md.'; \
      '${TREE_DIR}/.claude/on-complete.sh'; \
      echo ''; echo 'Session complete. Closing in 5 seconds...'; sleep 5"
 

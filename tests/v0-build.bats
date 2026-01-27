@@ -467,3 +467,55 @@ MOCK_EOF
     assert_failure
     assert_output --partial "Unknown option"
 }
+
+# ============================================================================
+# Inherited Environment Variable Tests (for roadmap/worktree scenarios)
+# ============================================================================
+
+@test "v0-build: respects inherited BUILD_DIR over worktree config" {
+    # Create a "worktree" directory with its own .v0.rc that would set different BUILD_DIR
+    local worktree="${TEST_TEMP_DIR}/worktree"
+    mkdir -p "${worktree}/.v0/build/operations"
+    cat > "${worktree}/.v0.rc" <<EOF
+PROJECT="worktree-project"
+ISSUE_PREFIX="wt"
+BUILD_DIR="${worktree}/.v0/build"
+V0_ROOT="${worktree}"
+EOF
+
+    # Initialize git in worktree
+    (cd "${worktree}" && git init --quiet -b main && git config user.email "test@example.com" && git config user.name "Test")
+
+    # Set inherited BUILD_DIR pointing to main project (simulating roadmap worker)
+    export BUILD_DIR="${TEST_TEMP_DIR}/project/.v0/build"
+
+    # Run v0-build from worktree directory
+    cd "${worktree}"
+    run "${V0_BUILD}" test-op "Test prompt" --dry-run 2>&1
+
+    # The operation should be created in the inherited BUILD_DIR, not worktree's
+    assert [ -d "${TEST_TEMP_DIR}/project/.v0/build/operations/test-op" ]
+    assert [ ! -d "${worktree}/.v0/build/operations/test-op" ]
+}
+
+@test "v0-build: respects inherited V0_DEVELOP_BRANCH over default" {
+    # Set inherited V0_DEVELOP_BRANCH (simulating roadmap worker)
+    export V0_DEVELOP_BRANCH="v0/agent/testuser-abc1"
+
+    # Create operation to check state
+    run "${V0_BUILD}" test-op "Test prompt" --dry-run 2>&1
+
+    # The V0_DEVELOP_BRANCH should be preserved (check via state file or output)
+    # Since --dry-run doesn't create full state, we just verify no error
+    assert_success
+}
+
+@test "v0-build: uses config values when no inherited BUILD_DIR" {
+    # Ensure BUILD_DIR is not inherited
+    unset BUILD_DIR
+
+    run "${V0_BUILD}" test-op "Test prompt" --dry-run 2>&1
+
+    # Should use BUILD_DIR from .v0.rc (TEST_TEMP_DIR/project/.v0/build)
+    assert [ -d "${TEST_TEMP_DIR}/project/.v0/build/operations/test-op" ]
+}

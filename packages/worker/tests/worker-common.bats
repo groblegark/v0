@@ -702,3 +702,86 @@ EOF
     run git -C "$TEST_TEMP_DIR/repo" log -1 --format=%s
     assert_output "Other branch commit"
 }
+
+# ============================================================================
+# link_to_workspace() tests
+# ============================================================================
+
+@test "link_to_workspace passes prefix when ISSUE_PREFIX is set" {
+    # Create mock wk that logs its arguments
+    mkdir -p "$TEST_TEMP_DIR/bin"
+    cat > "$TEST_TEMP_DIR/bin/wk" <<'EOF'
+#!/bin/bash
+echo "$@" >> "$TEST_TEMP_DIR/wk.log"
+exit 0
+EOF
+    chmod +x "$TEST_TEMP_DIR/bin/wk"
+    export PATH="$TEST_TEMP_DIR/bin:$PATH"
+
+    # Create directories
+    mkdir -p "$TEST_TEMP_DIR/root/.wok"
+    mkdir -p "$TEST_TEMP_DIR/tree"
+
+    # Source the function
+    source "$PROJECT_ROOT/packages/worker/lib/worker-common.sh"
+    export ISSUE_PREFIX="testp"
+
+    link_to_workspace "$TEST_TEMP_DIR/tree" "$TEST_TEMP_DIR/root"
+
+    # Verify wk was called with --prefix
+    run cat "$TEST_TEMP_DIR/wk.log"
+    assert_output --partial "--workspace $TEST_TEMP_DIR/root/.wok"
+    assert_output --partial "--prefix testp"
+    assert_output --partial "--path $TEST_TEMP_DIR/tree"
+}
+
+@test "link_to_workspace omits prefix when ISSUE_PREFIX is not set" {
+    # Create mock wk that logs its arguments
+    mkdir -p "$TEST_TEMP_DIR/bin"
+    cat > "$TEST_TEMP_DIR/bin/wk" <<'EOF'
+#!/bin/bash
+echo "$@" >> "$TEST_TEMP_DIR/wk.log"
+exit 0
+EOF
+    chmod +x "$TEST_TEMP_DIR/bin/wk"
+    export PATH="$TEST_TEMP_DIR/bin:$PATH"
+
+    # Create directories
+    mkdir -p "$TEST_TEMP_DIR/root/.wok"
+    mkdir -p "$TEST_TEMP_DIR/tree"
+
+    # Source the function
+    source "$PROJECT_ROOT/packages/worker/lib/worker-common.sh"
+    unset ISSUE_PREFIX
+
+    link_to_workspace "$TEST_TEMP_DIR/tree" "$TEST_TEMP_DIR/root"
+
+    # Verify wk was called without --prefix
+    run cat "$TEST_TEMP_DIR/wk.log"
+    assert_output --partial "--workspace $TEST_TEMP_DIR/root/.wok"
+    assert_output --partial "--path $TEST_TEMP_DIR/tree"
+    refute_output --partial "--prefix"
+}
+
+@test "link_to_workspace succeeds even when wk fails" {
+    # Create mock wk that always fails
+    mkdir -p "$TEST_TEMP_DIR/bin"
+    cat > "$TEST_TEMP_DIR/bin/wk" <<'EOF'
+#!/bin/bash
+exit 1
+EOF
+    chmod +x "$TEST_TEMP_DIR/bin/wk"
+    export PATH="$TEST_TEMP_DIR/bin:$PATH"
+
+    # Create directories
+    mkdir -p "$TEST_TEMP_DIR/root/.wok"
+    mkdir -p "$TEST_TEMP_DIR/tree"
+
+    # Source the function
+    source "$PROJECT_ROOT/packages/worker/lib/worker-common.sh"
+    export ISSUE_PREFIX="testp"
+
+    # Should succeed even when wk fails (due to || true)
+    run link_to_workspace "$TEST_TEMP_DIR/tree" "$TEST_TEMP_DIR/root"
+    assert_success
+}

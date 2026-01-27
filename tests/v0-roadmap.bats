@@ -341,3 +341,24 @@ MOCK_EOF
     assert_output --partial "ARG: -D"
     assert_output --partial "ROADMAP_DESCRIPTION=Build a REST API with multiple endpoints"
 }
+
+# ============================================================================
+# Worker Environment Variable Tests
+# ============================================================================
+
+@test "v0-roadmap-worker: tmux command includes BUILD_DIR env var" {
+    # This test verifies that the roadmap worker passes BUILD_DIR to the tmux session
+    # We check the source code directly since launching workers in tests is complex
+
+    run grep -E "BUILD_DIR=" "${PROJECT_ROOT}/bin/v0-roadmap-worker"
+    assert_success
+    assert_output --partial "BUILD_DIR='\${BUILD_DIR}'"
+}
+
+@test "v0-roadmap-worker: tmux command includes V0_DEVELOP_BRANCH env var" {
+    # This test verifies that the roadmap worker passes V0_DEVELOP_BRANCH to the tmux session
+
+    run grep -E "V0_DEVELOP_BRANCH=" "${PROJECT_ROOT}/bin/v0-roadmap-worker"
+    assert_success
+    assert_output --partial "V0_DEVELOP_BRANCH='\${V0_DEVELOP_BRANCH}'"
+}

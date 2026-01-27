@@ -217,10 +217,16 @@ ensure_shared_workspace() {
 
 # Link worktree to shared workspace
 # Args: $1 = tree_dir (worktree path), $2 = root_dir (path with .wok)
+# Uses ISSUE_PREFIX from v0_load_config if available
 link_to_workspace() {
   local tree_dir="$1"
   local root_dir="$2"
-  wk init --workspace "${root_dir}/.wok" --path "${tree_dir}" >/dev/null 2>&1 || true
+
+  if [[ -n "${ISSUE_PREFIX:-}" ]]; then
+    wk init --workspace "${root_dir}/.wok" --prefix "${ISSUE_PREFIX}" --path "${tree_dir}" >/dev/null 2>&1 || true
+  else
+    wk init --workspace "${root_dir}/.wok" --path "${tree_dir}" >/dev/null 2>&1 || true
+  fi
 }
 
 # Reset worktree to latest develop branch
