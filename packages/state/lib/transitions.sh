@@ -168,12 +168,18 @@ sm_transition_to_pending_merge() {
 # sm_transition_to_merged <op>
 # Transition operation to merged phase
 # Also marks the wok epic as done to unblock dependents and closes plan issues
+# Idempotent: returns success if already merged
 sm_transition_to_merged() {
   local op="$1"
+  local current
+  current=$(sm_get_phase "${op}")
+
+  # Idempotent: already merged is success
+  if [[ "${current}" == "merged" ]]; then
+    return 0
+  fi
 
   if ! sm_can_transition "${op}" "merged"; then
-    local current
-    current=$(sm_get_phase "${op}")
     echo "Error: Cannot transition from '${current}' to 'merged'" >&2
     return 1
   fi
@@ -189,6 +195,41 @@ sm_transition_to_merged() {
   _sm_close_plan_issues "${op}"
 }
 
+# _sm_get_wok_dir
+# Get the directory where wok commands should run
+# Returns V0_ROOT, which should have .wok initialized
+# Worktrees should be linked via ws_init_wok_link() during creation
+_sm_get_wok_dir() {
+  echo "${V0_ROOT:-$(pwd)}"
+}
+
+# _sm_run_wok <op> <command...>
+# Run a wok command, logging errors to trace for debugging
+# Outputs stdout (not stderr), logs errors to trace, returns the command's exit code
+_sm_run_wok() {
+  local op="$1"
+  shift
+  local wk_dir
+  wk_dir=$(_sm_get_wok_dir)
+
+  local stdout_file stderr_file exit_code
+  stdout_file=$(mktemp)
+  stderr_file=$(mktemp)
+
+  (cd "${wk_dir}" && wk "$@" >"${stdout_file}" 2>"${stderr_file}") && exit_code=0 || exit_code=$?
+
+  # Log errors to trace for debugging
+  if [[ ${exit_code} -ne 0 ]] && [[ -s "${stderr_file}" ]]; then
+    v0_trace "wok:error" "wk $* failed: $(cat "${stderr_file}")"
+  fi
+
+  # Output stdout for callers that need to capture it
+  cat "${stdout_file}"
+
+  rm -f "${stdout_file}" "${stderr_file}"
+  return ${exit_code}
+}
+
 # _sm_start_wok_epic <op>
 # Internal helper to mark the operation's wok epic as started (in_progress)
 # Called when agent begins implementation work
@@ -201,19 +242,15 @@ _sm_start_wok_epic() {
     return 0  # No epic to start
   fi
 
-  # Run wk from V0_ROOT since wok may not be initialized in the current directory
-  # (e.g., when running from a workspace worktree during merge)
-  local wk_dir="${V0_ROOT:-$(pwd)}"
-
   # Check if already in_progress or done
   local status
-  status=$(cd "${wk_dir}" && wk show "${epic_id}" -o json 2>/dev/null | jq -r '.status // "unknown"')
+  status=$(_sm_run_wok "${op}" show "${epic_id}" -o json 2>/dev/null | jq -r '.status // "unknown"')
   case "${status}" in
     in_progress|done|closed) return 0 ;;  # Already started or completed
   esac
 
   # Mark as in_progress
-  if ! (cd "${wk_dir}" && wk start "${epic_id}" 2>/dev/null); then
+  if ! _sm_run_wok "${op}" start "${epic_id}"; then
     sm_emit_event "${op}" "wok:warn" "Failed to start epic ${epic_id}"
   fi
 }
@@ -230,13 +267,9 @@ _sm_close_wok_epic() {
     return 0  # No epic to close
   fi
 
-  # Run wk from V0_ROOT since wok may not be initialized in the current directory
-  # (e.g., when running from a workspace worktree during merge)
-  local wk_dir="${V0_ROOT:-$(pwd)}"
-
-  # Check if already done/closed
+  # Check if already done/closed (idempotent)
   local status
-  status=$(cd "${wk_dir}" && wk show "${epic_id}" -o json 2>/dev/null | jq -r '.status // "unknown"')
+  status=$(_sm_run_wok "${op}" show "${epic_id}" -o json 2>/dev/null | jq -r '.status // "unknown"')
   case "${status}" in
     done|closed) return 0 ;;  # Already closed
   esac
@@ -244,13 +277,13 @@ _sm_close_wok_epic() {
   # If epic is in 'todo' status, we need to start it first before marking done
   # (wk done only works for in_progress → done transition)
   if [[ "${status}" == "todo" ]]; then
-    if ! (cd "${wk_dir}" && wk start "${epic_id}" 2>/dev/null); then
+    if ! _sm_run_wok "${op}" start "${epic_id}"; then
       sm_emit_event "${op}" "wok:warn" "Failed to start epic ${epic_id} before marking done"
     fi
   fi
 
   # Mark as done - use --reason for agent compatibility
-  if ! (cd "${wk_dir}" && wk done "${epic_id}" --reason "Merged to ${V0_DEVELOP_BRANCH:-main}" 2>/dev/null); then
+  if ! _sm_run_wok "${op}" done "${epic_id}" --reason "Merged to ${V0_DEVELOP_BRANCH:-main}"; then
     # Log but don't fail - the git merge already succeeded
     sm_emit_event "${op}" "wok:warn" "Failed to mark epic ${epic_id} as done"
   fi

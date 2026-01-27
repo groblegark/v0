@@ -28,6 +28,24 @@ docs/arch/              # Architecture documentation
   ...
 ```
 
+## Design Principles
+
+### Idempotence
+
+Functions should be idempotent where possible - calling them multiple times should produce the same result as calling once. This is critical for reliability in distributed/async systems:
+
+- State transitions: `sm_transition_to_merged` succeeds if already merged
+- Workspace creation: `ws_ensure_workspace` succeeds if workspace exists and matches config
+- Wok init: `wk init --workspace` succeeds if already initialized
+
+### Safety Nets
+
+When multiple code paths can trigger the same operation, add safety nets that allow both paths to succeed:
+
+- The merge queue daemon and `v0-merge` both transition to merged state
+- Both succeed because `sm_transition_to_merged` is idempotent
+- Log warnings for debugging, but don't fail on redundant operations
+
 ## Package Layers
 
 Packages follow a layered dependency model (see `packages/CLAUDE.md`):

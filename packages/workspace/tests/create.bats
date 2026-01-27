@@ -348,3 +348,27 @@ setup() {
     main_url=$(git -C "$TEST_TEMP_DIR/project" remote get-url origin)
     assert_equal "$workspace_url" "$main_url"
 }
+
+# ============================================================================
+# ws_init_wok_link Tests
+# ============================================================================
+
+@test "ws_init_wok_link skips when wk not available" {
+    # Hide wk command
+    wk() { return 127; }
+    export -f wk
+
+    # Should succeed (skip gracefully)
+    run ws_init_wok_link "/some/path"
+    assert_success
+}
+
+@test "ws_init_wok_link skips when no .wok in main repo" {
+    # Mock wk to be available
+    wk() { echo "mock wk"; return 0; }
+    export -f wk
+
+    # V0_ROOT has no .wok directory
+    run ws_init_wok_link "$TEST_TEMP_DIR/project"
+    assert_success
+}

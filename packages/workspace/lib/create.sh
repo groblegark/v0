@@ -54,8 +54,48 @@ ws_create_worktree() {
     fi
   fi
 
+  # Initialize wok workspace link if wok exists in main repo
+  ws_init_wok_link "${V0_WORKSPACE_DIR}"
+
   echo "Workspace worktree created at ${V0_WORKSPACE_DIR}"
   return 0
+}
+
+# ws_init_wok_link <worktree_path>
+# Initialize wok in a worktree, linking to main repo's .wok database
+# Idempotent: succeeds if already initialized
+ws_init_wok_link() {
+  local worktree_path="$1"
+
+  # Skip if wk command not available
+  if ! command -v wk &>/dev/null; then
+    return 0
+  fi
+
+  # Find main repo's .wok directory
+  # Use git-common-dir to get the main repo from a worktree
+  local main_repo
+  local git_common_dir
+  git_common_dir=$(git -C "${worktree_path}" rev-parse --git-common-dir 2>/dev/null)
+  if [[ -n "${git_common_dir}" ]] && [[ "${git_common_dir}" != ".git" ]] && [[ "${git_common_dir}" != "${worktree_path}/.git" ]]; then
+    # git_common_dir points to main repo's .git, get parent
+    main_repo=$(dirname "${git_common_dir}")
+  else
+    main_repo="${V0_ROOT:-${worktree_path}}"
+  fi
+
+  local wok_dir="${main_repo}/.wok"
+  if [[ ! -d "${wok_dir}" ]]; then
+    return 0  # No wok in main repo, skip
+  fi
+
+  # Initialize wok workspace link with prefix if configured
+  # (idempotent - wk init succeeds if already initialized)
+  if [[ -n "${ISSUE_PREFIX:-}" ]]; then
+    wk init --workspace "${wok_dir}" --prefix "${ISSUE_PREFIX}" --path "${worktree_path}" >/dev/null 2>&1 || true
+  else
+    wk init --workspace "${wok_dir}" --path "${worktree_path}" >/dev/null 2>&1 || true
+  fi
 }
 
 # ws_create_clone

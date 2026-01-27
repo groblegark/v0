@@ -330,6 +330,22 @@ create_test_state() {
     assert_output "merged"
 }
 
+@test "sm_transition_to_merged is idempotent" {
+    create_test_state "test-op" "pending_merge"
+
+    # First transition succeeds
+    run sm_transition_to_merged "test-op"
+    assert_success
+
+    # Second transition also succeeds (idempotent)
+    run sm_transition_to_merged "test-op"
+    assert_success
+
+    # Still in merged state
+    run sm_read_state "test-op" "phase"
+    assert_output "merged"
+}
+
 @test "sm_transition_to_failed sets error message" {
     create_test_state "test-op" "executing"
 
