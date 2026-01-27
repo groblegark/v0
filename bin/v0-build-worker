@@ -28,10 +28,11 @@ _INHERITED_BUILD_DIR="${BUILD_DIR:-}"
 
 v0_load_config
 
-# Restore inherited BUILD_DIR if set by parent process
-if [[ -n "${_INHERITED_BUILD_DIR}" ]]; then
-    export BUILD_DIR="${_INHERITED_BUILD_DIR}"
-fi
+# Restore inherited BUILD_DIR if set by parent process.
+# Always export so child processes inherit the correct path,
+# even when BUILD_DIR was computed by v0_load_config rather than inherited.
+[[ -n "${_INHERITED_BUILD_DIR}" ]] && BUILD_DIR="${_INHERITED_BUILD_DIR}"
+export BUILD_DIR
 
 # Source nudge functions for idle session monitoring
 source "${V0_DIR}/packages/worker/lib/nudge-common.sh"

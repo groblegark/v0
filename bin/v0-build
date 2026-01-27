@@ -17,12 +17,11 @@ _INHERITED_DEVELOP_BRANCH="${V0_DEVELOP_BRANCH:-}"
 v0_load_config
 
 # Restore inherited values if set by parent process (e.g., roadmap worker)
-if [[ -n "${_INHERITED_BUILD_DIR}" ]]; then
-    export BUILD_DIR="${_INHERITED_BUILD_DIR}"
-fi
-if [[ -n "${_INHERITED_DEVELOP_BRANCH}" ]]; then
-    export V0_DEVELOP_BRANCH="${_INHERITED_DEVELOP_BRANCH}"
-fi
+# Always export so child processes (v0-build-worker) inherit the correct paths,
+# even when BUILD_DIR was computed by v0_load_config rather than inherited.
+[[ -n "${_INHERITED_BUILD_DIR}" ]] && BUILD_DIR="${_INHERITED_BUILD_DIR}"
+[[ -n "${_INHERITED_DEVELOP_BRANCH}" ]] && V0_DEVELOP_BRANCH="${_INHERITED_DEVELOP_BRANCH}"
+export BUILD_DIR V0_DEVELOP_BRANCH
 
 # Source nudge functions for idle session monitoring
 source "${V0_DIR}/packages/worker/lib/nudge-common.sh"

@@ -18,11 +18,11 @@ _INHERITED_BUILD_DIR="${BUILD_DIR:-}"
 
 v0_load_config
 
-# Restore inherited BUILD_DIR if it was set by parent process (e.g., mergeq daemon)
-# This ensures we access state files in the main repo, not the workspace
-if [[ -n "${_INHERITED_BUILD_DIR}" ]]; then
-    export BUILD_DIR="${_INHERITED_BUILD_DIR}"
-fi
+# Restore inherited BUILD_DIR if it was set by parent process (e.g., mergeq daemon).
+# Always export so child processes (v0-build launched by mg_trigger_dependents)
+# inherit the correct path, even when BUILD_DIR was computed by v0_load_config.
+[[ -n "${_INHERITED_BUILD_DIR}" ]] && BUILD_DIR="${_INHERITED_BUILD_DIR}"
+export BUILD_DIR
 
 # Ensure workspace exists for merge operations
 # All merges happen in the workspace, not V0_ROOT
