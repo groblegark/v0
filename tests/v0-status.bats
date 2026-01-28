@@ -1032,7 +1032,10 @@ EOF
 EOF
     done
 
-    # Set limit to show 8 operations (should show all 7 open + 1 completed)
+    # Set limit to show 8 operations
+    # Priority 0 (needs attention): init, planned, queued, executing, failed, conflict, interrupted, pending_merge
+    #   - pending_merge is priority 0 because it lacks merge_status:merged
+    # Priority 2 (completed): completed (has merge_status:merged), merged, cancelled
     run "$PROJECT_ROOT/bin/v0-status" --list --no-hints --max-ops 8
 
     assert_success
@@ -1042,10 +1045,10 @@ EOF
     [[ "$output" == *"test-executing:"* ]]
     [[ "$output" == *"test-failed:"* ]]
 
-    # Should show completed phase (since we have room after open ops)
-    [[ "$output" == *"test-completed:"* ]]
+    # Should show pending_merge (priority 0, needs attention)
+    [[ "$output" == *"test-pending_merge:"* ]]
 
-    # Should prune remaining completed operations (pending_merge, merged, cancelled = 3 more)
+    # Should prune priority-2 operations (completed, merged, cancelled = 3 more)
     [[ "$output" == *"... and 3 more"* ]]
 }
 
