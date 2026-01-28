@@ -45,7 +45,7 @@ setup() {
     assert_output --partial "Wait for an operation"
 }
 
-@test "v0-wait: requires operation name" {
+@test "v0-wait: requires target" {
     local project_dir
     project_dir=$(setup_isolated_project)
 
@@ -54,7 +54,7 @@ setup() {
         "'"${V0_WAIT}"'"
     '
     assert_failure
-    assert_output --partial "Operation name or --issue required"
+    assert_output --partial "Target (operation, roadmap, or issue) required"
 }
 
 @test "v0-wait: unknown option shows error" {
@@ -97,7 +97,7 @@ setup() {
     '
     assert_failure
     [ "$status" -eq 1 ]
-    assert_output --partial "ended with phase: cancelled"
+    assert_output --partial "failed or was cancelled"
 }
 
 @test "v0-wait: returns 3 for non-existent operation" {
@@ -127,7 +127,6 @@ setup() {
         "'"${V0_WAIT}"'" --issue TEST-123
     '
     assert_success
-    assert_output --partial "Found operation 'testop'"
     assert_output --partial "completed successfully"
 }
 
@@ -141,7 +140,7 @@ setup() {
     '
     assert_failure
     [ "$status" -eq 3 ]
-    assert_output --partial "No operation found for issue"
+    assert_output --partial "No work found for issue"
 }
 
 # ============================================================================
@@ -221,4 +220,206 @@ setup() {
     run "${PROJECT_ROOT}/bin/v0" --help
     assert_success
     assert_output --partial "wait"
+}
+
+# ============================================================================
+# Auto-detect Issue ID Tests
+# ============================================================================
+
+@test "v0-wait: auto-detects issue ID without --issue flag" {
+    local project_dir
+    project_dir=$(setup_isolated_project)
+    create_isolated_operation "${project_dir}" "testop" \
+      '{"name": "testop", "phase": "merged", "machine": "testmachine", "epic_id": "test-abc123"}'
+
+    run env -u PROJECT -u ISSUE_PREFIX -u V0_ROOT -u BUILD_DIR bash -c '
+        cd "'"${project_dir}"'" || exit 1
+        "'"${V0_WAIT}"'" test-abc123
+    '
+    assert_success
+    assert_output --partial "completed successfully"
+}
+
+@test "v0-wait: operation name takes precedence over issue ID pattern" {
+    # If someone names an operation with a pattern like issue ID, it should work as operation name
+    local project_dir
+    project_dir=$(setup_isolated_project)
+    create_isolated_operation "${project_dir}" "test-abc" \
+      '{"name": "test-abc", "phase": "merged", "machine": "testmachine"}'
+
+    run env -u PROJECT -u ISSUE_PREFIX -u V0_ROOT -u BUILD_DIR bash -c '
+        cd "'"${project_dir}"'" || exit 1
+        "'"${V0_WAIT}"'" test-abc
+    '
+    assert_success
+    assert_output --partial "completed successfully"
+}
+
+# ============================================================================
+# Bug Fix State Tests
+# ============================================================================
+
+@test "v0-wait: waits for bug fix completion by issue ID" {
+    local project_dir
+    project_dir=$(setup_isolated_project)
+
+    # Create fix state
+    mkdir -p "${project_dir}/.v0/build/fix/test-bug123"
+    echo '{"issue_id": "test-bug123", "status": "pushed"}' > \
+      "${project_dir}/.v0/build/fix/test-bug123/state.json"
+
+    run env -u PROJECT -u ISSUE_PREFIX -u V0_ROOT -u BUILD_DIR bash -c '
+        cd "'"${project_dir}"'" || exit 1
+        "'"${V0_WAIT}"'" test-bug123
+    '
+    assert_success
+    assert_output --partial "completed successfully"
+}
+
+@test "v0-wait: waits for in-progress bug fix with timeout" {
+    local project_dir
+    project_dir=$(setup_isolated_project)
+
+    # Create fix state that's in progress
+    mkdir -p "${project_dir}/.v0/build/fix/test-bug456"
+    echo '{"issue_id": "test-bug456", "status": "started"}' > \
+      "${project_dir}/.v0/build/fix/test-bug456/state.json"
+
+    run env -u PROJECT -u ISSUE_PREFIX -u V0_ROOT -u BUILD_DIR bash -c '
+        cd "'"${project_dir}"'" || exit 1
+        "'"${V0_WAIT}"'" test-bug456 --timeout 1s
+    '
+    assert_failure
+    [ "$status" -eq 2 ]
+    assert_output --partial "Timeout"
+}
+
+# ============================================================================
+# Chore State Tests
+# ============================================================================
+
+@test "v0-wait: waits for chore completion with pushed status" {
+    local project_dir
+    project_dir=$(setup_isolated_project)
+
+    # Create chore state with pushed status
+    mkdir -p "${project_dir}/.v0/build/chore/test-chore456"
+    echo '{"issue_id": "test-chore456", "status": "pushed"}' > \
+      "${project_dir}/.v0/build/chore/test-chore456/state.json"
+
+    run env -u PROJECT -u ISSUE_PREFIX -u V0_ROOT -u BUILD_DIR bash -c '
+        cd "'"${project_dir}"'" || exit 1
+        "'"${V0_WAIT}"'" test-chore456
+    '
+    assert_success
+    assert_output --partial "completed successfully"
+}
+
+@test "v0-wait: waits for chore completion with completed status" {
+    local project_dir
+    project_dir=$(setup_isolated_project)
+
+    # Create chore state with completed status (standalone mode)
+    mkdir -p "${project_dir}/.v0/build/chore/test-chore789"
+    echo '{"issue_id": "test-chore789", "status": "completed"}' > \
+      "${project_dir}/.v0/build/chore/test-chore789/state.json"
+
+    run env -u PROJECT -u ISSUE_PREFIX -u V0_ROOT -u BUILD_DIR bash -c '
+        cd "'"${project_dir}"'" || exit 1
+        "'"${V0_WAIT}"'" test-chore789
+    '
+    assert_success
+    assert_output --partial "completed successfully"
+}
+
+# ============================================================================
+# Roadmap State Tests
+# ============================================================================
+
+@test "v0-wait: waits for roadmap by name" {
+    local project_dir
+    project_dir=$(setup_isolated_project)
+
+    # Create roadmap state
+    mkdir -p "${project_dir}/.v0/build/roadmaps/myproject"
+    echo '{"name": "myproject", "phase": "completed"}' > \
+      "${project_dir}/.v0/build/roadmaps/myproject/state.json"
+
+    run env -u PROJECT -u ISSUE_PREFIX -u V0_ROOT -u BUILD_DIR bash -c '
+        cd "'"${project_dir}"'" || exit 1
+        "'"${V0_WAIT}"'" myproject
+    '
+    assert_success
+    assert_output --partial "Found roadmap"
+    assert_output --partial "completed successfully"
+}
+
+@test "v0-wait: waits for roadmap by idea_id" {
+    local project_dir
+    project_dir=$(setup_isolated_project)
+
+    # Create roadmap state with idea_id
+    mkdir -p "${project_dir}/.v0/build/roadmaps/api-rewrite"
+    echo '{"name": "api-rewrite", "phase": "completed", "idea_id": "test-idea123"}' > \
+      "${project_dir}/.v0/build/roadmaps/api-rewrite/state.json"
+
+    run env -u PROJECT -u ISSUE_PREFIX -u V0_ROOT -u BUILD_DIR bash -c '
+        cd "'"${project_dir}"'" || exit 1
+        "'"${V0_WAIT}"'" test-idea123
+    '
+    assert_success
+    assert_output --partial "completed successfully"
+}
+
+@test "v0-wait: roadmap failed state returns exit code 1" {
+    local project_dir
+    project_dir=$(setup_isolated_project)
+
+    # Create roadmap state with failed phase
+    mkdir -p "${project_dir}/.v0/build/roadmaps/failing"
+    echo '{"name": "failing", "phase": "failed"}' > \
+      "${project_dir}/.v0/build/roadmaps/failing/state.json"
+
+    run env -u PROJECT -u ISSUE_PREFIX -u V0_ROOT -u BUILD_DIR bash -c '
+        cd "'"${project_dir}"'" || exit 1
+        "'"${V0_WAIT}"'" failing
+    '
+    assert_failure
+    [ "$status" -eq 1 ]
+    assert_output --partial "failed or was cancelled"
+}
+
+@test "v0-wait: roadmap interrupted state returns exit code 1" {
+    local project_dir
+    project_dir=$(setup_isolated_project)
+
+    # Create roadmap state with interrupted phase
+    mkdir -p "${project_dir}/.v0/build/roadmaps/interrupted"
+    echo '{"name": "interrupted", "phase": "interrupted"}' > \
+      "${project_dir}/.v0/build/roadmaps/interrupted/state.json"
+
+    run env -u PROJECT -u ISSUE_PREFIX -u V0_ROOT -u BUILD_DIR bash -c '
+        cd "'"${project_dir}"'" || exit 1
+        "'"${V0_WAIT}"'" interrupted
+    '
+    assert_failure
+    [ "$status" -eq 1 ]
+    assert_output --partial "failed or was cancelled"
+}
+
+# ============================================================================
+# Error Handling Tests
+# ============================================================================
+
+@test "v0-wait: not found for unknown name returns exit code 3" {
+    local project_dir
+    project_dir=$(setup_isolated_project)
+
+    run env -u PROJECT -u ISSUE_PREFIX -u V0_ROOT -u BUILD_DIR bash -c '
+        cd "'"${project_dir}"'" || exit 1
+        "'"${V0_WAIT}"'" unknownname
+    '
+    assert_failure
+    [ "$status" -eq 3 ]
+    assert_output --partial "not found"
 }
