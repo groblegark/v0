@@ -111,15 +111,17 @@ show_branch_status() {
     return 0
 }
 
-# warn_branch_behind
-# Show a warning when the develop branch has commits that the user hasn't pulled.
+# warn_branch_status
+# Show sync status between user branch and agent develop branch.
+# Warning (scary): When agent is behind - they're missing your changes
+# Info (gentle): When agent is ahead - they have new work you can pull
+#
 # Only shows when:
 #   - Running from the main repo (not a worktree where agents run)
 #   - V0_DEVELOP_BRANCH is set (not standalone mode)
-#   - The develop branch is ahead of the current branch
 #
-# Returns: 0 if warning was displayed, 1 otherwise
-warn_branch_behind() {
+# Returns: 0 if message was displayed, 1 otherwise
+warn_branch_status() {
     # Skip in standalone mode (no V0_ROOT or V0_DEVELOP_BRANCH)
     [[ -z "${V0_ROOT:-}" ]] && return 1
     [[ -z "${V0_DEVELOP_BRANCH:-}" ]] && return 1
@@ -144,15 +146,13 @@ warn_branch_behind() {
     counts=$(git -C "${V0_ROOT}" rev-list --left-right --count "${remote}/${develop_branch}...HEAD" 2>/dev/null) || return 1
 
     # agent_ahead = commits agent/develop has that current doesn't (left side)
-    local agent_ahead
+    # agent_behind = commits current has that agent doesn't (right side)
+    local agent_ahead agent_behind
     agent_ahead=$(echo "${counts}" | cut -f1)
+    agent_behind=$(echo "${counts}" | cut -f2)
 
-    # No warning if develop is not ahead
-    [[ "${agent_ahead}" = "0" ]] && return 1
-
-    # Check if TTY for colors
-    local is_tty=""
-    { [[ -t 1 ]] || [[ -n "${V0_FORCE_COLOR:-}" ]]; } && is_tty=1
+    # Nothing to display if in sync
+    [[ "${agent_ahead}" = "0" ]] && [[ "${agent_behind}" = "0" ]] && return 1
 
     # Build the branch display name
     local branch_display="${develop_branch}"
@@ -162,15 +162,20 @@ warn_branch_behind() {
             ;;
     esac
 
-    # Show warning
-    if [[ -n "${is_tty}" ]]; then
-        echo -e "${C_YELLOW}Warning:${C_RESET} ${C_GREEN}${branch_display}${C_RESET} has ${C_GREEN}${agent_ahead}${C_RESET} commit(s) not in ${C_CYAN}${current_branch}${C_RESET}"
-        echo -e "  ${C_DIM}Run${C_RESET} ${C_CYAN}v0 pull${C_RESET} ${C_DIM}to merge agent changes before starting new work${C_RESET}"
-        echo ""
-    else
-        echo "Warning: ${branch_display} has ${agent_ahead} commit(s) not in ${current_branch}"
-        echo "  Run v0 pull to merge agent changes before starting new work"
+    # Warning: Agent is behind (missing user's changes) - this is the scary case
+    # C_* codes are empty when not a TTY, so no conditional needed
+    if [[ "${agent_behind}" != "0" ]]; then
+        echo -e "${C_YELLOW}Warning:${C_RESET} ${C_GREEN}${branch_display}${C_RESET} is missing ${C_RED}${agent_behind}${C_RESET} commit(s) from ${C_CYAN}${current_branch}${C_RESET}"
+        echo -e "  ${C_DIM}Agents may be working on outdated code. Run${C_RESET} ${C_CYAN}v0 push${C_RESET} ${C_DIM}to sync your changes${C_RESET}"
         echo ""
     fi
+
+    # Info: Agent is ahead (has new work) - gentle notification
+    if [[ "${agent_ahead}" != "0" ]]; then
+        echo -e "${C_CYAN}Info:${C_RESET} Agents have added ${C_GREEN}${agent_ahead}${C_RESET} commit(s) on ${C_GREEN}${branch_display}${C_RESET} not in ${C_CYAN}${current_branch}${C_RESET}"
+        echo -e "  ${C_DIM}You can accept them with${C_RESET} ${C_CYAN}v0 pull${C_RESET}"
+        echo ""
+    fi
+
     return 0
 }

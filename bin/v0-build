@@ -38,8 +38,8 @@ source "${V0_DIR}/packages/cli/lib/build/issue.sh"
 # Source branch status for behind warning
 source "${V0_DIR}/packages/status/lib/branch-status.sh"
 
-# Warn if develop branch has commits not pulled yet
-warn_branch_behind || true
+# Show branch sync status (warning if agent behind, info if ahead)
+warn_branch_status || true
 
 usage() {
   v0_help <<'EOF'
