@@ -1,7 +1,7 @@
 #!/bin/bash
 # SPDX-License-Identifier: MIT
 # Copyright (c) 2026 Alfred Jean LLC
-# v0-wait - Wait for an operation to complete
+# v0-wait - Wait for an operation, issue, or roadmap to complete
 set -e
 
 V0_DIR="$(cd "$(dirname "$0")/.." && pwd)"
@@ -10,34 +10,40 @@ v0_load_config
 
 usage() {
   v0_help <<'EOF'
-Usage: v0 wait <operation> [--timeout <duration>]
+Usage: v0 wait <target> [--timeout <duration>]
        v0 wait --issue <id> [--timeout <duration>]
 
-Wait for an operation or issue to complete.
+Wait for an operation, issue, or roadmap to complete.
 
 Arguments:
-  <operation>        Name of the operation to wait for
+  <target>           Operation name, roadmap name, or issue ID (auto-detected)
 
 Options:
-  --issue, -i <id>   Wait for operation linked to issue ID
+  --issue, -i <id>   Wait for work linked to issue ID (explicit)
   --timeout, -t <d>  Maximum time to wait (e.g., 30s, 5m, 1h)
   --quiet, -q        Suppress progress output
   -h, --help         Show this help
 
 Exit codes:
-  0    Operation completed successfully (merged)
-  1    Operation failed or was cancelled
+  0    Completed successfully
+  1    Failed or was cancelled
   2    Timeout expired
-  3    Operation not found
+  3    Target not found
+
+Target resolution:
+  Issue IDs (${ISSUE_PREFIX}-xxx) are auto-detected by pattern.
+  Otherwise, the target is looked up as an operation or roadmap name.
 
 Duration format:
   Supports suffixes: s (seconds), m (minutes), h (hours)
   Examples: 30s, 5m, 1h, 90m
 
 Examples:
-  v0 wait auth                    # Wait for 'auth' to complete
+  v0 wait auth                    # Wait for operation 'auth'
+  v0 wait ${ISSUE_PREFIX}-abc123  # Wait for issue (auto-detected)
+  v0 wait myproject               # Wait for operation or roadmap
   v0 wait auth --timeout 30m      # Wait up to 30 minutes
-  v0 wait --issue PROJ-123        # Wait for operation with issue ID
+  v0 wait --issue ${ISSUE_PREFIX}-123  # Explicit issue ID
   v0 wait auth && echo "done"     # Chain commands on success
 EOF
   exit 0
@@ -66,80 +72,285 @@ parse_duration() {
   fi
 }
 
-# Find operation by issue ID
-# Returns operation name on stdout and exit 0 if found, exit 1 if not found
-find_op_by_issue() {
-  local issue_id="$1"
-  local found=""
+# Check if argument looks like a wok issue ID
+# Uses the project's ISSUE_PREFIX pattern
+is_issue_id() {
+  local arg="$1"
+  local pattern
+  pattern=$(v0_issue_pattern)
+  [[ "${arg}" =~ ^${pattern}$ ]]
+}
 
-  if [[ ! -d "${BUILD_DIR}/operations" ]]; then
-    return 1
+# Find work item by issue ID
+# Returns: "type:name" (e.g., "operation:auth", "fix:v0-abc", "chore:v0-def", "roadmap:myproject")
+# Exit 0 if found, 1 if not found
+find_work_by_issue() {
+  local issue_id="$1"
+
+  # 1. Check operations (epic_id field)
+  if [[ -d "${BUILD_DIR}/operations" ]]; then
+    for state_file in "${BUILD_DIR}"/operations/*/state.json; do
+      [[ -f "${state_file}" ]] || continue
+      local epic_id
+      epic_id=$(jq -r '.epic_id // empty' "${state_file}" 2>/dev/null)
+      if [[ "${epic_id}" == "${issue_id}" ]]; then
+        local op_name
+        op_name=$(basename "$(dirname "${state_file}")")
+        echo "operation:${op_name}"
+        return 0
+      fi
+    done
   fi
 
-  for state_file in "${BUILD_DIR}"/operations/*/state.json; do
-    [[ -f "${state_file}" ]] || continue
+  # 2. Check fix state (direct lookup by issue ID)
+  local fix_state="${BUILD_DIR}/fix/${issue_id}/state.json"
+  if [[ -f "${fix_state}" ]]; then
+    echo "fix:${issue_id}"
+    return 0
+  fi
 
-    local epic_id
-    epic_id=$(jq -r '.epic_id // empty' "${state_file}" 2>/dev/null)
-    if [[ "${epic_id}" == "${issue_id}" ]]; then
-      basename "$(dirname "${state_file}")"
-      return 0
-    fi
-  done
+  # 3. Check chore state (direct lookup by issue ID)
+  local chore_state="${BUILD_DIR}/chore/${issue_id}/state.json"
+  if [[ -f "${chore_state}" ]]; then
+    echo "chore:${issue_id}"
+    return 0
+  fi
 
-  # No matching operation found
+  # 4. Check roadmaps (idea_id field)
+  if [[ -d "${BUILD_DIR}/roadmaps" ]]; then
+    for state_file in "${BUILD_DIR}"/roadmaps/*/state.json; do
+      [[ -f "${state_file}" ]] || continue
+      local idea_id
+      idea_id=$(jq -r '.idea_id // empty' "${state_file}" 2>/dev/null)
+      if [[ "${idea_id}" == "${issue_id}" ]]; then
+        local roadmap_name
+        roadmap_name=$(basename "$(dirname "${state_file}")")
+        echo "roadmap:${roadmap_name}"
+        return 0
+      fi
+    done
+  fi
+
   return 1
 }
 
-# Wait for operation to reach terminal phase
-wait_for_completion() {
-  local op="$1"
-  local timeout_secs="$2"
-  local quiet="$3"
+# Resolve work item by name (operation or roadmap)
+# Returns: "type:name" or exit 1 if not found
+resolve_by_name() {
+  local name="$1"
 
-  local start_time elapsed phase
+  # Check if it's an operation
+  if sm_state_exists "${name}"; then
+    echo "operation:${name}"
+    return 0
+  fi
+
+  # Check if it's a roadmap
+  if [[ -f "${BUILD_DIR}/roadmaps/${name}/state.json" ]]; then
+    echo "roadmap:${name}"
+    return 0
+  fi
+
+  return 1
+}
+
+# Check if work item is complete based on type
+# Returns 0 if complete, 1 if in progress, 2 if failed
+check_work_completion() {
+  local work_type="$1"
+  local work_id="$2"
+
+  case "${work_type}" in
+    operation)
+      local phase
+      phase=$(sm_read_state "${work_id}" "phase")
+      if sm_is_terminal_phase "${phase}"; then
+        [[ "${phase}" == "merged" ]] && return 0 || return 2
+      fi
+      return 1
+      ;;
+
+    fix|chore)
+      local state_file="${BUILD_DIR}/${work_type}/${work_id}/state.json"
+      local status
+      status=$(jq -r '.status // empty' "${state_file}" 2>/dev/null)
+
+      # Terminal states for fix/chore workers
+      case "${status}" in
+        pushed|completed) return 0 ;;  # Success
+        *) return 1 ;;  # In progress
+      esac
+      ;;
+
+    roadmap)
+      local state_file="${BUILD_DIR}/roadmaps/${work_id}/state.json"
+      local phase
+      phase=$(jq -r '.phase // empty' "${state_file}" 2>/dev/null)
+
+      # Terminal states for roadmaps
+      case "${phase}" in
+        completed) return 0 ;;           # Success
+        failed|interrupted) return 2 ;;  # Failed
+        *) return 1 ;;                   # In progress
+      esac
+      ;;
+  esac
+
+  return 1
+}
+
+# Check wok issue status directly
+# Returns 0 if done/closed, 1 if open, 2 if not found
+check_wok_status() {
+  local issue_id="$1"
+
+  local status
+  status=$(wk show "${issue_id}" -o json 2>/dev/null | jq -r '.status // empty')
+
+  case "${status}" in
+    done|closed) return 0 ;;
+    todo|in_progress) return 1 ;;
+    "") return 2 ;;  # Issue not found
+    *) return 1 ;;   # Unknown status, treat as in-progress
+  esac
+}
+
+# Wait for work item to complete
+# Args: work_type work_id timeout_secs quiet
+wait_for_work_completion() {
+  local work_type="$1"
+  local work_id="$2"
+  local timeout_secs="$3"
+  local quiet="$4"
+
+  local start_time elapsed
   start_time=$(date +%s)
 
+  local display_name="${work_id}"
+  [[ "${work_type}" != "operation" ]] && display_name="${work_type}:${work_id}"
+
   while true; do
-    # Check if operation exists
-    if ! sm_state_exists "${op}"; then
-      echo "Error: Operation '${op}' not found" >&2
-      return 3
-    fi
+    local result
+    check_work_completion "${work_type}" "${work_id}" && result=0 || result=$?
 
-    # Get current phase
-    phase=$(sm_read_state "${op}" "phase")
-
-    # Check for terminal state
-    if sm_is_terminal_phase "${phase}"; then
-      if [[ "${phase}" == "merged" ]]; then
-        [[ -z "${quiet}" ]] && echo "Operation '${op}' completed successfully"
+    case ${result} in
+      0) # Complete
+        [[ -z "${quiet}" ]] && echo "'${display_name}' completed successfully"
         return 0
-      else
-        [[ -z "${quiet}" ]] && echo "Operation '${op}' ended with phase: ${phase}"
+        ;;
+      2) # Failed
+        [[ -z "${quiet}" ]] && echo "'${display_name}' failed or was cancelled"
         return 1
-      fi
-    fi
+        ;;
+    esac
 
     # Check timeout
     if [[ -n "${timeout_secs}" ]]; then
       elapsed=$(( $(date +%s) - start_time ))
       if [[ ${elapsed} -ge ${timeout_secs} ]]; then
-        [[ -z "${quiet}" ]] && echo "Timeout: Operation '${op}' still in phase '${phase}' after ${elapsed}s"
+        [[ -z "${quiet}" ]] && echo "Timeout: '${display_name}' still in progress after ${elapsed}s"
         return 2
       fi
     fi
 
     # Show progress (unless quiet)
-    [[ -z "${quiet}" ]] && printf "\rWaiting for '%s' (phase: %s)..." "${op}" "${phase}"
+    [[ -z "${quiet}" ]] && printf "\rWaiting for '%s'..." "${display_name}"
 
     # Sleep before next check
     sleep 2
   done
 }
 
+# Wait for issue with wok fallback
+# Used when we have an issue ID but may or may not have local state
+wait_for_issue() {
+  local issue_id="$1"
+  local timeout_secs="$2"
+  local quiet="$3"
+
+  local start_time elapsed work_info
+  start_time=$(date +%s)
+
+  # First, do a quick check if the issue exists at all
+  # (either local state or in wok)
+  local has_local_state=0
+  if find_work_by_issue "${issue_id}" >/dev/null 2>&1; then
+    has_local_state=1
+  fi
+
+  # If no local state, verify issue exists in wok before polling
+  if [[ "${has_local_state}" -eq 0 ]]; then
+    local wok_result
+    if check_wok_status "${issue_id}"; then
+      wok_result=0
+    else
+      wok_result=$?
+    fi
+    if [[ ${wok_result} -eq 2 ]]; then
+      echo "Error: No work found for issue '${issue_id}'" >&2
+      return 3
+    elif [[ ${wok_result} -eq 0 ]]; then
+      [[ -z "${quiet}" ]] && echo "Issue '${issue_id}' is done (per wok)"
+      return 0
+    fi
+    # wok_result == 1 means in progress, continue to polling
+  fi
+
+  while true; do
+    # Try to find local state first
+    if work_info=$(find_work_by_issue "${issue_id}"); then
+      local work_type work_id
+      work_type="${work_info%%:*}"
+      work_id="${work_info#*:}"
+
+      local result
+      check_work_completion "${work_type}" "${work_id}" && result=0 || result=$?
+
+      case ${result} in
+        0) # Complete
+          [[ -z "${quiet}" ]] && echo "Issue '${issue_id}' completed successfully"
+          return 0
+          ;;
+        2) # Failed
+          [[ -z "${quiet}" ]] && echo "Issue '${issue_id}' failed"
+          return 1
+          ;;
+      esac
+    else
+      # No local state - check wok directly
+      local wok_status
+      check_wok_status "${issue_id}" && wok_status=0 || wok_status=$?
+      case ${wok_status} in
+        0) # Done in wok
+          [[ -z "${quiet}" ]] && echo "Issue '${issue_id}' is done (per wok)"
+          return 0
+          ;;
+        2) # Not found (shouldn't happen if we checked above, but be safe)
+          echo "Error: Issue '${issue_id}' not found" >&2
+          return 3
+          ;;
+        # 1 = still in progress in wok, continue polling
+      esac
+    fi
+
+    # Check timeout
+    if [[ -n "${timeout_secs}" ]]; then
+      elapsed=$(( $(date +%s) - start_time ))
+      if [[ ${elapsed} -ge ${timeout_secs} ]]; then
+        [[ -z "${quiet}" ]] && echo "Timeout: Issue '${issue_id}' still in progress after ${elapsed}s"
+        return 2
+      fi
+    fi
+
+    # Show progress (unless quiet)
+    [[ -z "${quiet}" ]] && printf "\rWaiting for issue '%s'..." "${issue_id}"
+
+    sleep 2
+  done
+}
+
 # Parse arguments
-OP_NAME=""
+POSITIONAL_ARG=""
 ISSUE_ID=""
 TIMEOUT=""
 QUIET=""
@@ -167,24 +378,11 @@ while [[ $# -gt 0 ]]; do
       exit 1
       ;;
     *)
-      OP_NAME="$1"
+      POSITIONAL_ARG="$1"
       shift
       ;;
   esac
 done
-
-# Resolve operation name
-if [[ -n "${ISSUE_ID}" ]]; then
-  if ! OP_NAME=$(find_op_by_issue "${ISSUE_ID}"); then
-    echo "Error: No operation found for issue '${ISSUE_ID}'" >&2
-    exit 3
-  fi
-  [[ -z "${QUIET}" ]] && echo "Found operation '${OP_NAME}' for issue '${ISSUE_ID}'"
-elif [[ -z "${OP_NAME}" ]]; then
-  echo "Error: Operation name or --issue required" >&2
-  echo "Run 'v0 wait --help' for usage" >&2
-  exit 1
-fi
 
 # Parse timeout if provided
 TIMEOUT_SECS=""
@@ -192,5 +390,28 @@ if [[ -n "${TIMEOUT}" ]]; then
   TIMEOUT_SECS=$(parse_duration "${TIMEOUT}") || exit 1
 fi
 
-# Wait for completion
-wait_for_completion "${OP_NAME}" "${TIMEOUT_SECS}" "${QUIET}"
+# Resolve target and wait
+if [[ -n "${ISSUE_ID}" ]]; then
+  # Explicit --issue flag takes precedence
+  [[ -z "${QUIET}" ]] && echo "Waiting for issue '${ISSUE_ID}'..."
+  wait_for_issue "${ISSUE_ID}" "${TIMEOUT_SECS}" "${QUIET}"
+elif [[ -n "${POSITIONAL_ARG}" ]]; then
+  # First, try to resolve as operation or roadmap name
+  if work_info=$(resolve_by_name "${POSITIONAL_ARG}"); then
+    work_type="${work_info%%:*}"
+    work_id="${work_info#*:}"
+    [[ -z "${QUIET}" ]] && [[ "${work_type}" != "operation" ]] && echo "Found ${work_type} '${work_id}'"
+    wait_for_work_completion "${work_type}" "${work_id}" "${TIMEOUT_SECS}" "${QUIET}"
+  elif is_issue_id "${POSITIONAL_ARG}"; then
+    # Looks like an issue ID - use issue-based lookup with wok fallback
+    wait_for_issue "${POSITIONAL_ARG}" "${TIMEOUT_SECS}" "${QUIET}"
+  else
+    # Not an operation, not a roadmap, and not an issue ID pattern
+    echo "Error: '${POSITIONAL_ARG}' not found as operation, roadmap, or issue ID" >&2
+    exit 3
+  fi
+else
+  echo "Error: Target (operation, roadmap, or issue) required" >&2
+  echo "Run 'v0 wait --help' for usage" >&2
+  exit 1
+fi
