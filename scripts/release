@@ -56,7 +56,7 @@ get_file_version() {
 
 # Get highest tagged version (without 'v' prefix)
 get_highest_tag_version() {
-    git tag --sort=-v:refname | grep '^v[0-9]' | head -1 | sed 's/^v//' || echo "0.0.0"
+    git tag --sort=-v:refname | grep '^v' | head -1 | sed 's/^v//' || echo "0.0.0"
 }
 
 # Compare semver versions: returns 0 if $1 > $2
@@ -158,6 +158,12 @@ if ! git push origin main; then
 fi
 step_pass "Pushed 'main' to origin"
 
+step_start "Pushing 'main' to github"
+if ! git push github main; then
+    step_fail "Failed to push to github"
+fi
+step_pass "Pushed 'main' to github"
+
 # Step 6: Wait for CI checks
 step_start "Waiting for CI checks to pass"
 echo "    (this may take a few minutes)"
@@ -171,10 +177,18 @@ ATTEMPT=0
 while [ $ATTEMPT -lt $MAX_ATTEMPTS ]; do
     ATTEMPT=$((ATTEMPT + 1))
 
-    # Get combined status using gh
-    STATUS=$(gh api "repos/{owner}/{repo}/commits/$COMMIT_SHA/status" --jq '.state' 2>/dev/null || echo "error")
+    # Get combined status using gh (for external CI integrations)
+    # Note: returns "pending" with total_count=0 if no external status checks are configured
+    STATUS_JSON=$(gh api "repos/{owner}/{repo}/commits/$COMMIT_SHA/status" --jq '{state: .state, count: .total_count}' 2>/dev/null || echo '{"state":"error","count":0}')
+    STATUS=$(echo "$STATUS_JSON" | jq -r '.state')
+    STATUS_COUNT=$(echo "$STATUS_JSON" | jq -r '.count')
 
-    # Also check GitHub Actions workflow runs
+    # If no external status checks configured, treat as success (only check-runs matter)
+    if [ "$STATUS_COUNT" = "0" ]; then
+        STATUS="success"
+    fi
+
+    # Check GitHub Actions workflow runs (check-runs API)
     CHECK_STATUS=$(gh api "repos/{owner}/{repo}/commits/$COMMIT_SHA/check-runs" --jq '.check_runs | map(.conclusion) | if length == 0 then "pending" elif all(. == "success") then "success" elif any(. == null) then "pending" elif any(. == "failure" or . == "cancelled") then "failure" else "pending" end' 2>/dev/null || echo "error")
 
     # Determine overall status
@@ -212,6 +226,12 @@ if ! git push origin "$TAG_NAME"; then
     step_fail "Failed to push tag to origin"
 fi
 step_pass "Pushed tag '$TAG_NAME' to origin"
+
+step_start "Pushing tag '$TAG_NAME' to github"
+if ! git push github "$TAG_NAME"; then
+    step_fail "Failed to push tag to github"
+fi
+step_pass "Pushed tag '$TAG_NAME' to github"
 
 # Step 8: Wait for release build
 step_start "Waiting for release build"
