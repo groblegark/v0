@@ -13,11 +13,12 @@ timestamp_to_epoch() {
 
   # Detect OS and use appropriate date command
   if [[ "$(uname)" == "Darwin" ]]; then
-    # macOS: use -j flag
+    # macOS: use -j flag with TZ=UTC
     TZ=UTC date -j -f "%Y-%m-%d %H:%M:%S" "${formatted}" +%s 2>/dev/null
   else
-    # Linux: use -d flag
-    TZ=UTC date -d "${formatted}" +%s 2>/dev/null
+    # Linux: use -d flag, append UTC to ensure proper timezone parsing
+    # GNU date treats input as local time unless timezone is specified
+    TZ=UTC date -d "${formatted} UTC" +%s 2>/dev/null
   fi
 }
 
