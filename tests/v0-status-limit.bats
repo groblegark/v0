@@ -60,7 +60,9 @@ EOF
 # Helper to generate timestamp from epoch (cross-platform)
 epoch_to_timestamp() {
   local epoch="$1"
-  date -u -d "@${epoch}" +%Y-%m-%dT%H:%M:%SZ 2>/dev/null || date -u -r "${epoch}" +%Y-%m-%dT%H:%M:%SZ 2>/dev/null
+  # Linux: date -u -d @EPOCH (GNU date)
+  # macOS: date -u -r EPOCH (BSD date)
+  date -u -d "@$epoch" +%Y-%m-%dT%H:%M:%SZ 2>/dev/null || date -u -r "$epoch" +%Y-%m-%dT%H:%M:%SZ 2>/dev/null
 }
 
 # ============================================================================
