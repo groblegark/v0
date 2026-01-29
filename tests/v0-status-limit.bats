@@ -3,6 +3,9 @@
 
 load '../packages/test-support/helpers/test_helper'
 
+# Base epoch for 2026-01-01T10:00:00Z - used for test timestamp generation
+readonly BASE_EPOCH=1767261600
+
 setup() {
   _base_setup
   setup_v0_env
@@ -43,8 +46,7 @@ create_numbered_operations() {
     mkdir -p "$ops_dir/${prefix}${i}"
     # Use sequential timestamps to ensure ordering
     local ts
-    ts=$(TZ=UTC date -j -v+${i}S -f "%Y-%m-%dT%H:%M:%SZ" "2026-01-01T10:00:00Z" +%Y-%m-%dT%H:%M:%SZ 2>/dev/null || \
-         date -u -d "2026-01-01 10:00:00 + ${i} seconds" +%Y-%m-%dT%H:%M:%SZ 2>/dev/null)
+    ts=$(epoch_to_timestamp $((BASE_EPOCH + i)))
 
     local after_field=""
     [[ -n "$after" ]] && after_field=", \"after\": \"$after\""
@@ -53,6 +55,12 @@ create_numbered_operations() {
 {"name": "${prefix}${i}", "type": "feature", "phase": "$phase", "created_at": "$ts"$after_field}
 EOF
   done
+}
+
+# Helper to generate timestamp from epoch (cross-platform)
+epoch_to_timestamp() {
+  local epoch="$1"
+  date -u -d "@${epoch}" +%Y-%m-%dT%H:%M:%SZ 2>/dev/null || date -u -r "${epoch}" +%Y-%m-%dT%H:%M:%SZ 2>/dev/null
 }
 
 # ============================================================================
@@ -103,8 +111,7 @@ EOF
   for i in {1..10}; do
     mkdir -p "$ops_dir/blocked${i}"
     local ts
-    ts=$(TZ=UTC date -j -v+$((i+10))S -f "%Y-%m-%dT%H:%M:%SZ" "2026-01-01T10:00:00Z" +%Y-%m-%dT%H:%M:%SZ 2>/dev/null || \
-         date -u -d "2026-01-01 10:00:00 + $((i+10)) seconds" +%Y-%m-%dT%H:%M:%SZ 2>/dev/null)
+    ts=$(epoch_to_timestamp $((BASE_EPOCH + i + 10)))
     cat > "$ops_dir/blocked${i}/state.json" <<EOF
 {"name": "blocked${i}", "type": "feature", "phase": "init", "created_at": "$ts", "after": "some-parent"}
 EOF
@@ -114,8 +121,7 @@ EOF
   for i in {1..5}; do
     mkdir -p "$ops_dir/open${i}"
     local ts
-    ts=$(TZ=UTC date -j -v+$((i+20))S -f "%Y-%m-%dT%H:%M:%SZ" "2026-01-01T10:00:00Z" +%Y-%m-%dT%H:%M:%SZ 2>/dev/null || \
-         date -u -d "2026-01-01 10:00:00 + $((i+20)) seconds" +%Y-%m-%dT%H:%M:%SZ 2>/dev/null)
+    ts=$(epoch_to_timestamp $((BASE_EPOCH + i + 20)))
     cat > "$ops_dir/open${i}/state.json" <<EOF
 {"name": "open${i}", "type": "feature", "phase": "executing", "created_at": "$ts"}
 EOF
@@ -137,8 +143,7 @@ EOF
   for i in {1..20}; do
     mkdir -p "$ops_dir/completed${i}"
     local ts
-    ts=$(TZ=UTC date -j -v+${i}S -f "%Y-%m-%dT%H:%M:%SZ" "2026-01-01T10:00:00Z" +%Y-%m-%dT%H:%M:%SZ 2>/dev/null || \
-         date -u -d "2026-01-01 10:00:00 +${i} seconds" +%Y-%m-%dT%H:%M:%SZ 2>/dev/null)
+    ts=$(epoch_to_timestamp $((BASE_EPOCH + i)))
     cat > "$ops_dir/completed${i}/state.json" <<EOF
 {"name": "completed${i}", "type": "feature", "phase": "completed", "created_at": "$ts", "merge_status": "merged"}
 EOF
@@ -148,8 +153,7 @@ EOF
   for i in {1..5}; do
     mkdir -p "$ops_dir/blocked${i}"
     local ts
-    ts=$(TZ=UTC date -j -v+$((i+20))S -f "%Y-%m-%dT%H:%M:%SZ" "2026-01-01T10:00:00Z" +%Y-%m-%dT%H:%M:%SZ 2>/dev/null || \
-         date -u -d "2026-01-01 10:00:00 + $((i+20)) seconds" +%Y-%m-%dT%H:%M:%SZ 2>/dev/null)
+    ts=$(epoch_to_timestamp $((BASE_EPOCH + i + 20)))
     cat > "$ops_dir/blocked${i}/state.json" <<EOF
 {"name": "blocked${i}", "type": "feature", "phase": "queued", "created_at": "$ts", "after": "parent-op"}
 EOF
