@@ -1,0 +1,321 @@
+#!/bin/bash
+# SPDX-License-Identifier: MIT
+# Copyright (c) 2026 Alfred Jean LLC
+set -e
+
+V0_DIR="$(cd "$(dirname "$0")/.." && pwd)"
+source "${V0_DIR}/packages/cli/lib/v0-common.sh"
+v0_load_config
+
+usage() {
+  v0_help <<'EOF'
+Usage: v0 roadmap <name> "<roadmap description>" [options]
+       v0 roadmap <name> --resume [options]
+       v0 roadmap --status
+
+Orchestrate autonomous work using a roadmap.
+
+The roadmap command launches an agent that:
+1. Explores the project/codebase
+2. Creates a roadmap outline of epics and milestones
+3. Adds pre-checks and post-checks around milestones
+4. Sequentially queues all work using 'v0 feature --after'
+
+Options:
+  --resume         Resume an existing roadmap operation
+  --status         Show status of all roadmaps
+  --dry-run        Show what would happen without executing
+  --attach         Follow worker logs after launching
+  --foreground     Run in foreground (blocking)
+
+Examples:
+  v0 roadmap rewrite "Rewrite the entire frontend in React"
+  v0 roadmap api "Build a comprehensive REST API"
+  v0 roadmap --status
+  v0 roadmap rewrite --resume
+  v0 roadmap api --resume --attach
+EOF
+  exit 1
+}
+
+NAME=""
+DESCRIPTION=""
+RESUME=""
+STATUS=""
+DRY_RUN=""
+ATTACH=""
+FOREGROUND=""
+
+# Parse args
+while [[ $# -gt 0 ]]; do
+  case "$1" in
+    --resume) RESUME=1; shift ;;
+    --status) STATUS=1; shift ;;
+    --dry-run) DRY_RUN=1; shift ;;
+    --attach) ATTACH=1; shift ;;
+    --foreground) FOREGROUND=1; shift ;;
+    -h|--help) usage ;;
+    -*)
+      echo "Unknown option: $1"
+      usage
+      ;;
+    *)
+      if [[ -z "${NAME}" ]]; then
+        NAME="$1"
+      elif [[ -z "${DESCRIPTION}" ]]; then
+        DESCRIPTION="$1"
+      else
+        echo "Unexpected argument: $1"
+        usage
+      fi
+      shift
+      ;;
+  esac
+done
+
+# Handle --status flag (list all roadmaps)
+if [[ -n "${STATUS}" ]]; then
+  ROADMAPS_DIR="${BUILD_DIR}/roadmaps"
+  if [[ ! -d "${ROADMAPS_DIR}" ]]; then
+    echo "No roadmaps found."
+    exit 0
+  fi
+
+  echo "Roadmaps:"
+  echo ""
+
+  found=0
+  for state_file in "${ROADMAPS_DIR}"/*/state.json; do
+    [[ ! -f "${state_file}" ]] && continue
+
+    phase=$(jq -r '.phase' "${state_file}")
+    # Skip terminal/error states per docs
+    case "${phase}" in
+      completed|failed|interrupted) continue ;;
+    esac
+
+    found=1
+
+    name=$(jq -r '.name' "${state_file}")
+    desc=$(jq -r '.roadmap_description' "${state_file}")
+    idea_id=$(jq -r '.idea_id // empty' "${state_file}")
+    created=$(jq -r '.created_at' "${state_file}")
+
+    # Truncate description for display
+    desc_short="${desc:0:50}"
+    [[ ${#desc} -gt 50 ]] && desc_short="${desc_short}..."
+
+    printf "  %-20s %-15s %s\n" "${name}:" "${phase}" "${desc_short}"
+    [[ -n "${idea_id}" ]] && printf "  %-20s %s\n" "" "(${idea_id})"
+  done
+
+  if [[ ${found} -eq 0 ]]; then
+    echo "  (none)"
+  fi
+
+  exit 0
+fi
+
+[[ -z "${NAME}" ]] && usage
+[[ -z "${DESCRIPTION}" ]] && [[ -z "${RESUME}" ]] && usage
+
+# Require dependencies
+v0_check_deps tmux jq claude m4
+
+# Validate name format
+if [[ ! "${NAME}" =~ ^[a-zA-Z0-9][a-zA-Z0-9-]*$ ]]; then
+  echo "Error: Name must start with an alphanumeric character and contain only alphanumeric characters and hyphens"
+  exit 1
+fi
+
+# Roadmap state management (separate from operations)
+ROADMAPS_DIR="${BUILD_DIR}/roadmaps"
+STATE_DIR="${ROADMAPS_DIR}/${NAME}"
+STATE_FILE="${STATE_DIR}/state.json"
+
+update_state() {
+  local key="$1"
+  local value="$2"
+  local tmp
+  tmp=$(mktemp)
+  jq ".${key} = ${value}" "${STATE_FILE}" > "${tmp}" && mv "${tmp}" "${STATE_FILE}"
+}
+
+get_state() {
+  jq -r ".$1 // empty" "${STATE_FILE}"
+}
+
+emit_event() {
+  local event="$1"
+  local details="$2"
+  echo "[$(date +%H:%M:%S)] ${event}: ${details}"
+  echo "[$(date -u +%Y-%m-%dT%H:%M:%SZ)] ${event}: ${details}" >> "${STATE_DIR}/logs/events.log"
+}
+
+init_state() {
+  mkdir -p "${STATE_DIR}/logs"
+  local machine
+  machine=$(hostname -s)
+
+  cat > "${STATE_FILE}" <<EOF
+{
+  "name": "${NAME}",
+  "type": "roadmap",
+  "machine": "${machine}",
+  "roadmap_description": $(printf '%s' "${DESCRIPTION}" | jq -Rs .),
+  "phase": "init",
+  "idea_id": null,
+  "epics": [],
+  "milestones": [],
+  "features_queued": [],
+  "created_at": "$(date -u +%Y-%m-%dT%H:%M:%SZ)",
+  "completed_at": null,
+  "planning_session": null,
+  "worktree": null,
+  "worker_pid": null,
+  "worker_log": null
+}
+EOF
+}
+
+create_idea_issue() {
+  local desc="$1"
+  local idea_id
+
+  # Create idea issue for the roadmap, -o id returns just the issue ID
+  idea_id=$(wk new idea "${desc}" --label "roadmap:${NAME}" -o id 2>/dev/null)
+
+  if [[ -z "${idea_id}" ]]; then
+    echo "Warning: Failed to create roadmap idea issue (wk may not be initialized)"
+    return 1
+  fi
+
+  echo "${idea_id}"
+}
+
+# Resume logic
+if [[ -n "${RESUME}" ]]; then
+  if [[ ! -f "${STATE_FILE}" ]]; then
+    echo "Error: No roadmap found for '${NAME}'"
+    exit 1
+  fi
+
+  PHASE=$(get_state phase)
+  DESCRIPTION=$(get_state roadmap_description)
+
+  echo "Resuming roadmap '${NAME}' from phase: ${PHASE}"
+
+  # Handle --attach flag
+  if [[ -n "${ATTACH}" ]]; then
+    WORKER_PID=$(get_state worker_pid)
+    WORKER_LOG=$(get_state worker_log)
+    if [[ -n "${WORKER_PID}" ]] && [[ "${WORKER_PID}" != "null" ]] && kill -0 "${WORKER_PID}" 2>/dev/null; then
+      echo "Worker is running (PID: ${WORKER_PID})"
+      echo "Following worker log (Ctrl+C to detach)..."
+      echo ""
+      tail -f "${WORKER_LOG}"
+      exit 0
+    elif [[ -n "${WORKER_LOG}" ]] && [[ "${WORKER_LOG}" != "null" ]] && [[ -f "${WORKER_LOG}" ]]; then
+      echo "Worker is not running. Showing recent log:"
+      echo ""
+      tail -50 "${WORKER_LOG}"
+      exit 0
+    else
+      echo "No worker log found"
+      exit 1
+    fi
+  fi
+
+  # Check if background worker is already running
+  WORKER_PID=$(get_state worker_pid)
+  WORKER_LOG=$(get_state worker_log)
+  if [[ -n "${WORKER_PID}" ]] && [[ "${WORKER_PID}" != "null" ]] && kill -0 "${WORKER_PID}" 2>/dev/null; then
+    echo "Background worker already running (PID: ${WORKER_PID})"
+    echo ""
+    echo "Status:    v0 roadmap --status"
+    echo "View logs: tail -f ${WORKER_LOG}"
+    echo ""
+    echo "To force restart, first kill the worker:"
+    echo "  kill ${WORKER_PID}"
+    echo "  v0 roadmap ${NAME} --resume"
+    exit 0
+  fi
+
+  # Clear stale worker_pid if process is dead
+  if [[ -n "${WORKER_PID}" ]] && [[ "${WORKER_PID}" != "null" ]]; then
+    update_state "worker_pid" "null"
+  fi
+
+  # Continue with phase execution below
+else
+  # New roadmap - check for existing operation
+  if [[ -f "${STATE_FILE}" ]]; then
+    PHASE=$(get_state phase)
+    echo "Error: Roadmap '${NAME}' already exists (phase: ${PHASE})"
+    echo "Use 'v0 roadmap ${NAME} --resume' to continue, or choose a different name"
+    exit 1
+  fi
+
+  # Initialize new roadmap
+  echo "Creating roadmap '${NAME}'..."
+  init_state
+  emit_event "roadmap:created" "Roadmap initialized: ${DESCRIPTION}"
+
+  # Create idea issue
+  if idea_id=$(create_idea_issue "${DESCRIPTION}"); then
+    update_state "idea_id" "\"${idea_id}\""
+    emit_event "idea:created" "Created idea issue: ${idea_id}"
+    echo "  Idea: ${idea_id}"
+  fi
+fi
+
+# Dry run stops here
+if [[ -n "${DRY_RUN}" ]]; then
+  echo ""
+  echo "Dry run complete. Would launch roadmap worker for '${NAME}'."
+  exit 0
+fi
+
+# Launch background worker (unless foreground mode)
+if [[ -z "${FOREGROUND}" ]]; then
+  WORKER_LOG="${STATE_DIR}/logs/worker.log"
+  mkdir -p "${STATE_DIR}/logs"
+
+  nohup "${V0_DIR}/bin/v0-roadmap-worker" "${NAME}" > "${WORKER_LOG}" 2>&1 &
+  WORKER_PID=$!
+
+  update_state "worker_pid" "${WORKER_PID}"
+  update_state "worker_log" "\"${WORKER_LOG}\""
+
+  echo ""
+  echo -e "${C_BOLD}${C_CYAN}=== Roadmap '${NAME}' launched ===${C_RESET}"
+  echo -e "Worker PID: ${C_DIM}${WORKER_PID}${C_RESET}"
+  echo ""
+  echo "Commands:"
+  echo "  Status:    v0 roadmap --status"
+  echo "  Attach:    v0 roadmap ${NAME} --resume --attach"
+  echo "  View logs: tail -f ${WORKER_LOG}"
+  echo ""
+
+  if [[ -n "${ATTACH}" ]]; then
+    echo "Following worker log (Ctrl+C to detach)..."
+    echo ""
+    # Wait for log file to exist (up to 5 seconds)
+    for i in {1..50}; do
+      [[ -f "${WORKER_LOG}" ]] && break
+      sleep 0.1
+    done
+    if [[ -f "${WORKER_LOG}" ]]; then
+      tail -f "${WORKER_LOG}"
+    else
+      echo "Warning: Log file not created within timeout"
+      exit 1
+    fi
+  fi
+
+  exit 0
+fi
+
+# Foreground mode - run worker directly
+echo "Running roadmap in foreground..."
+exec "${V0_DIR}/bin/v0-roadmap-worker" "${NAME}"

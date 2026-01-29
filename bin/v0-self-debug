@@ -6,7 +6,6 @@
 # Usage:
 #   v0 self debug <operation-name>   # Debug specific operation
 #   v0 self debug plan               # Debug most recent plan operation
-#   v0 self debug decompose          # Debug most recent decompose failure
 #   v0 self debug fix                # Debug fix worker issues
 #   v0 self debug chore              # Debug chore worker issues
 #   v0 self debug mergeq             # Debug merge queue (includes 'merge')
@@ -15,7 +14,6 @@
 # Options:
 #   --output <path>    Custom output path (default: .v0/build/debug/)
 #   --stdout           Print to stdout instead of file
-#   --verbose          Include more verbose logs
 #   --help, -h         Show this help
 
 set -e
@@ -30,21 +28,20 @@ done
 V0_DIR="$(cd -P "$(dirname "${SOURCE}")/.." && pwd)"
 
 # Load common libraries
-source "${V0_DIR}/lib/v0-common.sh"
-source "${V0_DIR}/lib/debug-common.sh"
+source "${V0_DIR}/packages/cli/lib/v0-common.sh"
+source "${V0_DIR}/packages/cli/lib/debug-common.sh"
 
 # ============================================================================
 # Help
 # ============================================================================
 
 show_help() {
-    cat <<'EOF'
+    v0_help <<'EOF'
 v0 self debug - Generate comprehensive debug reports for v0 operations
 
 Usage:
   v0 self debug <operation-name>   Debug specific operation by name
   v0 self debug plan               Debug most recent plan operation
-  v0 self debug decompose          Debug most recent decompose failure
   v0 self debug fix                Debug fix worker issues
   v0 self debug chore              Debug chore worker issues
   v0 self debug mergeq             Debug merge queue daemon
@@ -54,13 +51,12 @@ Usage:
 Options:
   --output <path>    Write report to custom path (default: .v0/build/debug/)
   --stdout           Print report to stdout instead of file
-  --verbose          Include more verbose logs
   --help, -h         Show this help
 
 Examples:
   v0 self debug my-feature         # Debug a specific feature operation
   v0 self debug fix --stdout       # Print fix worker debug to stdout
-  v0 self debug plan --verbose     # Verbose debug of recent plan
+  v0 self debug plan               # Debug most recent plan operation
 
 The debug report includes:
   - Operation state (state.json)
@@ -77,7 +73,7 @@ EOF
 
 OUTPUT_PATH=""
 STDOUT_MODE=false
-VERBOSE=false
+VERBOSE=true
 TARGET=""
 
 while [[ $# -gt 0 ]]; do
@@ -92,10 +88,6 @@ while [[ $# -gt 0 ]]; do
             ;;
         --stdout)
             STDOUT_MODE=true
-            shift
-            ;;
-        --verbose)
-            VERBOSE=true
             shift
             ;;
         -*)
@@ -141,10 +133,6 @@ resolve_target() {
             # Use || true to prevent set -e from exiting on failure
             find_most_recent_by_type "plan" || true
             ;;
-        decompose)
-            # Find most recent operation in decomposing phase
-            find_most_recent_by_phase "decomposing" || true
-            ;;
         merge)
             # Alias for mergeq
             echo "mergeq"
@@ -188,12 +176,15 @@ generate_operation_report() {
         return 1
     fi
 
-    # Extract state info
+    # Extract state info using state machine
     local type="unknown" phase="unknown" status="unknown"
-    if [[ -f "${state_file}" ]]; then
-        type=$(jq -r '.type // "unknown"' "${state_file}")
-        phase=$(jq -r '.phase // "unknown"' "${state_file}")
-        status=$(jq -r '.status // "unknown"' "${state_file}")
+    if sm_state_exists "${op_name}"; then
+        type=$(sm_read_state "${op_name}" "type")
+        [[ -z "${type}" ]] && type="unknown"
+        phase=$(sm_read_state "${op_name}" "phase")
+        [[ -z "${phase}" ]] && phase="unknown"
+        status=$(sm_read_state "${op_name}" "status")
+        [[ -z "${status}" ]] && status="unknown"
     fi
 
     # Find worktree if exists
@@ -204,6 +195,10 @@ generate_operation_report() {
     generate_frontmatter "${op_name}" "${type}" "${phase}" "${status}"
     echo ""
     generate_summary "${op_name}" "${state_file}"
+    echo ""
+    echo "---"
+    echo "<!-- section: v0-status -->"
+    generate_v0_status_output
     echo ""
     echo "---"
     echo "<!-- section: operation-state -->"
@@ -269,6 +264,10 @@ generate_fix_worker_report() {
     echo "Debug information for the \`fix\` worker process."
     echo ""
     echo "---"
+    echo "<!-- section: v0-status -->"
+    generate_v0_status_output
+    echo ""
+    echo "---"
     echo "<!-- section: worker-state -->"
     echo "## Fix Worker State"
     echo ""
@@ -290,6 +289,10 @@ generate_chore_worker_report() {
     echo "Debug information for the \`chore\` worker process."
     echo ""
     echo "---"
+    echo "<!-- section: v0-status -->"
+    generate_v0_status_output
+    echo ""
+    echo "---"
     echo "<!-- section: worker-state -->"
     echo "## Chore Worker State"
     echo ""
@@ -309,6 +312,10 @@ generate_mergeq_report() {
     echo "## Summary"
     echo ""
     echo "Debug information for the \`mergeq\` daemon."
+    echo ""
+    echo "---"
+    echo "<!-- section: v0-status -->"
+    generate_v0_status_output
     echo ""
     echo "---"
     echo "<!-- section: merge-queue -->"
@@ -343,6 +350,10 @@ generate_nudge_report() {
     echo "## Summary"
     echo ""
     echo "Debug information for the \`nudge\` daemon."
+    echo ""
+    echo "---"
+    echo "<!-- section: v0-status -->"
+    generate_v0_status_output
     echo ""
     echo "---"
     echo "<!-- section: daemon-state -->"
@@ -408,7 +419,7 @@ generate_worker_state() {
     # Parse backoff from polling log (look for most recent backoff line)
     if [[ -f "${polling_log}" ]]; then
         local backoff_line
-        backoff_line=$(grep -E "Backing off for [0-9]+s" "${polling_log}" 2>/dev/null | tail -1)
+        backoff_line=$(v0_grep "Backing off for [0-9]+s" "${polling_log}" 2>/dev/null | tail -1)
         if [[ -n "${backoff_line}" ]]; then
             echo "Last backoff: ${backoff_line}"
         else
@@ -493,15 +504,17 @@ generate_merge_phase_operations() {
     for state_file in "${ops_dir}"/*/state.json; do
         [[ -f "${state_file}" ]] || continue
 
-        local phase
-        phase=$(jq -r '.phase // ""' "${state_file}")
+        local op_dir op_name phase
+        op_dir=$(dirname "${state_file}")
+        op_name=$(basename "${op_dir}")
+        phase=$(sm_read_state "${op_name}" "phase")
 
         # Check if in merge-related phase
-        if [[ "${phase}" = "merging" ]] || [[ "${phase}" = "merge" ]] || [[ "${phase}" = "merge_queued" ]]; then
+        if [[ "${phase}" = "merging" ]] || [[ "${phase}" = "pending_merge" ]] || [[ "${phase}" = "conflict" ]]; then
             found_any=true
-            local op_name status
-            op_name=$(jq -r '.name' "${state_file}")
-            status=$(jq -r '.status // "unknown"' "${state_file}")
+            local status
+            status=$(sm_read_state "${op_name}" "status")
+            [[ -z "${status}" ]] && status="unknown"
 
             echo "### ${op_name}"
             echo ""
@@ -525,15 +538,18 @@ generate_merge_branch_state() {
     echo "## Merge Branch State"
     echo ""
 
-    local queue_file="${BUILD_DIR}/mergeq/queue.json"
+    # Use main repo's queue file
+    local main_repo
+    main_repo=$(v0_find_main_repo)
+    local queue_file="${main_repo}/${V0_BUILD_DIR}/mergeq/queue.json"
     if [[ ! -f "${queue_file}" ]]; then
         echo "*No queue.json - cannot determine branches*"
         return
     fi
 
-    # Get branches from queue entries
+    # Get branches from queue entries (merge_type=branch entries use operation as branch name)
     local branches
-    branches=$(jq -r '.entries[]? | .branch // empty' "${queue_file}" 2>/dev/null)
+    branches=$(jq -r '.entries[]? | select(.merge_type == "branch") | .operation // empty' "${queue_file}" 2>/dev/null)
 
     if [[ -z "${branches}" ]]; then
         echo "*No branches in queue*"
@@ -564,7 +580,12 @@ generate_merge_branch_state() {
 
 # Generate merge queue state section
 generate_merge_queue_state() {
-    local queue_file="${BUILD_DIR}/mergeq/queue.json"
+    # Merge queue state is always in the main repo's build directory,
+    # not in a worktree's build directory
+    local main_repo
+    main_repo=$(v0_find_main_repo)
+    local mergeq_dir="${main_repo}/${V0_BUILD_DIR}/mergeq"
+    local queue_file="${mergeq_dir}/queue.json"
 
     echo "## Merge Queue State"
     echo ""
@@ -580,7 +601,7 @@ generate_merge_queue_state() {
     fi
 
     # Daemon PID
-    local pid_file="${BUILD_DIR}/mergeq/daemon.pid"
+    local pid_file="${mergeq_dir}/.daemon.pid"
     echo ""
     echo "### Daemon Process"
     echo ""
@@ -616,7 +637,7 @@ generate_nudge_state() {
     echo '```'
     local sessions=""
     if command -v tmux &>/dev/null; then
-        sessions=$(tmux list-sessions 2>/dev/null | grep -E "^v0-${PROJECT}" || true)
+        sessions=$(tmux list-sessions 2>/dev/null | v0_grep "^v0-${PROJECT}" || true)
         if [[ -n "${sessions}" ]]; then
             echo "${sessions}"
         else
@@ -731,7 +752,7 @@ generate_v0_log_context() {
 
     # Filter log entries mentioning this operation
     local filtered
-    filtered=$(grep -E "(^|\s)${op_name}(\s|$|:)" "${v0_log}" 2>/dev/null | tail -50)
+    filtered=$(v0_grep "(^|\s)${op_name}(\s|$|:)" "${v0_log}" 2>/dev/null | tail -50)
 
     if [[ -n "${filtered}" ]]; then
         echo "Log entries mentioning \`${op_name}\` (last 50):"

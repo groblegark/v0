@@ -5,14 +5,14 @@
 set -e
 
 V0_DIR="$(cd "$(dirname "$0")/.." && pwd)"
-source "${V0_DIR}/lib/v0-common.sh"
+source "${V0_DIR}/packages/cli/lib/v0-common.sh"
 v0_load_config
 
 usage() {
-  cat <<'EOF'
+  v0_help <<'EOF'
 Usage: v0 cancel <operation>...
 
-Cancel one or more running operations (feature, plan, decompose, or build).
+Cancel one or more running operations (feature, plan, or build).
 
 This stops any running sessions or workers associated with the operations
 and marks them as cancelled. Operations can be cleaned up with 'v0 prune'.
@@ -59,20 +59,19 @@ failed_count=0
 
 for NAME in "${NAMES[@]}"; do
   # Check if operation exists
-  STATE_DIR="${BUILD_DIR}/operations/${NAME}"
-  STATE_FILE="${STATE_DIR}/state.json"
-
-  if [[ ! -f "${STATE_FILE}" ]]; then
+  if ! sm_state_exists "${NAME}"; then
     echo "Error: No operation found for '${NAME}'" >&2
     ((failed_count++)) || true
     continue
   fi
 
   # Read current state
-  phase=$(jq -r '.phase' "${STATE_FILE}")
-  machine=$(jq -r '.machine // "unknown"' "${STATE_FILE}")
-  session=$(jq -r '.tmux_session // empty' "${STATE_FILE}")
-  worker_pid=$(jq -r '.worker_pid // empty' "${STATE_FILE}")
+  phase=$(sm_read_state "${NAME}" "phase")
+  machine=$(sm_read_state "${NAME}" "machine")
+  session=$(sm_read_state "${NAME}" "tmux_session")
+  worker_pid=$(sm_read_state "${NAME}" "worker_pid")
+
+  [[ -z "${machine}" ]] && machine="unknown"
 
   # Check if already cancelled or completed
   case "${phase}" in
@@ -96,7 +95,7 @@ for NAME in "${NAMES[@]}"; do
   echo "Machine: ${machine}"
 
   # Stop tmux session if running
-  if [[ "${machine}" = "${local_machine}" ]] && [[ -n "${session}" ]] && tmux has-session -t "${session}" 2>/dev/null; then
+  if [[ "${machine}" = "${local_machine}" ]] && [[ -n "${session}" ]] && [[ "${session}" != "null" ]] && tmux has-session -t "${session}" 2>/dev/null; then
     echo "Stopping session: ${session}"
     tmux kill-session -t "${session}" 2>/dev/null || true
   fi
@@ -111,13 +110,11 @@ for NAME in "${NAMES[@]}"; do
     kill -9 "${worker_pid}" 2>/dev/null || true
   fi
 
-  # Update state to cancelled (and clear hold if set)
-  tmp=$(mktemp)
-  jq '.phase = "cancelled" | .cancelled_at = "'"$(date -u +%Y-%m-%dT%H:%M:%SZ)"'" | .held = false | .held_at = null' "${STATE_FILE}" > "${tmp}" && mv "${tmp}" "${STATE_FILE}"
-
-  # Log the event
-  mkdir -p "${STATE_DIR}/logs"
-  echo "[$(date -u +%Y-%m-%dT%H:%M:%SZ)] cancelled: Operation cancelled by user" >> "${STATE_DIR}/logs/events.log"
+  # Update state to cancelled (emits event, clears hold)
+  if ! sm_transition_to_cancelled "${NAME}"; then
+    ((failed_count++)) || true
+    continue
+  fi
 
   echo "Cancelled operation '${NAME}'"
   echo ""

@@ -5,11 +5,11 @@
 set -e
 
 V0_DIR="$(cd "$(dirname "$0")/.." && pwd)"
-source "${V0_DIR}/lib/v0-common.sh"
+source "${V0_DIR}/packages/cli/lib/v0-common.sh"
 v0_load_config
 
 usage() {
-  cat <<EOF
+  v0_help <<'EOF'
 Usage: v0 attach <type> [name]
        v0 attach <feature_name>
        v0 attach --list
@@ -19,8 +19,9 @@ Attach to a running v0 tmux session.
 Types:
   fix              Attach to fix worker session
   chore            Attach to chore worker session
-  mergeq           Attach to active merge resolution session
+  merge, mergeq    Attach to merge queue worker session
   feature <name>   Attach to feature session (auto-detects phase)
+  roadmap <name>   Attach to roadmap orchestration session
   <feature_name>   Shorthand for 'feature <name>'
 
 Options:
@@ -28,7 +29,7 @@ Options:
 
 Examples:
   v0 attach fix              # Attach to fix worker
-  v0 attach mergeq           # Attach to merge resolution (if active)
+  v0 attach mergeq           # Attach to merge queue worker
   v0 attach feature auth     # Attach to auth feature session
   v0 attach auth             # Shorthand for 'v0 attach feature auth'
   v0 attach --list           # List all v0 sessions
@@ -40,7 +41,7 @@ EOF
 list_sessions() {
   local prefix="v0-${PROJECT}"
   local sessions
-  sessions=$(tmux list-sessions -F '#{session_name}' 2>/dev/null | grep "^${prefix}" || true)
+  sessions=$(tmux list-sessions -F '#{session_name}' 2>/dev/null | v0_grep "^${prefix}" || true)
 
   if [[ -z "${sessions}" ]]; then
     echo "No active v0 sessions for project: ${PROJECT}"
@@ -84,33 +85,68 @@ case "${1:-}" in
     attach_to_session "${SESSION}" "chore"
     ;;
   merge|mergeq)
-    # Look for active merge-resolve sessions (created by v0 merge --resolve)
+    # Look for active merge-resolve sessions (Claude resolving conflicts)
     RESOLVE_PREFIX="v0-${PROJECT}"
-    RESOLVE_SESSIONS=$(tmux list-sessions -F '#{session_name}' 2>/dev/null | grep "^${RESOLVE_PREFIX}.*-merge-resolve\|^${RESOLVE_PREFIX}.*-mergeq-resolve" || true)
+    RESOLVE_SESSIONS=$(tmux list-sessions -F '#{session_name}' 2>/dev/null | v0_grep "^${RESOLVE_PREFIX}.*-merge-resolve|^${RESOLVE_PREFIX}.*-mergeq-resolve|^${RESOLVE_PREFIX}.*-uncommitted" || true)
 
-    if [[ -z "${RESOLVE_SESSIONS}" ]]; then
-      echo "Error: No active merge resolution session found"
+    if [[ -n "${RESOLVE_SESSIONS}" ]]; then
+      # If multiple sessions, list them and attach to the first
+      RESOLVE_COUNT=$(echo "${RESOLVE_SESSIONS}" | wc -l | tr -d ' ')
+      if [[ "${RESOLVE_COUNT}" -gt 1 ]]; then
+        echo "Multiple merge resolution sessions found:"
+        echo "${RESOLVE_SESSIONS}" | while read -r sess; do
+          echo "  ${sess}"
+        done
+        echo ""
+        echo "Attaching to first session..."
+      fi
+
+      SESSION=$(echo "${RESOLVE_SESSIONS}" | head -1)
+      exec tmux attach -t "${SESSION}"
+    fi
+
+    # No Claude sessions found - check daemon status and provide guidance
+    MAIN_REPO=$(v0_find_main_repo)
+    MERGEQ_DIR="${MAIN_REPO}/${V0_BUILD_DIR}/mergeq"
+    DAEMON_PID_FILE="${MERGEQ_DIR}/.daemon.pid"
+    DAEMON_LOG_FILE="${MERGEQ_DIR}/logs/daemon.log"
+
+    echo "No active merge resolution session found"
+    echo ""
+    if [[ -f "${DAEMON_PID_FILE}" ]] && kill -0 "$(cat "${DAEMON_PID_FILE}")" 2>/dev/null; then
+      echo "Merge queue daemon is running (pid: $(cat "${DAEMON_PID_FILE}"))"
+      echo "No Claude session is currently active for conflict resolution."
       echo ""
-      echo "Merge resolution sessions are only created when"
-      echo "v0 merge --resolve is running to handle conflicts."
+      echo "To view daemon logs: tail -f ${DAEMON_LOG_FILE}"
+    else
+      echo "Merge queue daemon is not running."
       echo ""
-      echo "To check merge queue status: v0 mergeq --status"
+      echo "To start the daemon:  v0 mergeq --start"
+    fi
+    echo "To check queue status: v0 mergeq --status"
+    exit 1
+    ;;
+  roadmap)
+    NAME="${2:-}"
+    [[ -z "${NAME}" ]] && { echo "Error: roadmap name required"; usage; }
+
+    STATE_FILE="${BUILD_DIR}/roadmaps/${NAME}/state.json"
+
+    if [[ ! -f "${STATE_FILE}" ]]; then
+      echo "Error: No state found for roadmap '${NAME}'"
+      echo "Check available roadmaps with: v0 roadmap --status"
       exit 1
     fi
 
-    # If multiple sessions, list them and attach to the first
-    RESOLVE_COUNT=$(echo "${RESOLVE_SESSIONS}" | wc -l | tr -d ' ')
-    if [[ "${RESOLVE_COUNT}" -gt 1 ]]; then
-      echo "Multiple merge resolution sessions found:"
-      echo "${RESOLVE_SESSIONS}" | while read -r sess; do
-        echo "  ${sess}"
-      done
-      echo ""
-      echo "Attaching to first session..."
+    # Get stored session name
+    SESSION=$(jq -r '.planning_session // empty' "${STATE_FILE}")
+
+    if [[ -z "${SESSION}" ]] || [[ "${SESSION}" = "null" ]]; then
+      # Derive from name
+      SESSION=$(v0_session_name "${NAME}" "roadmap")
     fi
 
-    SESSION=$(echo "${RESOLVE_SESSIONS}" | head -1)
-    exec tmux attach -t "${SESSION}"
+    attach_to_session "${SESSION}" "roadmap ${NAME}"
     ;;
   feature)
     NAME="${2:-}"
@@ -129,10 +165,11 @@ case "${1:-}" in
 
     if [[ -z "${SESSION}" ]] || [[ "${SESSION}" = "null" ]]; then
       # Derive from phase
-      PHASE=$(jq -r '.phase // "init"' "${STATE_FILE}")
+      PHASE=$(sm_get_phase "${NAME}")
+      [[ -z "${PHASE}" ]] && PHASE="init"
       case "${PHASE}" in
         init|planned) SESSION=$(v0_session_name "${NAME}" "plan") ;;
-        queued) SESSION=$(v0_session_name "${NAME}" "decompose") ;;
+        queued) SESSION=$(v0_session_name "${NAME}" "feature") ;;
         executing) SESSION=$(v0_session_name "${NAME}" "feature") ;;
         *)
           echo "Feature '${NAME}' is in phase: ${PHASE} (no active session)"
@@ -147,20 +184,23 @@ case "${1:-}" in
     usage
     ;;
   *)
-    # Check if this is a feature name (allow "v0 attach <feature_name>" shorthand)
+    # Check if this is a feature or roadmap name (allow "v0 attach <name>" shorthand)
     NAME="$1"
     STATE_FILE="${BUILD_DIR}/operations/${NAME}/state.json"
+    ROADMAP_STATE_FILE="${BUILD_DIR}/roadmaps/${NAME}/state.json"
 
     if [[ -f "${STATE_FILE}" ]]; then
+      # It's a feature operation
       # Get stored session name or derive from phase
       SESSION=$(jq -r '.tmux_session // empty' "${STATE_FILE}")
 
       if [[ -z "${SESSION}" ]] || [[ "${SESSION}" = "null" ]]; then
         # Derive from phase
-        PHASE=$(jq -r '.phase // "init"' "${STATE_FILE}")
+        PHASE=$(sm_get_phase "${NAME}")
+        [[ -z "${PHASE}" ]] && PHASE="init"
         case "${PHASE}" in
           init|planned) SESSION=$(v0_session_name "${NAME}" "plan") ;;
-          queued) SESSION=$(v0_session_name "${NAME}" "decompose") ;;
+          queued) SESSION=$(v0_session_name "${NAME}" "feature") ;;
           executing) SESSION=$(v0_session_name "${NAME}" "feature") ;;
           *)
             echo "Feature '${NAME}' is in phase: ${PHASE} (no active session)"
@@ -170,6 +210,15 @@ case "${1:-}" in
       fi
 
       attach_to_session "${SESSION}" "feature ${NAME}"
+    elif [[ -f "${ROADMAP_STATE_FILE}" ]]; then
+      # It's a roadmap operation
+      SESSION=$(jq -r '.planning_session // empty' "${ROADMAP_STATE_FILE}")
+
+      if [[ -z "${SESSION}" ]] || [[ "${SESSION}" = "null" ]]; then
+        SESSION=$(v0_session_name "${NAME}" "roadmap")
+      fi
+
+      attach_to_session "${SESSION}" "roadmap ${NAME}"
     else
       echo "Unknown type: $1"
       usage

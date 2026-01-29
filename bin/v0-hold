@@ -5,11 +5,11 @@
 set -e
 
 V0_DIR="$(cd "$(dirname "$0")/.." && pwd)"
-source "${V0_DIR}/lib/v0-common.sh"
+source "${V0_DIR}/packages/cli/lib/v0-common.sh"
 v0_load_config
 
 usage() {
-  cat <<'EOF'
+  v0_help <<'EOF'
 Usage: v0 hold <operation>
        v0 hold --status [operation]
 
@@ -17,7 +17,7 @@ Put an operation on hold or check hold status.
 
 When an operation is held:
 - Any currently executing work completes normally
-- New phases won't start (plan, decompose, build)
+- New phases won't start (plan, build)
 - Blocked operations won't auto-start when dependencies merge
 
 Options:
@@ -36,39 +36,26 @@ EOF
   exit 0
 }
 
-emit_event() {
-  local name="$1"
-  local event="$2"
-  local details="$3"
-  local state_dir="${BUILD_DIR}/operations/${name}"
-  mkdir -p "${state_dir}/logs"
-  echo "[$(date -u +%Y-%m-%dT%H:%M:%SZ)] ${event}: ${details}" >> "${state_dir}/logs/events.log"
-}
-
 # Set hold on an operation
 set_hold() {
   local name="$1"
-  local state_file="${BUILD_DIR}/operations/${name}/state.json"
 
-  if [[ ! -f "${state_file}" ]]; then
+  if ! sm_state_exists "${name}"; then
     echo "Error: No operation found for '${name}'" >&2
     exit 1
   fi
 
   # Check if already held
-  if v0_is_held "${name}"; then
+  if sm_is_held "${name}"; then
     local held_at
-    held_at=$(jq -r '.held_at // "unknown"' "${state_file}")
+    held_at=$(sm_read_state "${name}" "held_at")
+    [[ -z "${held_at}" ]] && held_at="unknown"
     echo "Operation '${name}' is already on hold (since ${held_at})"
     exit 0
   fi
 
-  # Set hold
-  local tmp
-  tmp=$(mktemp)
-  jq '.held = true | .held_at = "'"$(date -u +%Y-%m-%dT%H:%M:%SZ)"'"' "${state_file}" > "${tmp}" && mv "${tmp}" "${state_file}"
-
-  emit_event "${name}" "hold:set" "Operation put on hold"
+  # Set hold (emits event internally)
+  sm_set_hold "${name}"
 
   echo "Operation '${name}' is now on hold."
   echo ""
@@ -87,16 +74,15 @@ show_status() {
 
   if [[ -n "${name}" ]]; then
     # Show status for specific operation
-    local state_file="${BUILD_DIR}/operations/${name}/state.json"
-
-    if [[ ! -f "${state_file}" ]]; then
+    if ! sm_state_exists "${name}"; then
       echo "Error: No operation found for '${name}'" >&2
       exit 1
     fi
 
-    if v0_is_held "${name}"; then
+    if sm_is_held "${name}"; then
       local held_at
-      held_at=$(jq -r '.held_at // "unknown"' "${state_file}")
+      held_at=$(sm_read_state "${name}" "held_at")
+      [[ -z "${held_at}" ]] && held_at="unknown"
       echo "Operation '${name}' is on hold (since ${held_at})"
     else
       echo "Operation '${name}' is not on hold"
@@ -109,19 +95,22 @@ show_status() {
     fi
 
     local found_any=""
-    echo "Held Operations:"
+    echo "Held Plans:"
     echo ""
 
     for state_file in "${BUILD_DIR}"/operations/*/state.json; do
       [[ -f "${state_file}" ]] || continue
 
-      local op_name
-      op_name=$(jq -r '.name' "${state_file}")
+      local op_dir op_name
+      op_dir=$(dirname "${state_file}")
+      op_name=$(basename "${op_dir}")
 
-      if v0_is_held "${op_name}"; then
+      if sm_is_held "${op_name}"; then
         local held_at phase
-        held_at=$(jq -r '.held_at // "unknown"' "${state_file}")
-        phase=$(jq -r '.phase' "${state_file}")
+        held_at=$(sm_read_state "${op_name}" "held_at")
+        phase=$(sm_read_state "${op_name}" "phase")
+        [[ -z "${held_at}" ]] && held_at="unknown"
+        [[ -z "${phase}" ]] && phase="unknown"
         printf "  %-20s %s (phase: %s)\n" "${op_name}" "${held_at}" "${phase}"
         found_any=1
       fi
