@@ -2,6 +2,17 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.3.2] - 2026-01-29
+
+### Fixed
+
+- Branch merges stuck in conflict status now automatically retry.
+- `--after` dependencies are now verified to be visible before spawning worker.
+
+### Refactored
+
+- Split v0-status.bats and common.bats integration tests into focused test files for better maintainability.
+
 ## [0.3.1] - 2026-01-28
 
 ### Added
