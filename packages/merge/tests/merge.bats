@@ -467,6 +467,7 @@ resolve_operation_name() {
     cd "${test_repo}"
     git config user.email "test@example.com"
     git config user.name "Test"
+    git checkout -b main --quiet  # Empty repos don't have a branch yet
 
     # Make initial commit and push
     echo "initial" > file.txt
@@ -487,6 +488,7 @@ resolve_operation_name() {
     cd "${tmp_clone}"
     git config user.email "test@example.com"
     git config user.name "Test"
+    git checkout main --quiet 2>/dev/null || git checkout -b main --quiet
     echo "force pushed content" > pushed.txt
     git add pushed.txt
     git commit -m "force pushed from v0 push" --quiet
