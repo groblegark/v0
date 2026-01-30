@@ -118,6 +118,41 @@ setup() {
     assert_equal "$branch" "main"
 }
 
+@test "ws_sync_to_develop resets to remote when local has diverged" {
+    # Simulate the scenario where v0 push force-updated the remote agent branch,
+    # causing the workspace develop branch to diverge from remote.
+    # The workspace was cloned from $TEST_TEMP_DIR/project, so that project
+    # repo acts as the workspace's "origin" remote.
+
+    # Make a local-only commit on the workspace (simulating a previous merge)
+    echo "local merge work" > "$V0_WORKSPACE_DIR/merged.txt"
+    git -C "$V0_WORKSPACE_DIR" add merged.txt
+    git -C "$V0_WORKSPACE_DIR" commit -m "local merge" --quiet
+    local local_commit
+    local_commit=$(git -C "$V0_WORKSPACE_DIR" rev-parse HEAD)
+
+    # Make a different commit on the "remote" (the main project repo).
+    # This simulates v0 push force-updating the agent branch with different content.
+    echo "force pushed content" > "$TEST_TEMP_DIR/project/pushed.txt"
+    git -C "$TEST_TEMP_DIR/project" add pushed.txt
+    git -C "$TEST_TEMP_DIR/project" commit -m "force pushed from v0 push" --quiet
+    local remote_commit
+    remote_commit=$(git -C "$TEST_TEMP_DIR/project" rev-parse HEAD)
+
+    # Verify histories have diverged (workspace has different commit than remote)
+    local ws_head
+    ws_head=$(git -C "$V0_WORKSPACE_DIR" rev-parse HEAD)
+    assert_equal "$ws_head" "$local_commit"
+
+    run ws_sync_to_develop
+    assert_success
+
+    # Verify workspace HEAD is now at the remote commit
+    local new_head
+    new_head=$(git -C "$V0_WORKSPACE_DIR" rev-parse HEAD)
+    assert_equal "$new_head" "$remote_commit"
+}
+
 @test "ws_sync_to_develop aborts incomplete merge" {
     # Get the actual git dir
     local git_dir

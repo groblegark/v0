@@ -452,6 +452,70 @@ resolve_operation_name() {
     assert_output "main"
 }
 
+@test "mg_ensure_develop_branch resets to remote when local has diverged" {
+    # Simulate the scenario where v0 push force-updated the remote agent branch,
+    # causing the local develop branch to diverge from remote.
+    # Before this fix, the push after merge would fail with non-fast-forward error.
+
+    # Create a bare repo to act as the remote
+    local remote_repo="${TEST_TEMP_DIR}/remote.git"
+    git init --bare "${remote_repo}" --quiet
+
+    # Create the workspace repo (clone of remote)
+    local test_repo="${TEST_TEMP_DIR}/test-repo"
+    git clone "${remote_repo}" "${test_repo}" --quiet
+    cd "${test_repo}"
+    git config user.email "test@example.com"
+    git config user.name "Test"
+
+    # Make initial commit and push
+    echo "initial" > file.txt
+    git add file.txt
+    git commit -m "initial" --quiet
+    git push origin main --quiet
+
+    # Simulate a previous merge on the local branch (not yet pushed)
+    echo "local merge work" > merged.txt
+    git add merged.txt
+    git commit -m "local merge" --quiet
+    local local_commit
+    local_commit=$(git rev-parse HEAD)
+
+    # Simulate v0 push force-updating the remote with different content
+    local tmp_clone="${TEST_TEMP_DIR}/tmp-clone"
+    git clone "${remote_repo}" "${tmp_clone}" --quiet
+    cd "${tmp_clone}"
+    git config user.email "test@example.com"
+    git config user.name "Test"
+    echo "force pushed content" > pushed.txt
+    git add pushed.txt
+    git commit -m "force pushed from v0 push" --quiet
+    local remote_commit
+    remote_commit=$(git rev-parse HEAD)
+    git push --force origin main --quiet
+    cd "${test_repo}"
+
+    # Verify histories have diverged
+    local current_head
+    current_head=$(git rev-parse HEAD)
+    assert_equal "${current_head}" "${local_commit}"
+
+    export V0_DEVELOP_BRANCH="main"
+    export V0_GIT_REMOTE="origin"
+
+    # Source the actual function
+    source_lib "execution.sh"
+
+    # This should succeed and reset local to match remote
+    run mg_ensure_develop_branch
+    assert_success
+
+    # Verify HEAD is now at the remote commit (not the old local commit)
+    local new_head
+    new_head=$(git rev-parse HEAD)
+    assert_equal "${new_head}" "${remote_commit}"
+}
+
 @test "mg_ensure_develop_branch fails when develop branch doesn't exist" {
     # Setup a real git repo for this test
     local test_repo="${TEST_TEMP_DIR}/test-repo"

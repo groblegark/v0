@@ -152,7 +152,8 @@ ws_sync_to_develop() {
   fi
 
   # Fetch latest from remote
-  git -C "${V0_WORKSPACE_DIR}" fetch "${V0_GIT_REMOTE}" "${V0_DEVELOP_BRANCH}" 2>/dev/null || true
+  local _ws_fetch_ok=false
+  git -C "${V0_WORKSPACE_DIR}" fetch "${V0_GIT_REMOTE}" "${V0_DEVELOP_BRANCH}" 2>/dev/null && _ws_fetch_ok=true
 
   # Abort any in-progress rebase or merge
   ws_abort_incomplete_operations
@@ -165,8 +166,14 @@ ws_sync_to_develop() {
     fi
   fi
 
-  # Pull latest changes (fast-forward only for safety)
-  git -C "${V0_WORKSPACE_DIR}" pull --ff-only "${V0_GIT_REMOTE}" "${V0_DEVELOP_BRANCH}" 2>/dev/null || true
+  # Merge latest changes (fast-forward only for safety, reset if diverged)
+  if [[ "${_ws_fetch_ok}" = true ]]; then
+    if ! git -C "${V0_WORKSPACE_DIR}" merge --ff-only FETCH_HEAD 2>/dev/null; then
+      # Fast-forward failed - remote may have been force-pushed (e.g., by v0 push).
+      # Reset to remote state to restore sync.
+      git -C "${V0_WORKSPACE_DIR}" reset --hard FETCH_HEAD 2>/dev/null || true
+    fi
+  fi
 
   return 0
 }

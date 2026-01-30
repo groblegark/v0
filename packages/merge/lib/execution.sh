@@ -90,8 +90,15 @@ mg_ensure_develop_branch() {
     # against HEAD, so HEAD must reflect the latest remote state. Without this fetch,
     # the daemon subprocess may have stale refs and report false conflicts.
     # See: c8784a6 which fixed the analogous issue for readiness checks.
-    git fetch "${V0_GIT_REMOTE}" "${V0_DEVELOP_BRANCH}" 2>/dev/null || true
-    git pull --ff-only "${V0_GIT_REMOTE}" "${V0_DEVELOP_BRANCH}" 2>/dev/null || true
+    if git fetch "${V0_GIT_REMOTE}" "${V0_DEVELOP_BRANCH}" 2>/dev/null; then
+        if ! git merge --ff-only FETCH_HEAD 2>/dev/null; then
+            # Fast-forward failed - local has diverged from remote (e.g., after
+            # v0 push force-updated the agent branch). Reset to remote state since
+            # the remote is the source of truth and the merge hasn't started yet.
+            v0_trace "merge:sync" "Fast-forward failed, resetting to ${V0_GIT_REMOTE}/${V0_DEVELOP_BRANCH}"
+            git reset --hard FETCH_HEAD
+        fi
+    fi
 
     return 0
 }
