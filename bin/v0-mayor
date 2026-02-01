@@ -1,0 +1,95 @@
+#!/bin/bash
+# SPDX-License-Identifier: MIT
+# Copyright (c) 2026 Alfred Jean LLC
+# v0-mayor - Launch Claude as orchestration assistant
+# Usage: v0 mayor [args]
+
+set -e
+
+V0_DIR="$(cd "$(dirname "$0")/.." && pwd)"
+source "${V0_DIR}/packages/cli/lib/v0-common.sh"
+
+usage() {
+  v0_help <<'EOF'
+Usage: v0 mayor [options] [claude-args...]
+
+Launch Claude as an orchestration assistant for managing v0 workers.
+
+The mayor runs interactively (no worktree, no tmux) and is primed with
+project context to help you:
+  - Plan and dispatch features
+  - Queue bug fixes
+  - Process chores
+  - Monitor worker status
+  - Organize and prioritize work
+
+Options:
+  --model <model>   Override model (default: opus)
+  -h, --help        Show this help
+
+Examples:
+  v0 mayor                 # Start mayor session
+  v0 mayor --model sonnet  # Use faster model
+EOF
+  exit 0
+}
+
+MODEL="opus"
+
+while [[ $# -gt 0 ]]; do
+  case "$1" in
+    --model) MODEL="$2"; shift 2 ;;
+    -h|--help) usage ;;
+    *) break ;;
+  esac
+done
+
+PROMPT_FILE="${V0_DIR}/packages/cli/lib/prompts/mayor.md"
+PROMPT="$(cat "${PROMPT_FILE}")"
+
+# Load project config to get V0_ROOT
+if ! v0_load_config false; then
+    echo "Error: Not in a v0 project directory. Run 'v0 init' first." >&2
+    exit 1
+fi
+
+# Ensure .claude directory exists in project root
+MAYOR_SETTINGS_DIR="${V0_ROOT}"
+mkdir -p "${MAYOR_SETTINGS_DIR}/.claude"
+
+# Write fresh settings for this mayor session
+cat > "${MAYOR_SETTINGS_DIR}/.claude/settings.mayor.json" <<'SETTINGS'
+{
+  "permissions": {
+    "allow": ["Bash(v0 *)", "Bash(wok *)", "Bash(bd *)", "Read", "Edit(*/plans/*)", "Write"]
+  },
+  "hooks": {
+    "SessionStart": [
+      {
+        "matcher": "",
+        "hooks": [
+          {"type": "command", "command": "v0 prime"},
+          {"type": "command", "command": "wk prime 2>/dev/null || true"},
+          {"type": "command", "command": "v0 status 2>/dev/null || echo 'No v0 project in current directory'"},
+          {"type": "command", "command": "wok ready 2>/dev/null || echo 'No ready issues'"}
+        ]
+      }
+    ],
+    "PreCompact": [
+      {
+        "matcher": "",
+        "hooks": [
+          {"type": "command", "command": "v0 prime"},
+          {"type": "command", "command": "wk prime 2>/dev/null || true"},
+          {"type": "command", "command": "v0 status 2>/dev/null || echo 'No v0 project in current directory'"},
+          {"type": "command", "command": "wok ready 2>/dev/null || echo 'No ready issues'"}
+        ]
+      }
+    ]
+  }
+}
+SETTINGS
+
+# Run Claude from project directory with mayor-specific settings
+cd "${V0_ROOT}"
+exec claude --model "${MODEL}" --settings ".claude/settings.mayor.json" "${PROMPT}" "$@"

@@ -1,0 +1,698 @@
+#!/bin/bash
+# SPDX-License-Identifier: MIT
+# Copyright (c) 2026 Alfred Jean LLC
+# v0-build-worker - Background worker for v0 build pipeline
+#
+# This script runs the plan -> build pipeline in the background.
+# It is launched by v0-build and handles all phase transitions autonomously.
+#
+# Key responsibilities:
+# - Execute plan phase (launch v0-plan in tmux, wait for completion)
+# - File a single feature issue after planning
+# - Execute build phase (launch Claude worker in tmux)
+# - Update state after each phase transition
+# - Handle errors gracefully (update state to 'failed' with error message)
+# - Handle signals (update state to 'interrupted' on SIGTERM/SIGINT)
+# - Log all output to worker.log
+
+set -e
+
+V0_DIR="$(cd "$(dirname "$0")/.." && pwd)"
+source "${V0_DIR}/packages/cli/lib/v0-common.sh"
+
+# Save inherited values before v0_load_config potentially overwrites them.
+# When launched from a workspace (e.g., by mg_trigger_dependents during merge),
+# v0_load_config finds the workspace's .v0.rc and sets paths based on the workspace.
+# We need to preserve the main repo's BUILD_DIR so we find operation state files.
+_INHERITED_BUILD_DIR="${BUILD_DIR:-}"
+
+v0_load_config
+
+# Restore inherited BUILD_DIR if set by parent process.
+# Always export so child processes inherit the correct path,
+# even when BUILD_DIR was computed by v0_load_config rather than inherited.
+[[ -n "${_INHERITED_BUILD_DIR}" ]] && BUILD_DIR="${_INHERITED_BUILD_DIR}"
+export BUILD_DIR
+
+# Source nudge functions for idle session monitoring
+source "${V0_DIR}/packages/worker/lib/nudge-common.sh"
+
+# Source issue filing functions
+source "${V0_DIR}/packages/cli/lib/build/issue.sh"
+
+# Source workspace functions for plan commit to V0_DEVELOP_BRANCH
+source "${V0_DIR}/packages/workspace/lib/workspace.sh"
+
+usage() {
+  cat <<EOF
+Usage: v0-build-worker <name>
+
+Background worker for v0 build pipeline (plan -> build).
+This script is launched by v0-build and should not be called directly.
+
+Arguments:
+  name    Name of the operation to process
+EOF
+  exit 1
+}
+
+NAME="$1"
+[[ -z "${NAME}" ]] && usage
+
+STATE_DIR="${BUILD_DIR}/operations/${NAME}"
+STATE_FILE="${STATE_DIR}/state.json"
+LOG_FILE="${STATE_DIR}/logs/worker.log"
+
+if [[ ! -f "${STATE_FILE}" ]]; then
+  echo "Error: No operation found for '${NAME}'"
+  exit 1
+fi
+
+mkdir -p "${STATE_DIR}/logs"
+
+exec > >(tee -a "${LOG_FILE}") 2>&1
+
+log() { echo "[$(date '+%H:%M:%S')] $*"; }
+
+get_state() {
+  jq -r ".$1 // empty" "${STATE_FILE}"
+}
+
+update_state() {
+  local key="$1"
+  local value="$2"
+  local tmp
+  tmp=$(mktemp)
+  jq ".${key} = ${value}" "${STATE_FILE}" > "${tmp}" && mv "${tmp}" "${STATE_FILE}"
+}
+
+emit_event() {
+  local event="$1"
+  local details="$2"
+  log "${event}: ${details}"
+  echo "[$(date -u +%Y-%m-%dT%H:%M:%SZ)] ${event}: ${details}" >> "${STATE_DIR}/logs/events.log"
+}
+
+# file_or_update_plan_issue
+# Updates or creates a feature issue with plan content.
+# Tries local PLANS_DIR first, falls back to V0_DEVELOP_BRANCH.
+# Sets epic_id in state if a new issue is created.
+# Returns: FEATURE_ID via stdout
+file_or_update_plan_issue() {
+  local plan_file="${PLANS_DIR}/${NAME}.md"
+  local feature_id
+  feature_id=$(get_state epic_id)
+
+  # Try local first, fallback to V0_DEVELOP_BRANCH
+  if [[ ! -f "${plan_file}" ]]; then
+    ws_get_plan_from_develop "${NAME}" "${plan_file}" || true
+  fi
+
+  if [[ -f "${plan_file}" ]]; then
+    if [[ -n "${feature_id}" ]] && [[ "${feature_id}" != "null" ]]; then
+      # Update existing issue with plan content
+      file_plan_issue "${NAME}" "${plan_file}" "${feature_id}"
+      emit_event "issue:updated" "Updated feature ${feature_id} with plan"
+    else
+      # Fallback: create new issue
+      feature_id=$(file_plan_issue "${NAME}" "${plan_file}")
+      if [[ -n "${feature_id}" ]]; then
+        update_state "epic_id" "\"${feature_id}\""
+        emit_event "issue:created" "Created feature ${feature_id}"
+      else
+        emit_event "issue:warning" "Failed to create feature issue"
+      fi
+    fi
+  fi
+
+  echo "${feature_id}"
+}
+
+# Note: Blocking is now tracked in wok, not state.json
+# Use v0_is_blocked, v0_get_first_open_blocker from v0-common.sh
+
+create_done_script() {
+  local target_dir="$1"
+  local exit_file="${2:-}"
+
+  if [[ -n "${exit_file}" ]]; then
+    cat > "${target_dir}/done" <<DONE_SCRIPT
+#!/bin/bash
+echo "0" > '${exit_file}'
+find_claude() {
+  local pid=\$1
+  while [[ -n "\${pid}" ]] && [[ "\${pid}" != "1" ]]; do
+    local cmd=\$(ps -o comm= -p \${pid} 2>/dev/null)
+    if [[ "\${cmd}" == *"claude"* ]]; then
+      echo "\${pid}"
+      return
+    fi
+    pid=\$(ps -o ppid= -p \${pid} 2>/dev/null | tr -d ' ')
+  done
+}
+CLAUDE_PID=\$(find_claude \$\$)
+if [[ -n "\${CLAUDE_PID}" ]]; then
+  kill -TERM "\${CLAUDE_PID}" 2>/dev/null || true
+fi
+exit 0
+DONE_SCRIPT
+  else
+    cat > "${target_dir}/done" <<'DONE_SCRIPT'
+#!/bin/bash
+find_claude() {
+  local pid=$1
+  while [[ -n "${pid}" ]] && [[ "${pid}" != "1" ]]; do
+    local cmd=$(ps -o comm= -p ${pid} 2>/dev/null)
+    if [[ "${cmd}" == *"claude"* ]]; then
+      echo "${pid}"
+      return
+    fi
+    pid=$(ps -o ppid= -p ${pid} 2>/dev/null | tr -d ' ')
+  done
+}
+CLAUDE_PID=$(find_claude $$)
+if [[ -n "${CLAUDE_PID}" ]]; then
+  kill -TERM "${CLAUDE_PID}" 2>/dev/null || true
+fi
+exit 0
+DONE_SCRIPT
+  fi
+  chmod +x "${target_dir}/done"
+}
+
+ERROR_MSG=""
+INTERRUPTED=""
+
+handle_signal() {
+  log "Received termination signal"
+  INTERRUPTED=1
+  ERROR_MSG=""
+}
+trap handle_signal SIGTERM SIGINT
+
+cleanup() {
+  sm_update_state "${NAME}" "worker_pid" "null"
+  if [[ -n "${INTERRUPTED}" ]]; then
+    # Use state machine transition for interrupted state
+    sm_transition_to_interrupted "${NAME}" 2>/dev/null || {
+      # Fall back to direct update if transition fails (e.g., from terminal state)
+      sm_update_state "${NAME}" "phase" '"interrupted"'
+      sm_emit_event "${NAME}" "worker:interrupted" "Worker was terminated by signal"
+    }
+    log "Worker interrupted"
+  elif [[ -n "${ERROR_MSG}" ]]; then
+    # Use state machine transition for failed state
+    sm_transition_to_failed "${NAME}" "${ERROR_MSG}" 2>/dev/null || {
+      # Fall back to direct update if transition fails
+      sm_update_state "${NAME}" "phase" '"failed"'
+      sm_update_state "${NAME}" "error" "$(printf '%s' "${ERROR_MSG}" | jq -Rs .)"
+      sm_emit_event "${NAME}" "worker:failed" "${ERROR_MSG}"
+    }
+  fi
+  log "Background worker cleanup complete"
+}
+trap cleanup EXIT
+
+# Check hold before starting new phases
+# Returns 0 if can proceed, 1 if held
+check_hold_before_phase() {
+  if sm_is_held "${NAME}"; then
+    log "Operation is held, pausing worker"
+    sm_emit_event "${NAME}" "hold:paused" "Worker paused due to hold"
+    return 1
+  fi
+  return 0
+}
+
+# Repair stale wok blockers - mark merged operations' epics as done
+# This is a safety net for cases where the merge completed but wok wasn't updated
+repair_stale_wok_blockers() {
+  local epic_id
+  epic_id=$(get_state epic_id)
+  [[ -z "${epic_id}" ]] || [[ "${epic_id}" == "null" ]] && return 0
+
+  local blockers
+  blockers=$(v0_get_blockers "${epic_id}")
+  [[ "${blockers}" == "[]" ]] && return 0
+
+  local blocker_id
+  for blocker_id in $(echo "${blockers}" | jq -r '.[]'); do
+    # Check if blocker is still open in wok
+    local wok_status
+    wok_status=$(wk show "${blocker_id}" -o json 2>/dev/null | jq -r '.status // "unknown"')
+    case "${wok_status}" in
+      done|closed) continue ;;  # Already closed, skip
+    esac
+
+    # Blocker is open in wok - check if the operation is actually merged
+    local blocker_op
+    blocker_op=$(v0_blocker_to_op_name "${blocker_id}")
+    local blocker_state="${BUILD_DIR}/operations/${blocker_op}/state.json"
+
+    if [[ -f "${blocker_state}" ]]; then
+      local blocker_phase
+      blocker_phase=$(jq -r '.phase // "unknown"' "${blocker_state}")
+      if [[ "${blocker_phase}" == "merged" ]]; then
+        log "Repairing stale blocker: ${blocker_op} is merged but wok issue ${blocker_id} is ${wok_status}"
+        if wk done "${blocker_id}" --reason "Merged (repaired by v0 resume)" 2>/dev/null; then
+          sm_emit_event "${NAME}" "blocker:repaired" "Marked ${blocker_id} as done (${blocker_op} was already merged)"
+        else
+          log "Warning: Failed to mark ${blocker_id} as done"
+        fi
+      fi
+    fi
+  done
+}
+
+# Check wok blockers before starting new phases
+# Returns 0 if can proceed, 1 if blocked
+check_wok_blockers() {
+  # Skip blocker check if ignore_blockers is set (from --force flag)
+  local ignore_blockers
+  ignore_blockers=$(get_state ignore_blockers)
+  if [[ "${ignore_blockers}" == "true" ]]; then
+    log "Ignoring blockers (--force was used)"
+    return 0
+  fi
+
+  local epic_id
+  epic_id=$(get_state epic_id)
+  [[ -z "${epic_id}" ]] || [[ "${epic_id}" == "null" ]] && return 0
+
+  # First, repair any stale blockers (merged ops with open wok issues)
+  repair_stale_wok_blockers
+
+  # Check if blockers were expected (from --after flag)
+  # If so, retry a few times to handle wok propagation delay
+  local expected_blockers
+  expected_blockers=$(get_state expected_blockers)
+  if [[ -n "${expected_blockers}" ]] && [[ "${expected_blockers}" != "null" ]] && [[ "${expected_blockers}" -gt 0 ]]; then
+    local retry_attempts=0
+    local max_retries=10
+    while [[ ${retry_attempts} -lt ${max_retries} ]]; do
+      if v0_is_blocked "${epic_id}"; then
+        local blocker
+        blocker=$(v0_get_first_open_blocker "${epic_id}")
+        local blocker_name
+        blocker_name=$(v0_blocker_to_op_name "${blocker}")
+        log "Operation is blocked by '${blocker_name}', pausing worker"
+        sm_emit_event "${NAME}" "blocked:paused" "Worker paused waiting for ${blocker_name}"
+        return 1
+      fi
+      retry_attempts=$((retry_attempts + 1))
+      sleep 0.2
+    done
+    log "Warning: Expected ${expected_blockers} blocker(s) but none found after ${max_retries} attempts"
+    sm_emit_event "${NAME}" "blocked:warning" "Expected blockers not found after retries"
+  fi
+
+  if v0_is_blocked "${epic_id}"; then
+    local blocker
+    blocker=$(v0_get_first_open_blocker "${epic_id}")
+    local blocker_name
+    blocker_name=$(v0_blocker_to_op_name "${blocker}")
+    log "Operation is blocked by '${blocker_name}', pausing worker"
+    sm_emit_event "${NAME}" "blocked:paused" "Worker paused waiting for ${blocker_name}"
+    return 1
+  fi
+  return 0
+}
+
+run_plan_phase() {
+  log "Starting plan phase"
+  v0_trace "build:plan" "Starting plan phase for ${NAME}"
+  ensure_nudge_running
+
+  local PROMPT
+  PROMPT=$(get_state prompt)
+
+  FEATURE_BRANCH=$(v0_expand_branch "${V0_FEATURE_BRANCH}" "${NAME}")
+  if ! tree_output=$("${V0_DIR}/bin/v0-tree" "${FEATURE_BRANCH}"); then
+    ERROR_MSG="Failed to create worktree for ${FEATURE_BRANCH}"
+    return 1
+  fi
+  { read -r TREE_DIR; read -r WORKTREE; } <<< "${tree_output}"
+
+  PLAN_SESSION=$(v0_session_name "${NAME}" "plan")
+
+  if tmux has-session -t "${PLAN_SESSION}" 2>/dev/null; then
+    log "Plan session '${PLAN_SESSION}' already running, waiting for completion..."
+  else
+    emit_event "plan:starting" "Creating implementation plan"
+
+    printf '%s' "${PROMPT}" > "${STATE_DIR}/prompt.txt"
+    create_done_script "${STATE_DIR}" "${STATE_DIR}/logs/plan.exit"
+
+    cat > "${STATE_DIR}/run-plan.sh" <<EOF
+#!/bin/bash
+cd '${WORKTREE}'
+export V0_ROOT='${V0_ROOT}'
+PROMPT="\$(cat '${STATE_DIR}/prompt.txt')"
+script -q '${STATE_DIR}/logs/plan.log' '${V0_DIR}/bin/v0-plan' '${NAME}' "\${PROMPT}" --direct
+EXIT_CODE=\$?
+[[ ! -f '${STATE_DIR}/logs/plan.exit' ]] && echo \${EXIT_CODE} > '${STATE_DIR}/logs/plan.exit'
+EOF
+    chmod +x "${STATE_DIR}/run-plan.sh"
+    tmux new-session -d -s "${PLAN_SESSION}" -c "${TREE_DIR}" "${STATE_DIR}/run-plan.sh"
+  fi
+
+  update_state "tmux_session" "\"${PLAN_SESSION}\""
+  # Write session marker and project root for nudge to find this session
+  echo "${V0_ROOT}" > "${TREE_DIR}/.worker-project-root"
+  write_session_marker "${TREE_DIR}" "${PLAN_SESSION}"
+
+  IDLE_COUNT=0
+  IDLE_THRESHOLD=6
+  LAST_MTIME=""
+  while tmux has-session -t "${PLAN_SESSION}" 2>/dev/null; do
+    if [[ -f "${STATE_DIR}/logs/plan.exit" ]]; then
+      tmux kill-session -t "${PLAN_SESSION}" 2>/dev/null || true
+      break
+    fi
+    sleep 2
+    # Find which plan file exists for mtime check
+    PLAN_FILE=""
+    if [[ -f "${TREE_DIR}/${V0_PLANS_DIR}/${NAME}.md" ]]; then
+      PLAN_FILE="${TREE_DIR}/${V0_PLANS_DIR}/${NAME}.md"
+    elif [[ -f "${WORKTREE}/${V0_PLANS_DIR}/${NAME}.md" ]]; then
+      PLAN_FILE="${WORKTREE}/${V0_PLANS_DIR}/${NAME}.md"
+    elif [[ -f "${PLANS_DIR}/${NAME}.md" ]]; then
+      PLAN_FILE="${PLANS_DIR}/${NAME}.md"
+    fi
+    if [[ -n "${PLAN_FILE}" ]]; then
+      CURRENT_MTIME=$(stat -f %m "${PLAN_FILE}" 2>/dev/null || stat -c %Y "${PLAN_FILE}" 2>/dev/null || echo "0")
+      if [[ "${CURRENT_MTIME}" = "${LAST_MTIME}" ]]; then
+        IDLE_COUNT=$((IDLE_COUNT + 1))
+        if [[ ${IDLE_COUNT} -ge ${IDLE_THRESHOLD} ]]; then
+          emit_event "plan:idle_complete" "Plan file exists and agent idle, terminating session"
+          tmux kill-session -t "${PLAN_SESSION}" 2>/dev/null || true
+          echo "0" > "${STATE_DIR}/logs/plan.exit"
+          break
+        fi
+      else
+        IDLE_COUNT=0
+      fi
+      LAST_MTIME="${CURRENT_MTIME}"
+    fi
+  done
+
+  # Clean ANSI escape sequences from plan.log
+  v0_clean_log_file "${STATE_DIR}/logs/plan.log"
+
+  if [[ -f "${STATE_DIR}/logs/plan.exit" ]]; then
+    PLAN_EXIT=$(cat "${STATE_DIR}/logs/plan.exit")
+    rm -f "${STATE_DIR}/logs/plan.exit"
+  else
+    PLAN_EXIT=1
+  fi
+
+  PLAN_FOUND=""
+  if [[ -f "${TREE_DIR}/${V0_PLANS_DIR}/${NAME}.md" ]]; then
+    PLAN_FOUND="${TREE_DIR}/${V0_PLANS_DIR}/${NAME}.md"
+  elif [[ -f "${WORKTREE}/${V0_PLANS_DIR}/${NAME}.md" ]]; then
+    PLAN_FOUND="${WORKTREE}/${V0_PLANS_DIR}/${NAME}.md"
+  elif [[ -f "${PLANS_DIR}/${NAME}.md" ]]; then
+    PLAN_FOUND="${PLANS_DIR}/${NAME}.md"
+  fi
+
+  if [[ ${PLAN_EXIT} -ne 0 ]]; then
+    if [[ -n "${PLAN_FOUND}" ]]; then
+      emit_event "plan:recovered" "Exit code ${PLAN_EXIT} but plan file exists at ${PLAN_FOUND}"
+      log "Note: Process exited with code ${PLAN_EXIT} but plan file was created successfully"
+    else
+      ERROR_MSG="Plan creation failed. Check ${STATE_DIR}/logs/plan.log for details."
+      return 1
+    fi
+  fi
+
+  if [[ -z "${PLAN_FOUND}" ]]; then
+    ERROR_MSG="Plan file was not created at ${V0_PLANS_DIR}/${NAME}.md"
+    return 1
+  fi
+
+  # Commit plan to V0_DEVELOP_BRANCH via workspace
+  if ws_commit_plan_to_develop "${NAME}" "${PLAN_FOUND}"; then
+    emit_event "plan:commit" "Committed to ${V0_DEVELOP_BRANCH}"
+  else
+    emit_event "plan:commit" "Failed to commit to ${V0_DEVELOP_BRANCH}"
+  fi
+
+  rm -f "${STATE_DIR}/done"
+
+  # Use state machine transition to planned phase
+  sm_transition_to_planned "${NAME}" "${V0_PLANS_DIR}/${NAME}.md"
+
+  # Update feature issue with plan content (issue already created at init)
+  local PLAN_FILE="${PLAN_FOUND}"
+  local FEATURE_ID
+  FEATURE_ID=$(get_state epic_id)
+
+  if [[ -n "${FEATURE_ID}" ]] && [[ "${FEATURE_ID}" != "null" ]]; then
+    # Update existing issue with plan content and original prompt
+    file_plan_issue "${NAME}" "${PLAN_FILE}" "${FEATURE_ID}" "${PROMPT}"
+    emit_event "issue:updated" "Updated feature ${FEATURE_ID} with plan"
+  else
+    # Fallback: create new issue (shouldn't happen normally)
+    FEATURE_ID=$(file_plan_issue "${NAME}" "${PLAN_FILE}" "" "${PROMPT}")
+    if [[ -n "${FEATURE_ID}" ]]; then
+      update_state "epic_id" "\"${FEATURE_ID}\""
+      emit_event "issue:created" "Created feature ${FEATURE_ID}"
+    else
+      emit_event "issue:warning" "Failed to create feature issue"
+    fi
+  fi
+
+  # Note: blocked-by dependencies are added in v0-build, not here
+
+  # Add labels to the issue
+  LABELS=()
+  while IFS= read -r label; do
+    [[ -n "${label}" ]] && LABELS+=("${label}")
+  done < <(jq -r '.labels[]' "${STATE_FILE}" 2>/dev/null || true)
+
+  if [[ -n "${FEATURE_ID}" ]] && [[ ${#LABELS[@]} -gt 0 ]]; then
+    for label in "${LABELS[@]}"; do
+      wk label "${FEATURE_ID}" "${label}" 2>/dev/null || true
+    done
+  fi
+
+  # Transition to queued
+  sm_transition_to_queued "${NAME}" "${FEATURE_ID}"
+  v0_trace "build:plan:done" "Plan phase complete for ${NAME}"
+  log "Plan phase complete, issue filed"
+}
+
+run_build_phase() {
+  log "Starting build phase"
+  v0_trace "build:execute" "Starting build phase for ${NAME}"
+
+  emit_event "execute:starting" "Launching agent in tmux"
+
+  SESSION=$(v0_session_name "${NAME}" "feature")
+
+  if tmux has-session -t "${SESSION}" 2>/dev/null; then
+    log "Stale tmux session '${SESSION}' exists, killing it"
+    tmux kill-session -t "${SESSION}" 2>/dev/null || true
+  fi
+
+  tree_output=""
+  FEATURE_BRANCH=$(v0_expand_branch "${V0_FEATURE_BRANCH}" "${NAME}")
+  if ! tree_output=$("${V0_DIR}/bin/v0-tree" "${FEATURE_BRANCH}"); then
+    ERROR_MSG="Failed to create worktree for ${FEATURE_BRANCH}"
+    return 1
+  fi
+  { read -r TREE_DIR; read -r _WORKTREE; } <<< "${tree_output}"
+
+  FEATURE_ID=$(get_state epic_id)
+
+  M4_ARGS="-D HAS_PLAN=1 -D V0_GIT_REMOTE=${V0_GIT_REMOTE}"
+  m4 ${M4_ARGS} "${V0_DIR}/packages/cli/lib/templates/claude.build.m4" > "${TREE_DIR}/CLAUDE.md"
+  emit_event "claude.md:created" "${TREE_DIR}/CLAUDE.md"
+
+  HOOK_SCRIPT="${V0_DIR}/packages/hooks/lib/stop-build.sh"
+  mkdir -p "${TREE_DIR}/.claude"
+  cat > "${TREE_DIR}/.claude/settings.local.json" <<SETTINGS_EOF
+{
+  "hooks": {
+    "Stop": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "${HOOK_SCRIPT}"
+          }
+        ]
+      }
+    ],
+    "PreCompact": [
+      {
+        "matcher": "",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "wk prime"
+          }
+        ]
+      }
+    ],
+    "SessionStart": [
+      {
+        "matcher": "",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "wk prime"
+          }
+        ]
+      }
+    ]
+  }
+}
+SETTINGS_EOF
+
+  # Try local plan first, fallback to V0_DEVELOP_BRANCH
+  if [[ -f "${PLANS_DIR}/${NAME}.md" ]]; then
+    /bin/cp "${PLANS_DIR}/${NAME}.md" "${TREE_DIR}/PLAN.md"
+    emit_event "plan:source" "Copied from local ${V0_PLANS_DIR}"
+  elif ws_get_plan_from_develop "${NAME}" "${TREE_DIR}/PLAN.md"; then
+    emit_event "plan:source" "Retrieved from ${V0_DEVELOP_BRANCH}"
+  else
+    log "Warning: Plan file not found locally or on ${V0_DEVELOP_BRANCH}"
+  fi
+
+  create_done_script "${TREE_DIR}"
+
+  local NO_MERGE
+  NO_MERGE=$(get_state merge_queued)
+  [[ "${NO_MERGE}" = "false" ]] && NO_MERGE=1 || NO_MERGE=""
+
+  CLAUDE_ARGS="--model opus --dangerously-skip-permissions --allow-dangerously-skip-permissions"
+
+  cat > "${TREE_DIR}/.claude/on-complete.sh" <<WRAPPER
+#!/bin/bash
+STATE_FILE="${STATE_FILE}"
+BUILD_ROOT="${V0_ROOT}"
+OP_NAME="${NAME}"
+V0_DIR="${V0_DIR}"
+PROJECT="${PROJECT}"
+
+COMPLETED_JSON=\$(wk list --output json --label "plan:\${OP_NAME}" --status done 2>/dev/null | jq '[.[].id]' 2>/dev/null)
+COMPLETED_JSON="\${COMPLETED_JSON:-[]}"
+if [[ "\${COMPLETED_JSON}" != "[]" ]]; then
+  tmp=\$(mktemp)
+  jq ".completed = \${COMPLETED_JSON}" "\${STATE_FILE}" > "\${tmp}" && mv "\${tmp}" "\${STATE_FILE}"
+fi
+
+tmp=\$(mktemp)
+jq '.phase = "completed" | .completed_at = "'\$(date -u +%Y-%m-%dT%H:%M:%SZ)'"' "\${STATE_FILE}" > "\${tmp}" && mv "\${tmp}" "\${STATE_FILE}"
+
+if [[ "\$(jq -r '.merge_queued // false' "\${STATE_FILE}")" = "true" ]]; then
+  echo "=== Merge queued, preparing for merge ==="
+  tmp=\$(mktemp)
+  jq '.phase = "pending_merge"' "\${STATE_FILE}" > "\${tmp}" && mv "\${tmp}" "\${STATE_FILE}"
+
+  # Clear inherited MERGEQ_DIR/BUILD_DIR to prevent cross-project contamination
+  # (tmux server may have inherited these from a different project)
+  if unset MERGEQ_DIR BUILD_DIR; V0_ROOT="\${BUILD_ROOT}" "\${V0_DIR}/bin/v0-mergeq" --enqueue "\${OP_NAME}"; then
+    echo "Operation '\${OP_NAME}' added to merge queue"
+  else
+    echo "Warning: Failed to enqueue for merge"
+    echo "Run manually: v0 startup mergeq"
+  fi
+fi
+WRAPPER
+  chmod +x "${TREE_DIR}/.claude/on-complete.sh"
+
+  # Ensure nudge worker is running and write session marker
+  ensure_nudge_running
+  write_session_marker "${TREE_DIR}" "${SESSION}"
+
+  tmux new-session -d -s "${SESSION}" -c "${TREE_DIR}" \
+    "V0_OP='${NAME}' V0_PLAN_LABEL='plan:${NAME}' V0_WORKTREE='${TREE_DIR}/${REPO_NAME}' V0_ROOT='${V0_ROOT}' claude ${CLAUDE_ARGS} 'Implement the plan. See CLAUDE.md and PLAN.md for details.'; \
+     '${TREE_DIR}/.claude/on-complete.sh'; \
+     echo ''; echo 'Session complete. Closing in 5 seconds...'; sleep 5"
+
+  # Store worktree first (needed by sm_is_merge_ready later)
+  sm_update_state "${NAME}" "worktree" "\"${TREE_DIR}/${REPO_NAME}\""
+  # Use state machine transition to executing phase
+  sm_transition_to_executing "${NAME}" "${SESSION}"
+
+  v0_trace "build:execute:started" "Build phase started: ${NAME} (session: ${SESSION})"
+  log "Build phase started: tmux session ${SESSION}"
+  log "Watch live: v0 attach ${NAME}"
+}
+
+main() {
+  log "Starting background worker for ${NAME}"
+  v0_trace "build:worker" "Starting build worker for operation: ${NAME}"
+
+  sm_update_state "${NAME}" "worker_started_at" "\"$(date -u +%Y-%m-%dT%H:%M:%SZ)\""
+
+  PHASE=$(sm_get_phase "${NAME}")
+  v0_trace "build:worker" "Current phase: ${PHASE}"
+  log "Current phase: ${PHASE}"
+
+  case "${PHASE}" in
+    init)
+      check_hold_before_phase || exit 0
+      check_wok_blockers || exit 0
+      run_plan_phase || exit 1
+      check_hold_before_phase || exit 0
+      check_wok_blockers || exit 0
+      run_build_phase || exit 1
+      ;;
+    planned)
+      # Plan exists - update or create issue
+      log "Updating/filing issue for existing plan"
+      local FEATURE_ID
+      FEATURE_ID=$(file_or_update_plan_issue)
+      sm_transition_to_queued "${NAME}" "${FEATURE_ID}"
+      check_hold_before_phase || exit 0
+      check_wok_blockers || exit 0
+      run_build_phase || exit 1
+      ;;
+    queued)
+      check_hold_before_phase || exit 0
+      check_wok_blockers || exit 0
+      run_build_phase || exit 1
+      ;;
+    # Note: blocked phase removed in v2 - blocking checked via wok at check_wok_blockers
+    failed|interrupted|cancelled)
+      log "Recovering from ${PHASE} state"
+      # Use state machine to determine resume phase and clear error
+      RESUME_PHASE=$(sm_get_resume_phase "${NAME}")
+      sm_clear_error_state "${NAME}"
+      log "Resuming from ${RESUME_PHASE}"
+      sm_emit_event "${NAME}" "worker:recovered" "Resuming from ${PHASE} at ${RESUME_PHASE}"
+      case "${RESUME_PHASE}" in
+        queued)
+          check_wok_blockers || exit 0
+          run_build_phase || exit 1
+          ;;
+        planned)
+          # Update/file issue then build
+          local FEATURE_ID
+          FEATURE_ID=$(file_or_update_plan_issue)
+          sm_transition_to_queued "${NAME}" "${FEATURE_ID}"
+          check_wok_blockers || exit 0
+          run_build_phase || exit 1
+          ;;
+        init)
+          check_wok_blockers || exit 0
+          run_plan_phase || exit 1
+          check_wok_blockers || exit 0
+          run_build_phase || exit 1
+          ;;
+      esac
+      ;;
+    *)
+      log "Phase '${PHASE}' does not require worker processing"
+      ;;
+  esac
+
+  ERROR_MSG=""
+  v0_trace "build:worker:done" "Build worker completed successfully for ${NAME}"
+  log "Background worker completed successfully"
+}
+
+main

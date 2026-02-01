@@ -6,25 +6,42 @@ set -e
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 V0_DIR="$(dirname "${SCRIPT_DIR}")"
 ROOT_DIR="$(pwd)"  # Current directory where command was invoked
-WORKER_BRANCH="v0/worker/chore"
 
 # Source shared utilities
-source "${V0_DIR}/lib/v0-common.sh"
-source "${V0_DIR}/lib/worker-common.sh"
+source "${V0_DIR}/packages/cli/lib/v0-common.sh"
+source "${V0_DIR}/packages/cli/lib/history-format.sh"
+source "${V0_DIR}/packages/worker/lib/worker-common.sh"
+source "${V0_DIR}/packages/worker/lib/nudge-common.sh"
 
-# Load project config (exits if not found)
-v0_load_config
+# Determine if we're in standalone or project mode
+if v0_find_project_root >/dev/null 2>&1; then
+    v0_load_config
+else
+    v0_load_standalone_config
+fi
 
-# Initialize namespaced session names (must be after v0_load_config)
-WORKER_SESSION=$(v0_session_name "worker" "chore")
-POLLING_SESSION=$(v0_session_name "polling" "chore")
-POLLING_LOG="/tmp/v0-${PROJECT}-chore-polling.log"
+# Source branch status (warning if agent behind, info if ahead; skipped in standalone)
+source "${V0_DIR}/packages/status/lib/branch-status.sh"
+warn_branch_status || true
+
+# Worker branch derived from develop branch (must be after config load)
+# In standalone mode, V0_DEVELOP_BRANCH is empty so this becomes "/chores"
+WORKER_BRANCH=$(v0_worker_branch "chore")
+
+# Initialize namespaced session names (must be after config load)
+if v0_is_standalone; then
+    WORKER_SESSION="v0-standalone-worker-chore"
+    POLLING_SESSION="v0-standalone-polling-chore"
+    POLLING_LOG="/tmp/v0-standalone-chore-polling.log"
+else
+    WORKER_SESSION=$(v0_session_name "worker" "chore")
+    POLLING_SESSION=$(v0_session_name "polling" "chore")
+    POLLING_LOG="/tmp/v0-${PROJECT}-chore-polling.log"
+fi
 
 usage() {
-  cat <<'EOF'
-Usage: v0 chore <chore description>
-       v0 chore --start
-       v0 chore --stop
+  v0_help <<'EOF'
+Usage: v0 chore [options] <chore description>
        v0 chore --status
        v0 chore --history
 
@@ -32,21 +49,23 @@ Simple sequential chore processing.
 
 Commands:
   <description>   Report a chore and ensure worker is running
-  --start         Start worker to process existing chores
-  --stop          Stop the worker
   --status        Show worker state and pending chores
   --logs          Show worker stdout/stderr logs
   --err           Show worker error logs
   --history       Show completed chores and their details
 
 Options:
+  --after <ids>   Block this chore until specified issues complete
+                  Accepts operation names or wok ticket IDs
+                  (e.g., auth, v0-123, api-refactor,v0-456)
   --history       Show last 10 completed chores
   --history=N     Show last N completed chores
   --history=all   Show all completed chores
 
 Examples:
   v0 chore "Update dependencies"
-  v0 chore --start
+  v0 chore --after v0-123 "Chore that depends on v0-123"
+  v0 chore --after v0-1,v0-2 "Chore blocked by multiple issues"
   v0 chore --status
   v0 chore --logs
   v0 chore --err
@@ -82,6 +101,14 @@ start_worker() {
     return 0
   fi
 
+  # Use standalone-specific startup for standalone mode
+  if v0_is_standalone; then
+    start_worker_standalone
+    return
+  fi
+
+  v0_trace "chore:worker" "Starting chore worker"
+
   # Create worktree with proper branch name
   local name="v0-chore-worker"
   local tree_output
@@ -94,31 +121,25 @@ start_worker() {
   local tree_dir="${WORKER_TREE_DIR}"  # Alias for readability in this function
 
   # Save git dir, branch name, and current directory for later cleanup and reset
-  # This allows stopping the worker from any directory and resetting between runs
-  echo "${WORKER_GIT_DIR}" > "${WORKER_TREE_DIR}/.worker-git-dir"
-  echo "${WORKER_BRANCH}" > "${WORKER_TREE_DIR}/.worker-branch"
-  pwd > "${WORKER_TREE_DIR}/.worker-project-root"
+  setup_worker_markers "${tree_dir}" "${WORKER_GIT_DIR}" "${WORKER_BRANCH}"
 
-  # Fast-forward worktree to latest main
-  git -C "${WORKER_GIT_DIR}" fetch origin main
-  git -C "${WORKER_GIT_DIR}" reset --hard origin/main
+  # Fast-forward worktree to latest develop branch
+  v0_reset_to_develop "${WORKER_GIT_DIR}"
 
   # Link worktree to main repo's shared workspace
-  # Remove any local .wok database first (if it exists)
   rm -rf "${tree_dir}/.wok"
-  # Now initialize with the shared workspace
-  wk init --workspace "${ROOT_DIR}/.wok" --path "${tree_dir}"
+  link_to_workspace "${tree_dir}" "${ROOT_DIR}"
 
   # Write worker assignee role for this worktree
   mkdir -p "${tree_dir}/.wok/current"
   echo "worker:chore" > "${tree_dir}/.wok/current/assignee"
 
   # Copy worker instructions template
-  cp "${V0_DIR}/lib/templates/claude.chore.md" "${tree_dir}/CLAUDE.md"
+  cp "${V0_DIR}/packages/cli/lib/templates/claude.chore.md" "${tree_dir}/CLAUDE.md"
 
   # Create settings.local.json with Stop hook AND progress notification hook
-  HOOK_SCRIPT="${V0_DIR}/lib/hooks/stop-chore.sh"
-  NOTIFY_HOOK="${V0_DIR}/lib/hooks/notify-progress.sh"
+  HOOK_SCRIPT="${V0_DIR}/packages/hooks/lib/stop-chore.sh"
+  NOTIFY_HOOK="${V0_DIR}/packages/hooks/lib/notify-progress.sh"
   mkdir -p "${tree_dir}/.claude"
   cat > "${tree_dir}/.claude/settings.local.json" <<SETTINGS_EOF
 {
@@ -173,13 +194,26 @@ fi
 
 BRANCH="chore/\${CHORE_ID}"
 STATE_DIR="${BUILD_DIR}/chore/\${CHORE_ID}"
-WORKTREE_ROOT="\$(pwd)"
 
-cd ${REPO_NAME}
+# Derive paths from script location, not current working directory
+SCRIPT_DIR="\$(cd "\$(dirname "\${BASH_SOURCE[0]}")" && pwd)"
+WORKTREE_ROOT="\${SCRIPT_DIR}"
+GIT_DIR="\${WORKTREE_ROOT}/${REPO_NAME}"
 
-# Reset worktree to latest main
-git fetch origin main
-git reset --hard origin/main
+cd "\${GIT_DIR}"
+
+# Reset worktree to latest develop branch
+if git fetch "${V0_GIT_REMOTE}" "${V0_DEVELOP_BRANCH}" 2>/dev/null; then
+  git reset --hard "${V0_GIT_REMOTE}/${V0_DEVELOP_BRANCH}"
+elif git rev-parse --verify "${V0_DEVELOP_BRANCH}" 2>/dev/null; then
+  echo "Note: Remote branch '${V0_DEVELOP_BRANCH}' not found, using local" >&2
+  git reset --hard "${V0_DEVELOP_BRANCH}"
+else
+  echo "Note: Branch '${V0_DEVELOP_BRANCH}' not found, creating from main" >&2
+  git fetch "${V0_GIT_REMOTE}" main 2>/dev/null || true
+  git branch -f "${V0_DEVELOP_BRANCH}" "${V0_GIT_REMOTE}/main" 2>/dev/null || true
+  git reset --hard "${V0_DEVELOP_BRANCH}"
+fi
 
 # Record branch state for recovery
 mkdir -p "\${STATE_DIR}"
@@ -213,9 +247,13 @@ fi
 
 BRANCH="chore/\${CHORE_ID}"
 STATE_DIR="${BUILD_DIR}/chore/\${CHORE_ID}"
-WORKTREE_ROOT="\$(pwd)"
 
-cd ${REPO_NAME}
+# Derive paths from script location, not current working directory
+SCRIPT_DIR="\$(cd "\$(dirname "\${BASH_SOURCE[0]}")" && pwd)"
+WORKTREE_ROOT="\${SCRIPT_DIR}"
+GIT_DIR="\${WORKTREE_ROOT}/${REPO_NAME}"
+
+cd "\${GIT_DIR}"
 
 # Get commit info before pushing
 COMMIT_SHA=\$(git rev-parse HEAD)
@@ -223,7 +261,7 @@ COMMIT_MSG=\$(git log -1 --format=%s)
 
 # Push current commits as chore/<id> branch
 echo "Pushing \${BRANCH}..."
-git push -u origin "HEAD:refs/heads/\${BRANCH}"
+git push -u "${V0_GIT_REMOTE}" "HEAD:refs/heads/\${BRANCH}"
 
 # Update state file
 mkdir -p "\${STATE_DIR}"
@@ -239,8 +277,10 @@ cat > "\${STATE_DIR}/state.json" <<STATE_EOF
 STATE_EOF
 
 # Queue for merge with issue ID tracking (for logging/debugging)
+# Clear inherited MERGEQ_DIR/BUILD_DIR to prevent cross-project contamination
+# (tmux server may have inherited these from a different project)
 echo "Queueing for merge..."
-"${V0_DIR}/bin/v0-mergeq" --enqueue "\${BRANCH}" --issue-id "\${CHORE_ID}"
+unset MERGEQ_DIR BUILD_DIR; "${V0_DIR}/bin/v0-mergeq" --enqueue "\${BRANCH}" --issue-id "\${CHORE_ID}"
 
 # Transfer ownership to merge queue
 (cd "\${WORKTREE_ROOT}" && wk edit "\${CHORE_ID}" assignee "worker:mergeq")
@@ -249,10 +289,19 @@ echo "Queueing for merge..."
 echo "Closing \${CHORE_ID}..."
 (cd "\${WORKTREE_ROOT}" && wk done "\${CHORE_ID}")
 
-# Reset worktree to latest main
-echo "Resetting to latest main..."
-git fetch origin main
-git reset --hard origin/main
+# Reset worktree to latest develop branch
+echo "Resetting to latest ${V0_DEVELOP_BRANCH}..."
+if git fetch "${V0_GIT_REMOTE}" "${V0_DEVELOP_BRANCH}" 2>/dev/null; then
+  git reset --hard "${V0_GIT_REMOTE}/${V0_DEVELOP_BRANCH}"
+elif git rev-parse --verify "${V0_DEVELOP_BRANCH}" 2>/dev/null; then
+  echo "Note: Remote branch '${V0_DEVELOP_BRANCH}' not found, using local" >&2
+  git reset --hard "${V0_DEVELOP_BRANCH}"
+else
+  echo "Note: Branch '${V0_DEVELOP_BRANCH}' not found, creating from main" >&2
+  git fetch "${V0_GIT_REMOTE}" main 2>/dev/null || true
+  git branch -f "${V0_DEVELOP_BRANCH}" "${V0_GIT_REMOTE}/main" 2>/dev/null || true
+  git reset --hard "${V0_DEVELOP_BRANCH}"
+fi
 
 echo ""
 echo "Completed \${CHORE_ID}"
@@ -300,6 +349,205 @@ FIXED_SCRIPT
 
   local wrapper_script="${tree_dir}/claude-worker.sh"
 
+  # Ensure nudge worker is running to monitor the session
+  ensure_nudge_running
+
+  # Start the polling loop
+  create_polling_loop "${tree_dir}" chore "${POLLING_LOG}"
+
+  # Launch Claude for the first time
+  tmux new-session -d -s "${WORKER_SESSION}" -c "${tree_dir}" "${wrapper_script}"
+
+  # Verify the session started
+  if tmux has-session -t "${WORKER_SESSION}" 2>/dev/null; then
+    v0_trace "chore:worker" "Chore worker started (session: ${WORKER_SESSION})"
+    echo -e "${C_GREEN}Worker started.${C_RESET} Use '${C_BOLD}v0 chore --status${C_RESET}' to check progress."
+  else
+    v0_trace "chore:worker:failed" "Failed to start chore worker tmux session"
+    echo "Error: Failed to start worker tmux session" >&2
+    return 1
+  fi
+}
+
+# Start the standalone worker (no git worktree, no merge queue)
+start_worker_standalone() {
+  local tree_dir="${V0_STANDALONE_DIR}/tree/chore-worker"
+  local cwd="${ROOT_DIR}"  # Current working directory when chore was invoked
+
+  # Create the worker directory
+  mkdir -p "${tree_dir}"
+
+  # Save state for later cleanup
+  echo "${tree_dir}" > "${tree_dir}/.worker-tree-dir"
+  echo "${cwd}" > "${tree_dir}/.worker-cwd"
+
+  # Link worktree to standalone workspace
+  rm -rf "${tree_dir}/.wok"
+  wk init --workspace "${V0_STANDALONE_DIR}/.wok" --path "${tree_dir}"
+
+  # Write worker assignee role for this worktree
+  mkdir -p "${tree_dir}/.wok/current"
+  echo "worker:chore" > "${tree_dir}/.wok/current/assignee"
+
+  # Copy standalone worker instructions template
+  if [[ -f "${V0_DIR}/packages/cli/lib/templates/claude.chore.standalone.md" ]]; then
+    # Use CWD variable in template
+    sed "s|{{CWD}}|${cwd}|g" "${V0_DIR}/packages/cli/lib/templates/claude.chore.standalone.md" > "${tree_dir}/CLAUDE.md"
+  else
+    # Fallback to regular template
+    cp "${V0_DIR}/packages/cli/lib/templates/claude.chore.md" "${tree_dir}/CLAUDE.md"
+  fi
+
+  # Create settings.local.json with Stop hook AND progress notification hook
+  HOOK_SCRIPT="${V0_DIR}/packages/hooks/lib/stop-chore.sh"
+  NOTIFY_HOOK="${V0_DIR}/packages/hooks/lib/notify-progress.sh"
+  mkdir -p "${tree_dir}/.claude"
+  cat > "${tree_dir}/.claude/settings.local.json" <<SETTINGS_EOF
+{
+  "hooks": {
+    "Stop": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "${HOOK_SCRIPT}"
+          }
+        ]
+      }
+    ],
+    "PostToolUse": [
+      {
+        "matcher": "Bash",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "V0_BUILD_DIR='${BUILD_DIR}' ${NOTIFY_HOOK}"
+          }
+        ]
+      }
+    ],
+    "PreCompact": [
+      {
+        "matcher": "",
+        "hooks": [{"type": "command", "command": "wk prime"}]
+      }
+    ],
+    "SessionStart": [
+      {
+        "matcher": "",
+        "hooks": [{"type": "command", "command": "wk prime"}]
+      }
+    ]
+  }
+}
+SETTINGS_EOF
+
+  # Create start-chore script (simpler than new-branch, no git operations)
+  cat > "${tree_dir}/start-chore" <<START_CHORE_SCRIPT
+#!/bin/bash
+set -e
+
+CHORE_ID="\$1"
+if [[ -z "\${CHORE_ID}" ]]; then
+  echo "Usage: ./start-chore <chore-id>"
+  exit 1
+fi
+
+STATE_DIR="${BUILD_DIR}/chore/\${CHORE_ID}"
+
+# Record state for tracking
+mkdir -p "\${STATE_DIR}"
+cat > "\${STATE_DIR}/state.json" <<STATE_EOF
+{
+  "issue_id": "\${CHORE_ID}",
+  "started_at": "\$(date -u +%Y-%m-%dT%H:%M:%SZ)",
+  "cwd": "${cwd}",
+  "status": "started"
+}
+STATE_EOF
+
+# Set assignee to this worker
+wk edit "\${CHORE_ID}" assignee "worker:chore"
+
+echo "Ready to work on \${CHORE_ID}"
+echo "Working directory: ${cwd}"
+START_CHORE_SCRIPT
+  chmod +x "${tree_dir}/start-chore"
+
+  # Create completed script (mark done, exit session - no git/merge queue)
+  cat > "${tree_dir}/completed" <<COMPLETED_SCRIPT
+#!/bin/bash
+set -e
+
+CHORE_ID="\$1"
+if [[ -z "\${CHORE_ID}" ]]; then
+  echo "Usage: ./completed <chore-id>"
+  exit 1
+fi
+
+STATE_DIR="${BUILD_DIR}/chore/\${CHORE_ID}"
+
+# Update state file
+mkdir -p "\${STATE_DIR}"
+cat > "\${STATE_DIR}/state.json" <<STATE_EOF
+{
+  "issue_id": "\${CHORE_ID}",
+  "completed_at": "\$(date -u +%Y-%m-%dT%H:%M:%SZ)",
+  "status": "completed"
+}
+STATE_EOF
+
+# Close the chore
+echo "Closing \${CHORE_ID}..."
+wk done "\${CHORE_ID}"
+
+echo ""
+echo "Completed \${CHORE_ID}"
+
+# Exit Claude session to keep context window small
+echo "Exiting session..."
+
+# Mark clean exit
+touch "${tree_dir}/.done-exit"
+
+# Find and kill claude process
+find_claude() {
+  local pid=\$1
+  while [[ -n "\${pid}" ]] && [[ "\${pid}" != "1" ]]; do
+    local cmd
+    cmd=\$(ps -o comm= -p "\${pid}" 2>/dev/null)
+    if [[ "\${cmd}" == *"claude"* ]]; then
+      echo "\${pid}"
+      return
+    fi
+    pid=\$(ps -o ppid= -p "\${pid}" 2>/dev/null | tr -d ' ')
+  done
+}
+
+CLAUDE_PID=\$(find_claude \$\$)
+if [[ -n "\${CLAUDE_PID}" ]]; then
+  kill -TERM "\${CLAUDE_PID}" 2>/dev/null || true
+fi
+exit 0
+COMPLETED_SCRIPT
+  chmod +x "${tree_dir}/completed"
+
+  # Create done script for worker
+  create_done_script "${tree_dir}" "chore"
+
+  # Read CLAUDE.md and pass as instruction
+  local claude_instruction
+  claude_instruction="$(cat "${tree_dir}/CLAUDE.md")"
+  create_wrapper_script "${tree_dir}" "claude-worker.log" "Claude Chore Worker (Standalone)" "v0 chore --err" "${V0_DIR}" claude --model opus --dangerously-skip-permissions --allow-dangerously-skip-permissions "${claude_instruction}"
+
+  echo -e "Starting standalone chore worker in tmux session: ${C_CYAN}${WORKER_SESSION}${C_RESET}"
+  echo -e "Working directory: ${C_CYAN}${cwd}${C_RESET}"
+
+  local wrapper_script="${tree_dir}/claude-worker.sh"
+
+  # Ensure nudge worker is running to monitor the session
+  ensure_nudge_running
+
   # Start the polling loop
   create_polling_loop "${tree_dir}" chore "${POLLING_LOG}"
 
@@ -317,7 +565,44 @@ FIXED_SCRIPT
 
 # Stop the worker
 stop_worker() {
+  if v0_is_standalone; then
+    stop_worker_standalone
+    return
+  fi
+  v0_trace "chore:worker" "Stopping chore worker"
+  reopen_worker_issues "worker:chore"
   generic_stop_worker "${WORKER_SESSION}" "${WORKER_BRANCH}"
+  v0_trace "chore:worker" "Chore worker stopped"
+}
+
+# Stop the standalone worker
+stop_worker_standalone() {
+  if ! tmux has-session -t "${WORKER_SESSION}" 2>/dev/null && ! pgrep -f "while true.*${WORKER_SESSION}" > /dev/null 2>&1; then
+    echo "Worker not running"
+    return 0
+  fi
+
+  reopen_worker_issues "worker:chore"
+  echo "Stopping standalone worker..."
+
+  # Kill tmux session
+  tmux kill-session -t "${WORKER_SESSION}" 2>/dev/null || true
+
+  # Kill polling daemon
+  pkill -f "while true.*${WORKER_SESSION}" 2>/dev/null || true
+
+  # Clean up worker directory (keep logs)
+  local tree_dir="${V0_STANDALONE_DIR}/tree/chore-worker"
+  if [[ -d "${tree_dir}" ]]; then
+    # Remove helper scripts but keep logs
+    rm -f "${tree_dir}/start-chore" "${tree_dir}/completed" "${tree_dir}/done"
+    rm -f "${tree_dir}/CLAUDE.md" "${tree_dir}/claude-worker.sh"
+    rm -rf "${tree_dir}/.claude"
+    rm -f "${tree_dir}/.worker-tree-dir" "${tree_dir}/.worker-cwd"
+    rm -f "${tree_dir}/.done-exit" "${tree_dir}/.worker-error"
+  fi
+
+  echo "Worker stopped"
 }
 
 # Show status
@@ -360,10 +645,8 @@ show_status() {
     local count
     count=$(echo "${in_progress}" | wc -l | tr -d ' ')
     if [[ "${count}" -le "${shown}" ]]; then
-      # shellcheck disable=SC2001
       echo "${in_progress}" | sed 's/^/  /'
     else
-      # shellcheck disable=SC2001
       echo "${in_progress}" | head -n "${shown}" | sed 's/^/  /'
       local remaining=$((count - shown))
       echo "  ... and ${remaining} more"
@@ -376,10 +659,8 @@ show_status() {
     local count
     count=$(echo "${open}" | wc -l | tr -d ' ')
     if [[ "${count}" -le "${shown}" ]]; then
-      # shellcheck disable=SC2001
       echo "${open}" | sed 's/^/  /'
     else
-      # shellcheck disable=SC2001
       echo "${open}" | head -n "${shown}" | sed 's/^/  /'
       local remaining=$((count - shown))
       echo "  ... and ${remaining} more"
@@ -398,6 +679,8 @@ report_chore() {
     usage
   fi
 
+  v0_trace "chore:report" "Reporting new chore"
+
   # Split at first double newline (paragraph break)
   local title description
   if [[ "${input}" == *$'\n\n'* ]]; then
@@ -409,21 +692,12 @@ report_chore() {
     description=""
   fi
 
-  # Normalize whitespace in title: replace newlines and consecutive whitespace with single space
-  title=$(echo "${title}" | tr '\n' ' ' | sed 's/  */ /g' | sed 's/^ //;s/ $//')
-
-  # If title still exceeds 120 chars, truncate and put full input in description
-  if [[ ${#title} -gt 120 ]]; then
-    description="${input}"
-    title="${title:0:120}"
-  fi
-
   # Create the chore (allow failure so we can show the error)
   local output id exit_code
   if [[ -n "${description}" ]]; then
-    output=$(wk new chore "${title}" --description "${description}" 2>&1) && exit_code=0 || exit_code=$?
+    output=$(wk new chore "${title}" --description "${description}" -o id 2>&1) && exit_code=0 || exit_code=$?
   else
-    output=$(wk new chore "${title}" 2>&1) && exit_code=0 || exit_code=$?
+    output=$(wk new chore "${title}" -o id 2>&1) && exit_code=0 || exit_code=$?
   fi
 
   if [[ "${exit_code}" -ne 0 ]]; then
@@ -432,70 +706,43 @@ report_chore() {
     exit 1
   fi
 
-  id=$(echo "${output}" | grep -oE "$(v0_issue_pattern)" | head -1)
+  # -o id returns just the issue ID
+  id="${output}"
 
   if [[ -z "${id}" ]]; then
     echo "Error: Failed to create chore (no ID returned)"
-    echo "${output}"
     exit 1
   fi
 
-  echo "Created chore: ${id}"
+  # Add blocked-by dependencies if --after was specified
+  if [[ ${#AFTER_IDS[@]} -gt 0 ]]; then
+    # Resolve operation names to wok ticket IDs
+    local resolved_ids=()
+    for after_id in "${AFTER_IDS[@]}"; do
+      local resolved
+      if resolved=$(v0_resolve_to_wok_id "${after_id}"); then
+        resolved_ids+=("${resolved}")
+      else
+        echo "Warning: Could not resolve '${after_id}' to a wok ticket ID (skipping)"
+      fi
+    done
+
+    if [[ ${#resolved_ids[@]} -gt 0 ]]; then
+      if ! wk dep "${id}" blocked-by "${resolved_ids[@]}" 2>/dev/null; then
+        echo "Warning: Failed to add dependencies"
+      else
+        echo "  Blocked by: ${resolved_ids[*]}"
+      fi
+    fi
+  fi
+
+  v0_trace "chore:report" "Created chore ${id}"
+  echo -e "${C_GREEN}Created chore:${C_RESET} ${C_CYAN}${id}${C_RESET}"
   echo "  Title:"
   echo "${title}" | fmt -w 76 | sed 's/^/    /'
 
   # Ensure worker is running
   ensure_worker_running
-}
-
-# Format timestamp - relative for today, date for older
-format_timestamp() {
-  local iso_timestamp="$1"
-  local today now_epoch ts_epoch diff_secs
-
-  # Get today's date
-  today=$(date +%Y-%m-%d)
-
-  # Extract date portion from timestamp
-  local ts_date
-  ts_date=$(echo "${iso_timestamp}" | cut -dT -f1)
-
-  if [[ "${ts_date}" = "${today}" ]]; then
-    # Today - show relative time
-    now_epoch=$(date +%s)
-    # Parse ISO timestamp to epoch (handle both with and without Z suffix)
-    local clean_ts
-    clean_ts="${iso_timestamp%Z}"
-    ts_epoch=$(date -j -f "%Y-%m-%dT%H:%M:%S" "${clean_ts}" +%s 2>/dev/null || date -d "${iso_timestamp}" +%s 2>/dev/null)
-
-    if [[ -z "${ts_epoch}" ]]; then
-      echo "${ts_date}"
-      return
-    fi
-
-    diff_secs=$((now_epoch - ts_epoch))
-
-    if [[ "${diff_secs}" -lt 60 ]]; then
-      echo "just now"
-    elif [[ "${diff_secs}" -lt 3600 ]]; then
-      local mins=$((diff_secs / 60))
-      if [[ "${mins}" -eq 1 ]]; then
-        echo "1 min ago"
-      else
-        echo "${mins} mins ago"
-      fi
-    else
-      local hrs=$((diff_secs / 3600))
-      if [[ "${hrs}" -eq 1 ]]; then
-        echo "1 hr ago"
-      else
-        echo "${hrs} hrs ago"
-      fi
-    fi
-  else
-    # Not today - show date
-    echo "${ts_date}"
-  fi
 }
 
 # Show chore history
@@ -517,14 +764,15 @@ show_history() {
     [[ "${count}" -ge "${limit}" ]] && break
 
     local id
-    id=$(echo "${line}" | grep -oE "$(v0_issue_pattern)" | head -1)
+    # Extract issue ID - match any prefix-hexid format
+    id=$(echo "${line}" | v0_grep_extract '[a-zA-Z0-9]+-[a-f0-9]+' | head -1)
     [[ -z "${id}" ]] && continue
 
     local state_file="${BUILD_DIR}/chore/${id}/state.json"
     if [[ -f "${state_file}" ]]; then
       local pushed_at commit_msg
-      pushed_at=$(grep -o '"pushed_at": "[^"]*"' "${state_file}" | cut -d'"' -f4)
-      commit_msg=$(grep -o '"commit_message": "[^"]*"' "${state_file}" | cut -d'"' -f4)
+      pushed_at=$(v0_grep_extract '"pushed_at": "[^"]*"' "${state_file}" | cut -d'"' -f4)
+      commit_msg=$(v0_grep_extract '"commit_message": "[^"]*"' "${state_file}" | cut -d'"' -f4)
 
       # Format date - relative for today, date for older
       local date_str
@@ -534,7 +782,6 @@ show_history() {
     else
       # No state file - show from wk list
       local title
-      # shellcheck disable=SC2001
       title=$(echo "${line}" | sed 's/^[^-]*-[^ ]* \[P[0-4]\] \[chore\] closed - //')
       printf "%-12s (no state) %s\n" "${id}" "${title}"
     fi
@@ -543,65 +790,146 @@ show_history() {
   done <<< "${chores}"
 }
 
-# Main
-case "${1:-}" in
-  --start)
+# Parse arguments
+AFTER_IDS=()
+ACTION=""
+POSITIONAL=()
+
+while [[ $# -gt 0 ]]; do
+  case "$1" in
+    --after)
+      # Split comma-separated IDs and add to array
+      IFS=',' read -ra ids <<< "$2"
+      AFTER_IDS+=("${ids[@]}")
+      shift 2
+      ;;
+    --after=*)
+      IFS=',' read -ra ids <<< "${1#--after=}"
+      AFTER_IDS+=("${ids[@]}")
+      shift
+      ;;
+    --start)
+      ACTION="start"
+      shift
+      ;;
+    --stop)
+      ACTION="stop"
+      shift
+      ;;
+    --restart)
+      ACTION="restart"
+      shift
+      ;;
+    --status)
+      ACTION="status"
+      shift
+      ;;
+    --logs)
+      ACTION="logs"
+      shift
+      ;;
+    --err)
+      ACTION="err"
+      shift
+      ;;
+    --history)
+      ACTION="history"
+      HISTORY_LIMIT=10
+      shift
+      ;;
+    --history=*)
+      ACTION="history"
+      arg="${1#--history=}"
+      if [[ "${arg}" = "all" ]]; then
+        HISTORY_LIMIT=999999
+      else
+        HISTORY_LIMIT="${arg}"
+      fi
+      shift
+      ;;
+    -h|--help)
+      usage
+      ;;
+    --)
+      echo "Error: Invalid argument '--'. Did you mean '--status'?"
+      usage
+      ;;
+    --*)
+      echo "Error: Unknown flag '$1'"
+      echo "Run 'v0 chore --help' for usage"
+      exit 1
+      ;;
+    -*)
+      echo "Error: Unknown flag '$1'"
+      echo "Run 'v0 chore --help' for usage"
+      exit 1
+      ;;
+    attach)
+      # Handle 'v0 chore attach' as alias for 'v0 attach chore'
+      exec "${SCRIPT_DIR}/v0-attach" chore
+      ;;
+    status)
+      # Auto-correct 'v0 chore status' to 'v0 chore --status'
+      ACTION="status"
+      shift
+      ;;
+    start)
+      # Auto-correct 'v0 chore start' to 'v0 chore --start'
+      ACTION="start"
+      shift
+      ;;
+    stop)
+      # Auto-correct 'v0 chore stop' to 'v0 chore --stop'
+      ACTION="stop"
+      shift
+      ;;
+    restart)
+      # Auto-correct 'v0 chore restart' to 'v0 chore --restart'
+      ACTION="restart"
+      shift
+      ;;
+    *)
+      POSITIONAL+=("$1")
+      shift
+      ;;
+  esac
+done
+
+# Main dispatch
+case "${ACTION}" in
+  start)
     start_worker
     ;;
-  --stop)
+  stop)
     stop_worker
     ;;
-  --status)
-    show_status
-    ;;
-  --logs)
-    show_logs
-    ;;
-  --err)
-    show_errors
-    ;;
-  --history)
-    show_history 10
-    ;;
-  --history=*)
-    arg="${1#--history=}"
-    if [[ "${arg}" = "all" ]]; then
-      show_history 999999
-    else
-      show_history "${arg}"
-    fi
-    ;;
-  -h|--help)
-    usage
-    ;;
-  "")
-    show_status
-    echo ""
-    echo "Run with --help for more options"
-    ;;
-  --)
-    echo "Error: Invalid argument '--'. Did you mean '--status'?"
-    usage
-    ;;
-  --*)
-    echo "Error: Unknown flag '$1'"
-    echo "Run 'v0 chore --help' for usage"
-    exit 1
-    ;;
-  -*)
-    echo "Error: Unknown flag '$1'"
-    echo "Run 'v0 chore --help' for usage"
-    exit 1
-    ;;
-  attach)
-    # Handle 'v0 chore attach' as alias for 'v0 attach chore'
-    exec "${SCRIPT_DIR}/v0-attach" chore
+  restart)
+    stop_worker
+    start_worker
     ;;
   status)
-    # Auto-correct 'v0 chore status' to 'v0 chore --status'
     show_status
+    if [[ ${#POSITIONAL[@]} -eq 0 ]]; then
+      echo ""
+      echo "Run with --help for more options"
+    fi
     ;;
-  *)
-    report_chore "$@"
+  logs)
+    show_logs
+    ;;
+  err)
+    show_errors
+    ;;
+  history)
+    show_history "${HISTORY_LIMIT}"
+    ;;
+  "")
+    if [[ ${#POSITIONAL[@]} -gt 0 ]]; then
+      report_chore "${POSITIONAL[*]}"
+    else
+      show_status
+      echo ""
+      echo "Run with --help for more options"
+    fi
     ;;
 esac

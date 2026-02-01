@@ -6,33 +6,78 @@ Orchestrates Claude workers in tmux sessions for planning, feature development, 
 
 ## Directory Structure
 
+```toc
+bin/                    # CLI commands (v0, v0-plan, v0-build, v0-fix, etc.)
+packages/               # Modular shell library packages
+  core/                 #   Foundation: config, logging, git-verify
+  workspace/            #   Workspace management for merge operations
+  state/                #   State machine for operation lifecycle
+  mergeq/               #   Merge queue management
+  pushpull/             #   Bidirectional sync (v0 pull/push)
+  merge/                #   Merge conflict resolution
+  worker/               #   Worker utilities: nudge, coffee, try-catch
+  hooks/                #   Claude Code hooks (stop-*.sh, notify-progress.sh)
+  status/               #   Status display formatting
+  cli/                  #   Entry point, templates, prompts, build workflow
+  test-support/         #   Test helpers, fixtures, mocks
+tests/                  # Integration tests (v0-cancel.bats, v0-merge.bats, etc.)
+docs/arch/              # Architecture documentation
+  SYSTEM.md             #   Workers, processes, directories, env vars
+  WORKSPACE.md          #   Clone vs worktree workspace modes
+  commands/             #   Command reference (v0-start.md, v0-merge.md, ...)
+  ...
 ```
-bin/            # CLI commands (v0, v0-plan, v0-feature, v0-fix, v0-chore, etc.)
-lib/            # Shared shell functions and resources
-  *.sh          #   Shell functions (v0-common.sh, worker-common.sh)
-  hooks/        #   Claude Code hooks (notify-progress.sh, stop-*.sh)
-  templates/    #   Worker CLAUDE.md templates (claude.feature.m4, claude.fix.md)
-  prompts/      #   Prompt templates for planning and merging
-docs/debug/     # Troubleshooting guides (workflows, hooks, lost work recovery)
-tests/          # Bats unit tests
+
+## Design Principles
+
+### Idempotence
+
+Functions should be idempotent where possible - calling them multiple times should produce the same result as calling once. This is critical for reliability in distributed/async systems:
+
+- State transitions: `sm_transition_to_merged` succeeds if already merged
+- Workspace creation: `ws_ensure_workspace` succeeds if workspace exists and matches config
+- Wok init: `wk init --workspace` succeeds if already initialized
+
+### Safety Nets
+
+When multiple code paths can trigger the same operation, add safety nets that allow both paths to succeed:
+
+- The merge queue daemon and `v0-merge` both transition to merged state
+- Both succeed because `sm_transition_to_merged` is idempotent
+- Log warnings for debugging, but don't fail on redundant operations
+
+## Package Layers
+
+Packages follow a layered dependency model (see `packages/CLAUDE.md`):
+- **Layer 0**: core
+- **Layer 1**: workspace, state, mergeq, pushpull
+- **Layer 2**: merge, worker
+- **Layer 3**: hooks, status
+- **Layer 4**: cli (includes build workflow)
+
+## Running Tests
+
+```bash
+scripts/test                    # Run all tests (incremental caching)
+scripts/test core cli           # Run specific packages
+scripts/test v0-cancel          # Run specific integration test
+scripts/test --bust v0-merge    # Clear cache for one target
 ```
+
+## Commits
+
+Use conventional commit format: `type(scope): description`
+Types: feat, fix, chore, docs, test, refactor
 
 ## Common Commands
 
-- `make test` - Run all unit tests
-- `make test-verbose` - Run tests with verbose output and print failures
-- `make test-file FILE=tests/unit/v0-common.bats` - Run a specific test file
-- `make lint` - Run ShellCheck on scripts
-- `make lint-tests` - Run ShellCheck on test files
-- `make check` - Run linter and all tests
+- `make check` - Run all lints and tests
+- `make lint` - ShellCheck on all scripts
+- `scripts/test` - Incremental test runner with caching
 
-## Landing the plane
+## Landing the Plane
 
-Before committing changes:
-
-- [ ] Run linter: `make lint`
-- [ ] Run tests: `make test`
-  - All tests must pass
-  - New features need corresponding tests in `tests/unit/`
-  - If a test is not yet implemented, tag it: `# bats test_tags=todo:implement`
-- [ ] Commit with descriptive message: `git add <files> && git commit -m "..."`
+- [ ] Run `make check` (lint + test + quench)
+- [ ] New lib code needs unit tests in `packages/<pkg>/tests/`
+- [ ] New bin commands need integration tests in `tests/`
+- [ ] Tag unimplemented tests: `# bats test_tags=todo:implement`

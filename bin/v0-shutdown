@@ -5,18 +5,21 @@
 set -e
 
 V0_DIR="$(cd "$(dirname "$0")/.." && pwd)"
-source "${V0_DIR}/lib/v0-common.sh"
+source "${V0_DIR}/packages/cli/lib/v0-common.sh"
 v0_load_config
 
 # Source coffee functions for automatic wake lock management
-source "${V0_DIR}/lib/coffee-common.sh"
+source "${V0_DIR}/packages/worker/lib/coffee-common.sh"
 
 # Source nudge functions for idle session monitoring
-source "${V0_DIR}/lib/nudge-common.sh"
+source "${V0_DIR}/packages/worker/lib/nudge-common.sh"
+
+# Source worker functions for issue cleanup
+source "${V0_DIR}/packages/worker/lib/worker-common.sh"
 
 usage() {
-  cat <<'EOF'
-Usage: v0 shutdown [options]
+  v0_help <<'EOF'
+Usage: v0 stop [options]
 
 Stop all v0 workers, daemons, and sessions for the current project.
 
@@ -24,29 +27,41 @@ This is a complete shutdown that:
 - Terminates all tmux sessions for this project
 - Kills polling daemons
 - Removes worker worktrees (v0-*-worker)
-- Deletes local v0/worker/* branches
-- Deletes remote v0/worker/* branches
+- Deletes worker branches (*-bugs, *-chores, v0/worker/*)
 - Deletes legacy v0-*-worker branches (old naming convention)
 
-Note: v0/worker/chore and v0/worker/fix branches are checked before deletion.
-If they contain commits not in ${V0_MAIN_BRANCH:-main}, a warning is shown
+Note: Worker branches (bugs/chores) are checked before deletion.
+If they contain commits not in ${V0_DEVELOP_BRANCH:-main}, a warning is shown
 and the branch is preserved. Use --force to delete them anyway.
 
 Options:
-  --force        Force kill and delete branches with unmerged commits
-  --dry-run      Show what would be stopped without stopping
-  -h, --help     Show this help
+  --force             Force kill and delete branches with unmerged commits
+  --drop-workspace    Also remove workspace and all worktrees (workspace can be recreated)
+  --drop-everything   Full reset: remove workspace, build state, and agent remote
+  --dry-run           Show what would be stopped without stopping
+  -h, --help          Show this help
+
+The --drop-* options remove persistent state:
+  --drop-workspace    Removes: ~/.local/state/v0/${PROJECT}/workspace/
+                              ~/.local/state/v0/${PROJECT}/tree/
+  --drop-everything   Removes: ~/.local/state/v0/${PROJECT}/ (entire state dir)
+                              ${V0_ROOT}/.v0/ (build state, last-push marker)
+                              'agent' git remote
 
 Examples:
-  v0 shutdown              # Stop all v0 processes and clean up
-  v0 shutdown --dry-run    # Preview what would be stopped
-  v0 shutdown --force      # Force kill and delete all branches
+  v0 stop                    # Stop all v0 processes and clean up
+  v0 stop --dry-run          # Preview what would be stopped
+  v0 stop --force            # Force kill and delete all branches
+  v0 stop --drop-workspace   # Stop and remove workspace (can be recreated)
+  v0 stop --drop-everything  # Full reset (removes all v0 state for project)
 EOF
   exit 0
 }
 
 FORCE=""
 DRY_RUN=""
+DROP_WORKSPACE=""
+DROP_EVERYTHING=""
 
 # Parse args
 while [[ $# -gt 0 ]]; do
@@ -59,23 +74,35 @@ while [[ $# -gt 0 ]]; do
       DRY_RUN=1
       shift
       ;;
+    --drop-workspace)
+      DROP_WORKSPACE=1
+      shift
+      ;;
+    --drop-everything)
+      DROP_EVERYTHING=1
+      shift
+      ;;
     -h|--help)
       usage
       ;;
     *)
       echo "Unknown option: $1" >&2
-      echo "Run 'v0 shutdown --help' for usage" >&2
+      echo "Run 'v0 stop --help' for usage" >&2
       exit 1
       ;;
   esac
 done
+
+# Show which project we're working on
+echo "Shutting down v0 for project: ${PROJECT}"
+echo ""
 
 # Find all tmux sessions for this project
 # Pattern: v0-{project}-*
 SESSION_PREFIX="v0-${PROJECT}-"
 
 # Get all matching sessions
-all_sessions=$(tmux list-sessions -F '#{session_name}' 2>/dev/null | grep "^${SESSION_PREFIX}" || true)
+all_sessions=$(tmux list-sessions -F '#{session_name}' 2>/dev/null | v0_grep "^${SESSION_PREFIX}" || true)
 
 # Track if we found anything to clean up
 found_anything=""
@@ -138,25 +165,16 @@ fi
 echo ""
 echo "Checking for in-progress issues to reopen..."
 
-# Define workers to check
-WORKERS=("worker:fix" "worker:chore")
-
-for worker in "${WORKERS[@]}"; do
-  # Find in-progress issues assigned to this worker
-  issues=$(wk list --status in_progress --assignee "${worker}" -f json 2>/dev/null | jq -r '.issues[].id' || true)
-
-  if [[ -n "${issues}" ]]; then
+for worker in "worker:fix" "worker:chore"; do
+  if [[ -n "${DRY_RUN}" ]]; then
+    # Show what would be reopened
+    issues=$(wk list --status in_progress --assignee "${worker}" -o json 2>/dev/null | jq -r '.[].id' || true)
     while IFS= read -r issue_id; do
       [[ -z "${issue_id}" ]] && continue
-
-      if [[ -n "${DRY_RUN}" ]]; then
-        echo "Would reopen: ${issue_id} (was assigned to ${worker})"
-      else
-        echo "Reopening: ${issue_id} (was assigned to ${worker})"
-        wk stop "${issue_id}" 2>/dev/null || true
-        wk edit "${issue_id}" assignee none 2>/dev/null || true
-      fi
+      echo "Would reopen: ${issue_id} (was assigned to ${worker})"
     done <<< "${issues}"
+  else
+    reopen_worker_issues "${worker}"
   fi
 done
 
@@ -233,9 +251,10 @@ if [[ -n "${all_worktrees}" ]]; then
   done <<< "${all_worktrees}"
 fi
 
-# Clean up v0/worker/* branches (local and remote)
-local_branches=$(git -C "${V0_ROOT}" branch --list 'v0/worker/*' 2>/dev/null | sed 's/^[* ]*//' || true)
-remote_branches=$(git -C "${V0_ROOT}" branch -r --list 'origin/v0/worker/*' 2>/dev/null | sed 's/^[* ]*//' || true)
+# Clean up worker branches (local and remote)
+# Patterns: v0/worker/* (legacy), *-bugs, *-chores (user-specific)
+local_branches=$(git -C "${V0_ROOT}" branch --list 'v0/worker/*' '*-bugs' '*-chores' 2>/dev/null | sed 's/^[+* ]*//' || true)
+remote_branches=$(git -C "${V0_ROOT}" branch -r --list "${V0_GIT_REMOTE}/v0/worker/*" "${V0_GIT_REMOTE}/*-bugs" "${V0_GIT_REMOTE}/*-chores" 2>/dev/null | sed 's/^[+* ]*//' || true)
 
 # Track branches skipped due to unmerged commits
 skipped_branches=""
@@ -243,20 +262,22 @@ skipped_branches=""
 if [[ -n "${local_branches}" ]]; then
   found_anything=1
   echo ""
-  echo "Cleaning up local v0/worker/* branches..."
+  echo "Cleaning up local worker branches..."
   while IFS= read -r branch; do
     [[ -z "${branch}" ]] && continue
 
-    # Check if this is a chore or fix branch that needs merge verification
-    if [[ "${branch}" == "v0/worker/chore" || "${branch}" == "v0/worker/fix" ]]; then
-      # Check if branch is merged (is an ancestor of main)
-      if ! git -C "${V0_ROOT}" merge-base --is-ancestor "${branch}" "${V0_MAIN_BRANCH}" 2>/dev/null; then
+    # Check if this is a worker branch that needs merge verification
+    # Patterns: v0/worker/chore, v0/worker/fix (legacy), *-bugs, *-chores (user-specific)
+    if [[ "${branch}" == "v0/worker/chore" || "${branch}" == "v0/worker/fix" || \
+          "${branch}" == *-bugs || "${branch}" == *-chores ]]; then
+      # Check if branch is merged (is an ancestor of develop branch)
+      if ! git -C "${V0_ROOT}" merge-base --is-ancestor "${branch}" "${V0_DEVELOP_BRANCH}" 2>/dev/null; then
         if [[ -z "${FORCE}" ]]; then
-          echo "Warning: ${branch} has commits not in ${V0_MAIN_BRANCH}, skipping (use --force to delete)"
+          echo "Warning: ${branch} has commits not in ${V0_DEVELOP_BRANCH}, skipping (use --force to delete)"
           skipped_branches="${skipped_branches}${branch}"$'\n'
           continue
         else
-          echo "Warning: ${branch} has commits not in ${V0_MAIN_BRANCH}, deleting anyway (--force)"
+          echo "Warning: ${branch} has commits not in ${V0_DEVELOP_BRANCH}, deleting anyway (--force)"
         fi
       fi
     fi
@@ -273,22 +294,24 @@ fi
 if [[ -n "${remote_branches}" ]]; then
   found_anything=1
   echo ""
-  echo "Cleaning up remote v0/worker/* branches..."
+  echo "Cleaning up remote worker branches..."
   while IFS= read -r branch; do
     [[ -z "${branch}" ]] && continue
-    # Remove "origin/" prefix to get the branch name for deletion
-    branch_name="${branch#origin/}"
+    # Remove remote prefix to get the branch name for deletion
+    branch_name="${branch#"${V0_GIT_REMOTE}"/}"
 
-    # Check if this is a chore or fix branch that needs merge verification
-    if [[ "${branch_name}" == "v0/worker/chore" || "${branch_name}" == "v0/worker/fix" ]]; then
+    # Check if this is a worker branch that needs merge verification
+    # Patterns: v0/worker/chore, v0/worker/fix (legacy), *-bugs, *-chores (user-specific)
+    if [[ "${branch_name}" == "v0/worker/chore" || "${branch_name}" == "v0/worker/fix" || \
+          "${branch_name}" == *-bugs || "${branch_name}" == *-chores ]]; then
       # Check if the remote branch is merged (fetch first to ensure we have the ref)
-      if ! git -C "${V0_ROOT}" merge-base --is-ancestor "${branch}" "${V0_MAIN_BRANCH}" 2>/dev/null; then
+      if ! git -C "${V0_ROOT}" merge-base --is-ancestor "${branch}" "${V0_DEVELOP_BRANCH}" 2>/dev/null; then
         if [[ -z "${FORCE}" ]]; then
-          echo "Warning: ${branch_name} (remote) has commits not in ${V0_MAIN_BRANCH}, skipping (use --force to delete)"
+          echo "Warning: ${branch_name} (remote) has commits not in ${V0_DEVELOP_BRANCH}, skipping (use --force to delete)"
           skipped_branches="${skipped_branches}${branch_name} (remote)"$'\n'
           continue
         else
-          echo "Warning: ${branch_name} (remote) has commits not in ${V0_MAIN_BRANCH}, deleting anyway (--force)"
+          echo "Warning: ${branch_name} (remote) has commits not in ${V0_DEVELOP_BRANCH}, deleting anyway (--force)"
         fi
       fi
     fi
@@ -297,13 +320,13 @@ if [[ -n "${remote_branches}" ]]; then
       echo "Would delete remote branch: ${branch_name}"
     else
       echo "Deleting remote branch: ${branch_name}"
-      git -C "${V0_ROOT}" push origin --delete "${branch_name}" 2>/dev/null || true
+      git -C "${V0_ROOT}" push "${V0_GIT_REMOTE}" --delete "${branch_name}" 2>/dev/null || true
     fi
   done <<< "${remote_branches}"
 fi
 
 # Clean up old-style v0-*-worker branches (legacy naming convention)
-old_style_branches=$(git -C "${V0_ROOT}" branch --list 'v0-*-worker' 2>/dev/null | sed 's/^[* ]*//' || true)
+old_style_branches=$(git -C "${V0_ROOT}" branch --list 'v0-*-worker' 2>/dev/null | sed 's/^[+* ]*//' || true)
 if [[ -n "${old_style_branches}" ]]; then
   found_anything=1
   echo ""
@@ -320,12 +343,72 @@ if [[ -n "${old_style_branches}" ]]; then
   done <<< "${old_style_branches}"
 fi
 
+# Clean up v0/agent/* branches (user-specific develop branches)
+# Only delete when --drop-workspace or --drop-everything AND using worktree mode
+# In clone mode, the develop branch is main/develop/master which should not be deleted
+if [[ ( -n "${DROP_WORKSPACE}" || -n "${DROP_EVERYTHING}" ) && "${V0_WORKSPACE_MODE}" == "worktree" ]]; then
+  # Find v0/agent/* branches (excluding worker branches already handled above)
+  agent_branches=$(git -C "${V0_ROOT}" branch --list 'v0/agent/*' 2>/dev/null | sed 's/^[+* ]*//' | v0_grep -v '\-bugs$\|\-chores$' || true)
+  agent_remote_branches=$(git -C "${V0_ROOT}" branch -r --list "${V0_GIT_REMOTE}/v0/agent/*" 2>/dev/null | sed 's/^[+* ]*//' | v0_grep -v '\-bugs$\|\-chores$' || true)
+
+  if [[ -n "${agent_branches}" ]]; then
+    found_anything=1
+    echo ""
+    echo "Cleaning up agent develop branches (worktree mode)..."
+    while IFS= read -r branch; do
+      [[ -z "${branch}" ]] && continue
+
+      if [[ -n "${DRY_RUN}" ]]; then
+        echo "Would delete local branch: ${branch}"
+      else
+        echo "Deleting local branch: ${branch}"
+        git -C "${V0_ROOT}" branch -D "${branch}" 2>/dev/null || true
+      fi
+    done <<< "${agent_branches}"
+  fi
+
+  if [[ -n "${agent_remote_branches}" ]]; then
+    found_anything=1
+    echo ""
+    echo "Cleaning up remote agent develop branches (worktree mode)..."
+    while IFS= read -r branch; do
+      [[ -z "${branch}" ]] && continue
+      branch_name="${branch#"${V0_GIT_REMOTE}"/}"
+
+      if [[ -n "${DRY_RUN}" ]]; then
+        echo "Would delete remote branch: ${branch_name}"
+      else
+        echo "Deleting remote branch: ${branch_name}"
+        git -C "${V0_ROOT}" push "${V0_GIT_REMOTE}" --delete "${branch_name}" 2>/dev/null || true
+      fi
+    done <<< "${agent_remote_branches}"
+  fi
+fi
+
 # Check if coffee is running (so we don't exit early if only coffee needs stopping)
 if coffee_is_running; then
   found_anything=1
   if [[ -n "${DRY_RUN}" ]]; then
     echo ""
     echo "Would stop coffee (system wake lock)"
+  fi
+fi
+
+# Check if prune daemon is running
+if prune_daemon_running; then
+  found_anything=1
+  if [[ -n "${DRY_RUN}" ]]; then
+    echo ""
+    echo "Would stop prune daemon (pid: $(prune_daemon_pid))"
+  fi
+fi
+
+# Check if nudge daemon is running
+if nudge_running; then
+  found_anything=1
+  if [[ -n "${DRY_RUN}" ]]; then
+    echo ""
+    echo "Would stop nudge daemon (pid: $(nudge_pid))"
   fi
 fi
 
@@ -349,15 +432,91 @@ if [[ -z "${DRY_RUN}" ]]; then
     echo "Stopped coffee (system can sleep)"
   fi
 
-  # Prune old mergeq entries (> 6 hours) with terminal status
+  # Wait for background pruning to complete if running
+  if prune_daemon_running; then
+    echo ""
+    echo "Waiting for background pruning to complete..."
+    prune_daemon_wait
+    echo "Background pruning stopped"
+  fi
+
+  # Final synchronous prune to catch anything new
   echo ""
   echo "Pruning old mergeq entries..."
   v0_prune_mergeq
 
-  # Prune old log entries (> 6 hours) from logs with timestamps
   echo ""
   echo "Pruning old log entries..."
   v0_prune_logs
+
+  # Handle --drop-workspace: remove workspace and all worktrees
+  if [[ -n "${DROP_WORKSPACE}" || -n "${DROP_EVERYTHING}" ]]; then
+    echo ""
+    echo "Removing workspace and worktrees..."
+
+    # Remove merge workspace
+    if [[ -d "${V0_WORKSPACE_DIR}" ]]; then
+      # If it's a worktree, remove it properly first
+      if [[ -f "${V0_WORKSPACE_DIR}/.git" ]]; then
+        git -C "${V0_ROOT}" worktree remove --force "${V0_WORKSPACE_DIR}" 2>/dev/null || true
+      fi
+      rm -rf "${V0_WORKSPACE_DIR}" 2>/dev/null || true
+      echo "Removed workspace: ${V0_WORKSPACE_DIR}"
+    fi
+
+    # Remove all feature worktrees
+    if [[ -d "${V0_STATE_DIR}/tree" ]]; then
+      for tree_dir in "${V0_STATE_DIR}/tree"/*; do
+        [[ -d "${tree_dir}" ]] || continue
+        # Find and remove worktrees in this tree dir
+        for subdir in "${tree_dir}"/*; do
+          if [[ -d "${subdir}" ]] && { [[ -d "${subdir}/.git" ]] || [[ -f "${subdir}/.git" ]]; }; then
+            git -C "${V0_ROOT}" worktree remove --force "${subdir}" 2>/dev/null || rm -rf "${subdir}" 2>/dev/null || true
+          fi
+        done
+        rm -rf "${tree_dir}" 2>/dev/null || true
+      done
+      rm -rf "${V0_STATE_DIR}/tree" 2>/dev/null || true
+      echo "Removed worktrees: ${V0_STATE_DIR}/tree"
+    fi
+
+    # Clean up workspace parent directory if empty
+    if [[ -d "${V0_STATE_DIR}/workspace" ]]; then
+      rmdir "${V0_STATE_DIR}/workspace" 2>/dev/null || true
+    fi
+
+    # Remove project registration (unregister from v0 watch --all)
+    root_file="${V0_STATE_DIR}/.v0.root"
+    if [[ -f "${root_file}" ]]; then
+      rm -f "${root_file}"
+      echo "Removed project registration"
+    fi
+  fi
+
+  # Handle --drop-everything: remove all state
+  if [[ -n "${DROP_EVERYTHING}" ]]; then
+    echo ""
+    echo "Removing all v0 state..."
+
+    # Remove entire .v0 directory (includes build/, last-push, etc.)
+    v0_dir="${V0_ROOT}/.v0"
+    if [[ -d "${v0_dir}" ]]; then
+      rm -rf "${v0_dir}" 2>/dev/null || true
+      echo "Removed .v0 directory: ${v0_dir}"
+    fi
+
+    # Remove agent remote from git config
+    if git -C "${V0_ROOT}" remote get-url agent &>/dev/null 2>&1; then
+      git -C "${V0_ROOT}" remote remove agent 2>/dev/null || true
+      echo "Removed 'agent' git remote"
+    fi
+
+    # Remove entire state directory (includes agent.git bare repo)
+    if [[ -d "${V0_STATE_DIR}" ]]; then
+      rm -rf "${V0_STATE_DIR}" 2>/dev/null || true
+      echo "Removed state directory: ${V0_STATE_DIR}"
+    fi
+  fi
 
   echo ""
   if [[ -n "${skipped_branches}" ]]; then
@@ -369,12 +528,25 @@ if [[ -z "${DRY_RUN}" ]]; then
       echo "  - ${skipped}"
     done <<< "${skipped_branches}"
     echo ""
-    echo "Use 'v0 shutdown --force' to delete them anyway."
+    echo "Use 'v0 stop --force' to delete them anyway."
+  elif [[ -n "${DROP_EVERYTHING}" ]]; then
+    echo "Shutdown complete (all state removed)"
+    echo ""
+    echo "To reinitialize v0 for this project, run: v0 init"
+  elif [[ -n "${DROP_WORKSPACE}" ]]; then
+    echo "Shutdown complete (workspace removed)"
+    echo ""
+    echo "Workspace will be recreated on next merge operation."
   else
     echo "Shutdown complete"
   fi
 else
-  # Dry-run mode: show what would be pruned
+  # Dry-run mode: show what would be done
+  if prune_daemon_running; then
+    echo ""
+    echo "Would stop prune daemon"
+  fi
+
   echo ""
   echo "Pruning old mergeq entries..."
   v0_prune_mergeq --dry-run
@@ -382,4 +554,36 @@ else
   echo ""
   echo "Pruning old log entries..."
   v0_prune_logs --dry-run
+
+  # Show what --drop-workspace would do
+  if [[ -n "${DROP_WORKSPACE}" || -n "${DROP_EVERYTHING}" ]]; then
+    echo ""
+    echo "Would remove workspace and worktrees:"
+    if [[ -d "${V0_WORKSPACE_DIR}" ]]; then
+      echo "  Would remove workspace: ${V0_WORKSPACE_DIR}"
+    fi
+    if [[ -d "${V0_STATE_DIR}/tree" ]]; then
+      echo "  Would remove worktrees: ${V0_STATE_DIR}/tree"
+    fi
+    root_file="${V0_STATE_DIR}/.v0.root"
+    if [[ -f "${root_file}" ]]; then
+      echo "  Would remove project registration: ${root_file}"
+    fi
+  fi
+
+  # Show what --drop-everything would do
+  if [[ -n "${DROP_EVERYTHING}" ]]; then
+    echo ""
+    echo "Would remove all v0 state:"
+    v0_dir="${V0_ROOT}/.v0"
+    if [[ -d "${v0_dir}" ]]; then
+      echo "  Would remove .v0 directory: ${v0_dir}"
+    fi
+    if git -C "${V0_ROOT}" remote get-url agent &>/dev/null 2>&1; then
+      echo "  Would remove 'agent' git remote"
+    fi
+    if [[ -d "${V0_STATE_DIR}" ]]; then
+      echo "  Would remove state directory: ${V0_STATE_DIR}"
+    fi
+  fi
 fi

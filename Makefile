@@ -3,119 +3,81 @@
 # Get the directory where this Makefile is located (works even if make is run from elsewhere)
 MAKEFILE_DIR := $(dir $(abspath $(firstword $(MAKEFILE_LIST))))
 
-# Always use local bats for consistent behavior across environments
-BATS := $(MAKEFILE_DIR)tests/bats/bats-core/bin/bats
-BATS_LIB_PATH := $(MAKEFILE_DIR)tests/bats
+# BATS installed globally by scripts/test
+V0_DATA_DIR := $(or $(XDG_DATA_HOME),$(HOME)/.local/share)/v0
+BATS := $(V0_DATA_DIR)/bats/bats-core/bin/bats
+BATS_LIB_PATH := $(V0_DATA_DIR)/bats
 
-TEST_FILES := $(wildcard tests/unit/*.bats)
-
-.PHONY: test test-unit test-debug test-file test-init test-integration test-all lint lint-tests check help license test-fixtures
+.PHONY: help check test test-init test-file test-package lint lint-scripts lint-tests lint-quality license install
 
 # Default target
 help:
-	@echo "v0 Test Targets:"
-	@echo "  make test            Run all unit tests"
-	@echo "  make test-debug      Run tests with verbose output"
-	@echo "  make test-file FILE=tests/unit/foo.bats"
-	@echo "  make test-fixtures   Generate test fixtures (cached git repo)"
+	@echo "v0 Development Targets:"
+	@echo "  make install         Symlink v0 to ~/.local/bin for development"
+	@echo ""
+	@echo "Testing:"
+	@echo "  make test            Run all tests (incremental, cached)"
+	@echo "  make test-package PKG=state  Run tests for a specific package"
+	@echo "  make test-file FILE=packages/core/tests/foo.bats"
 	@echo ""
 	@echo "Linting:"
-	@echo "  make lint            Run ShellCheck on scripts"
-	@echo "  make lint-tests      Run ShellCheck on test files"
+	@echo "  make lint            Run shellcheck (incremental, cached)"
 	@echo "  make check           Run lint and all tests"
 	@echo ""
 	@echo "Maintenance:"
 	@echo "  make license         Add license headers to source files"
 
-# Check if local BATS/libraries need installation
-.PHONY: test-init
+# Run lint and all tests
+check: lint-quality lint test
+
+# Lint with shellcheck (incremental)
+lint:
+	./scripts/lint
+
+# Lint bin/ scripts and package libs (for CI)
+lint-scripts:
+	./scripts/lint bin $(shell find packages -mindepth 1 -maxdepth 1 -type d -exec basename {} \;)
+
+# Lint test files (for CI)
+lint-tests:
+	./scripts/lint tests $(shell find packages -mindepth 1 -maxdepth 1 -type d -exec sh -c 'echo {}/tests' \;)
+
+# Enforce LOC limits, suppress rules, etc
+lint-quality:
+	quench check
+
+# Run all tests (incremental with caching)
+test:
+	./scripts/test
+
+# Initialize test framework (install BATS, for CI)
 test-init:
-	@if [ ! -d "tests/bats/bats-support" ] && echo "$(BATS_LIB_PATH)" | grep -q "tests/bats"; then \
-		echo "Installing BATS testing libraries..."; \
-		./tests/bats/install.sh; \
-	elif [ ! -x "$(BATS)" ] && [ ! -x "$(LOCAL_BATS)" ]; then \
-		echo "Installing BATS testing libraries..."; \
-		./tests/bats/install.sh; \
-	fi
+	./scripts/test --init
 
-# Run all tests
-test: test-unit
-
-# Run unit tests
-test-unit: test-init
-	@if [ ! -x "$(BATS)" ]; then \
-		echo "Error: BATS not found. Run 'make test-init' or install bats-core."; \
+# Run tests for a specific package
+test-package:
+	@if [ -z "$(PKG)" ]; then \
+		echo "Usage: make test-package PKG=state"; \
 		exit 1; \
 	fi
-	BATS_LIB_PATH="$(BATS_LIB_PATH)" $(BATS) --timing --print-output-on-failure tests/unit/
-
-# Run tests with verbose output (for debugging)
-test-debug: test-init
-	@if [ ! -x "$(BATS)" ]; then \
-		echo "Error: BATS not found. Run 'make test-init' or install bats-core."; \
-		exit 1; \
-	fi
-	BATS_LIB_PATH="$(BATS_LIB_PATH)" $(BATS) --timing --verbose-run --print-output-on-failure tests/unit/
+	./scripts/test $(PKG)
 
 # Run a specific test file
-test-file: test-init
+test-file:
 	@if [ -z "$(FILE)" ]; then \
-		echo "Usage: make test-file FILE=tests/unit/foo.bats"; \
+		echo "Usage: make test-file FILE=packages/core/tests/foo.bats"; \
 		exit 1; \
 	fi
 	@if [ ! -x "$(BATS)" ]; then \
-		echo "Error: BATS not found. Run 'make test-init' or install bats-core."; \
-		exit 1; \
+		./scripts/test --init; \
 	fi
 	BATS_LIB_PATH="$(BATS_LIB_PATH)" $(BATS) --timing $(FILE)
 
-# Run integration tests
-test-integration: test-init
-	@if [ ! -d "tests/integration" ]; then \
-		echo "No integration tests found (tests/integration/ does not exist)"; \
-		exit 0; \
-	fi
-	@if [ ! -x "$(BATS)" ]; then \
-		echo "Error: BATS not found. Run 'make test-init' or install bats-core."; \
-		exit 1; \
-	fi
-	BATS_LIB_PATH="$(BATS_LIB_PATH)" $(BATS) --timing tests/integration/
-
-# Run all tests (unit + integration)
-test-all: test-unit test-integration
-
-# Lint scripts with ShellCheck
-lint:
-	@if ! command -v shellcheck >/dev/null 2>&1; then \
-		echo "Error: shellcheck not found. Install with: brew install shellcheck"; \
-		exit 1; \
-	fi
-	@echo "Linting bin/ scripts..."
-	@shellcheck -x bin/v0-*
-	@echo "Linting lib/ files..."
-	@shellcheck -x lib/*.sh
-	@echo "All scripts pass ShellCheck!"
-
-# Lint test files with ShellCheck
-lint-tests:
-	@if ! command -v shellcheck >/dev/null 2>&1; then \
-		echo "Error: shellcheck not found. Install with: brew install shellcheck"; \
-		exit 1; \
-	fi
-	@echo "Linting test files..."
-	@shellcheck -x -S warning -e SC1090,SC2155,SC2164,SC2178 tests/unit/*.bats tests/helpers/*.bash
-	@echo "All test files pass ShellCheck!"
-
-# Run lint and all tests
-check: lint test-all
 
 # Add license headers to source files
 license:
-	@scripts/license
+	quench check --ci --fix --license
 
-# Generate test fixtures (cached git repo, etc.)
-test-fixtures:
-	@if [ ! -f "tests/fixtures/git-repo.tar" ]; then \
-		echo "Generating test fixtures..."; \
-		bash tests/fixtures/create-git-fixture.sh; \
-	fi
+# Symlink v0 to ~/.local/bin for local development
+install:
+	@scripts/install

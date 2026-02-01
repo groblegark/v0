@@ -1,0 +1,29 @@
+version = 1
+
+[project]
+source = ["bin/*", "lib/**/*.sh", "packages/*/lib/**/*.sh", "scripts/*"]
+tests = ["*.bats", "packages/test-support/**/*"]
+
+[check.license]
+check = "error"
+license = "MIT"
+copyright = "Alfred Jean LLC"
+exclude = ["packages/test-support/fixtures/**"]
+
+[check.cloc]
+advice_test = """
+Can tests be refactored to reduce duplication?
+Consider using bats helpers or setup functions.
+"""
+exclude = [
+    # ONLY for intentionally large fixture/test data
+    # NEVER for tests or source files
+]
+
+# Shell suppress: require justification comment for shellcheck disables
+[shell.suppress]
+check = "comment"
+
+# These shellcheck codes are allowed without comment in source
+[shell.suppress.source]
+allow = ["SC2012", "SC2064", "SC2090"]

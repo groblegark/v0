@@ -4,14 +4,18 @@
 set -e
 
 V0_DIR="$(cd "$(dirname "$0")/.." && pwd)"
-source "${V0_DIR}/lib/v0-common.sh"
+source "${V0_DIR}/packages/cli/lib/v0-common.sh"
 v0_load_config
 
+# Source branch status (warning if agent behind, info if ahead)
+source "${V0_DIR}/packages/status/lib/branch-status.sh"
+warn_branch_status || true
+
 # Source nudge functions for idle session monitoring
-source "${V0_DIR}/lib/nudge-common.sh"
+source "${V0_DIR}/packages/worker/lib/nudge-common.sh"
 
 usage() {
-  cat <<EOF
+  v0_help <<EOF
 Usage: v0 plan <name> <instructions> [options]
 
 Create an implementation plan using Claude.
@@ -103,7 +107,7 @@ if [[ -n "${DIRECT}" ]]; then
 
   # Check if operation is held
   if [[ -f "${STATE_FILE}" ]]; then
-    v0_exit_if_held "${NAME}" "plan"
+    sm_exit_if_held "${NAME}" "plan"
   fi
 
   # Create or update operation state if it doesn't exist
@@ -119,7 +123,8 @@ if [[ -n "${DIRECT}" ]]; then
   "created_at": "$(date -u +%Y-%m-%dT%H:%M:%SZ)",
   "plan_file": null,
   "tmux_session": null,
-  "merge_queued": false
+  "merge_queued": false,
+  "working_dir": "${V0_ROOT}"
 }
 EOF
   fi
@@ -130,11 +135,12 @@ EOF
   if "${V0_PLAN_EXEC}" "${NAME}" "${INSTRUCTIONS}"; then
     # Check plan file was actually created
     if [[ -f "${PLAN_FILE}" ]]; then
-      # Update state to planned
-      tmp=$(mktemp)
-      jq ".phase = \"planned\" | .plan_file = \"${V0_PLANS_DIR}/${NAME}.md\"" "${STATE_FILE}" > "${tmp}" && mv "${tmp}" "${STATE_FILE}"
-      v0_log "plan:complete" "${NAME}"
-      v0_notify "${PROJECT}: plan completed" "${NAME}"
+      # Update state to planned and auto-hold
+      sm_transition_to_planned_and_hold "${NAME}" "${V0_PLANS_DIR}/${NAME}.md"
+      v0_log "plan:complete" "${NAME} (held)"
+      v0_notify "${PROJECT}: plan completed [HELD]" "${NAME}"
+      echo "Plan created: ${PLAN_FILE}"
+      echo "Operation is held. Review the plan, then run: v0 resume ${NAME}"
       exit 0
     else
       v0_log "plan:failed" "${NAME}: Plan file not created"
@@ -145,12 +151,13 @@ EOF
   else
     # v0-plan-exec failed, but check if plan file exists (recovery)
     if [[ -f "${PLAN_FILE}" ]]; then
-      # Update state to planned (recovery)
-      tmp=$(mktemp)
-      jq ".phase = \"planned\" | .plan_file = \"${V0_PLANS_DIR}/${NAME}.md\"" "${STATE_FILE}" > "${tmp}" && mv "${tmp}" "${STATE_FILE}"
+      # Update state to planned and auto-hold (recovery)
+      sm_transition_to_planned_and_hold "${NAME}" "${V0_PLANS_DIR}/${NAME}.md"
       echo "Note: Process exited with non-zero code but plan file was created successfully"
-      v0_log "plan:complete" "${NAME} (recovered)"
-      v0_notify "${PROJECT}: plan completed" "${NAME}"
+      v0_log "plan:complete" "${NAME} (recovered, held)"
+      v0_notify "${PROJECT}: plan completed [HELD]" "${NAME}"
+      echo "Plan created: ${PLAN_FILE}"
+      echo "Operation is held. Review the plan, then run: v0 resume ${NAME}"
       exit 0
     else
       v0_log "plan:failed" "${NAME}: v0-plan-exec failed"
@@ -173,7 +180,7 @@ mkdir -p "${STATE_DIR}/logs"
 
 # Check if operation is held
 if [[ -f "${STATE_FILE}" ]]; then
-  v0_exit_if_held "${NAME}" "plan"
+  sm_exit_if_held "${NAME}" "plan"
 fi
 
 # Create or update operation state if it doesn't exist
@@ -189,7 +196,8 @@ if [[ ! -f "${STATE_FILE}" ]]; then
   "created_at": "$(date -u +%Y-%m-%dT%H:%M:%SZ)",
   "plan_file": null,
   "tmux_session": null,
-  "merge_queued": false
+  "merge_queued": false,
+  "working_dir": "${V0_ROOT}"
 }
 EOF
 fi
@@ -251,8 +259,8 @@ jq ".tmux_session = \"${PLAN_SESSION}\"" "${STATE_FILE}" > "${tmp}" && mv "${tmp
 # Use --foreground to preserve the old blocking behavior.
 if [[ -z "${FOREGROUND}" ]]; then
   echo ""
-  echo "Check status: v0 status ${NAME}"
-  echo "View logs:    tail -f ${STATE_DIR}/logs/plan.log"
+  echo "Status:    v0 status ${NAME}"
+  echo "View logs: tail -f ${STATE_DIR}/logs/plan.log"
   echo ""
   exit 0
 fi
@@ -267,6 +275,9 @@ while tmux has-session -t "${PLAN_SESSION}" 2>/dev/null; do
   fi
   sleep 2
 done
+
+# Clean ANSI escape sequences from plan.log
+v0_clean_log_file "${STATE_DIR}/logs/plan.log"
 
 # Read exit code
 if [[ -f "${STATE_DIR}/logs/plan.exit" ]]; then
@@ -286,12 +297,13 @@ fi
 if [[ ${PLAN_EXIT} -ne 0 ]]; then
   if [[ -n "${PLAN_FOUND}" ]]; then
     # Plan file exists despite non-zero exit - treat as success
-    # Update state to planned (recovery)
-    tmp=$(mktemp)
-    jq ".phase = \"planned\" | .plan_file = \"${V0_PLANS_DIR}/${NAME}.md\"" "${STATE_FILE}" > "${tmp}" && mv "${tmp}" "${STATE_FILE}"
+    # Update state to planned and auto-hold (recovery)
+    sm_transition_to_planned_and_hold "${NAME}" "${V0_PLANS_DIR}/${NAME}.md"
     echo "Note: Process exited with code ${PLAN_EXIT} but plan file was created successfully"
-    v0_log "plan:complete" "${NAME} (recovered from exit ${PLAN_EXIT})"
-    v0_notify "${PROJECT}: plan completed" "${NAME}"
+    v0_log "plan:complete" "${NAME} (recovered from exit ${PLAN_EXIT}, held)"
+    v0_notify "${PROJECT}: plan completed [HELD]" "${NAME}"
+    echo "Plan created: ${PLAN_FILE}"
+    echo "Operation is held. Review the plan, then run: v0 resume ${NAME}"
     exit 0
   else
     v0_log "plan:failed" "${NAME}: Exit code ${PLAN_EXIT}"
@@ -308,11 +320,11 @@ if [[ -z "${PLAN_FOUND}" ]]; then
   exit 1
 fi
 
-# Update state to planned
-tmp=$(mktemp)
-jq ".phase = \"planned\" | .plan_file = \"${V0_PLANS_DIR}/${NAME}.md\"" "${STATE_FILE}" > "${tmp}" && mv "${tmp}" "${STATE_FILE}"
+# Update state to planned and auto-hold
+sm_transition_to_planned_and_hold "${NAME}" "${V0_PLANS_DIR}/${NAME}.md"
 
 # Success
-v0_log "plan:complete" "${NAME}"
-v0_notify "${PROJECT}: plan completed" "${NAME}"
+v0_log "plan:complete" "${NAME} (held)"
+v0_notify "${PROJECT}: plan completed [HELD]" "${NAME}"
 echo "Plan created: ${PLAN_FILE}"
+echo "Operation is held. Review the plan, then run: v0 resume ${NAME}"

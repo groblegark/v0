@@ -15,50 +15,100 @@ while [[ -L "${SOURCE}" ]]; do
 done
 V0_DIR="$(cd -P "$(dirname "${SOURCE}")/.." && pwd)"
 
-# Commands that need config
-CONFIG_COMMANDS="plan tree decompose merge mergeq status feature resume fix chore attach cancel shutdown startup hold"
+# Commands that require a project (.v0.rc)
+PROJECT_COMMANDS="plan tree merge mergeq status build feature resume fix attach cancel stop start hold roadmap pull push archive wait"
 
-# Commands that work without config
-NO_CONFIG_COMMANDS="init help version coffee"
+# Commands that work in standalone mode (no .v0.rc needed)
+STANDALONE_COMMANDS="chore"
+
+# Commands that never need config
+NO_CONFIG_COMMANDS="init help version coffee talk prime mayor"
+
+# Source common functions for standalone mode checking
+source "${V0_DIR}/packages/cli/lib/v0-common.sh"
+
+# Check if running in standalone mode and handle appropriately
+# Returns 0 if standalone mode should be used, 1 if in a project
+v0_check_standalone_mode() {
+    local cmd="$1"
+
+    # Try to find project root
+    if v0_find_project_root >/dev/null 2>&1; then
+        return 1  # In a project, not standalone
+    fi
+
+    # Check if command supports standalone mode
+    if [[ " ${STANDALONE_COMMANDS} " == *" ${cmd} "* ]]; then
+        return 0  # Standalone mode for this command
+    fi
+
+    # Command requires project but we're not in one
+    echo "Error: Not in a v0 project directory." >&2
+    echo "" >&2
+    echo "The command 'v0 ${cmd}' requires a project with a .v0.rc file." >&2
+    echo "" >&2
+    echo "Options:" >&2
+    echo "  1. Navigate to a project directory, or" >&2
+    echo "  2. Run 'v0 init' to create a new project here" >&2
+    echo "" >&2
+    echo "Available without a project:" >&2
+    echo "  v0 chore      - Work on standalone chores" >&2
+    echo "  v0 watch --all - Watch all running projects" >&2
+    echo "  v0 help       - Show help" >&2
+    exit 1
+}
 
 show_help() {
-  cat <<'EOF'
+  v0_help <<'EOF'
 v0 - A tool to ease you in to multi-agent vibe coding.
 
 Usage: v0 <command> [args]
 
 Commands:
-  init          Initialize .v0.rc in current directory
-  plan          Create implementation plan from prompt
-  tree          Create worktree for isolated development
-  decomp[ose]   Convert plan to issues
-  merge         Merge worktree branch to main
-  mergeq        Merge queue daemon
+  init [path]   Initialize .v0.rc in current directory (or path)
+                Options:
+                  --develop <branch>  Target branch for merges (default: v0/develop)
+                  --remote <name>     Git remote name (default: origin)
   status        Show operation status
   watch         Continuously watch status (like 'status --watch')
-  feat[ure]     Full pipeline: plan -> decompose -> execute -> merge
-  resume        Resume an existing feature (alias for 'feature --resume')
+  start         Start worker(s) (v0 start [fix|chore|mergeq])
+  stop          Stop worker(s) (v0 stop [fix|chore|mergeq])
+
   fix           Sequential bug fixing worker
   chore         Sequential chore processing worker
+  build         Full pipeline: plan -> execute -> merge
+  roadmap       Orchestrate autonomous work using a roadmap
+  plan          Create implementation plan from prompt
+  merge         Merge worktree branch to main
+  mergeq        Merge queue daemon
+  pull          Pull develop branch changes into current branch
+  push          Reset develop branch to match current branch
+
   attach        Attach to a running tmux session (fix, chore, mergeq, feature)
   cancel        Cancel a running operation
+  resume        Resume an existing feature (alias for 'feature --resume')
   hold          Put an operation on hold (pause phase transitions)
-  shutdown      Stop all v0 processes for this project
-  startup       Start workers (fix, chore, mergeq)
+  wait          Wait for an operation to complete
   prune         Remove completed/cancelled operation state
+  archive       Move stale archived plans to icebox worktree
+
+  prime         Quick-start guide (run after context loss)
   talk          Open claude with haiku model for quick conversations
+  mayor         Launch Claude as orchestration assistant
   coffee        Keep computer awake
-  monitor       Monitor worker queues for auto-shutdown
-  self          Debug and diagnostics commands
   issue         Alias for 'wk' issue tracker (see 'wk --help')
+
+  self          Self-management (update, version, debug)
 
 Options:
   --help, -h    Show this help
   --version     Show version
 
 Examples:
-  v0 init                              # Create .v0.rc in current project
-  v0 feature auth "Add JWT auth"       # Full autonomous pipeline
+  v0 init                              # Initialize with v0/develop branch
+  v0 init --develop main               # Use 'main' as the development branch
+  v0 init ./myproject --remote upstream  # Init in myproject, use 'upstream' remote
+  v0 build auth "Add JWT auth"         # Full autonomous pipeline
   v0 fix "Button not working"          # Report a bug to the fix worker
   v0 status                            # List all operations
   v0 plan api "Build REST API"         # Just create a plan
@@ -66,22 +116,38 @@ Examples:
 Tmux sessions:
   Workers run in tmux sessions. Use 'v0 attach <type>' to connect.
   Ctrl-B D to detach, Ctrl-B [ to scroll (q to exit scroll mode).
-
-Configuration:
-  Each project needs a .v0.rc file at its root. Run 'v0 init' to create one.
-
-For more information, see: https://github.com/alfredjeanlab/v0
 EOF
 }
 
 show_version() {
-  echo "v0 0.1.0"
+  local version_file="${V0_DIR}/VERSION"
+  if [[ -f "${version_file}" ]]; then
+    echo "v0 $(cat "${version_file}")"
+  else
+    echo "v0 unknown"
+  fi
+}
+
+# Sanitize a string for display (truncate and escape control chars)
+sanitize_for_display() {
+  local str="$1"
+  local max_len="${2:-60}"
+
+  # Replace newlines and tabs with spaces, collapse whitespace
+  str=$(printf '%s' "${str}" | tr '\n\t\r' '   ' | tr -s ' ')
+
+  # Truncate if too long
+  if [[ ${#str} -gt ${max_len} ]]; then
+    str="${str:0:${max_len}}..."
+  fi
+
+  echo "${str}"
 }
 
 # Handle special commands first
 case "${1:-}" in
   init)
-    source "${V0_DIR}/lib/v0-common.sh"
+    source "${V0_DIR}/packages/cli/lib/v0-common.sh"
 
     # Check dependencies first
     if ! v0_precheck; then
@@ -91,7 +157,33 @@ case "${1:-}" in
     fi
 
     shift
-    v0_init_config "${1:-.}"
+
+    init_path="."
+    init_develop=""
+    init_remote=""
+
+    while [[ $# -gt 0 ]]; do
+      case "$1" in
+        --develop|--branch)
+          init_develop="$2"
+          shift 2
+          ;;
+        --remote)
+          init_remote="$2"
+          shift 2
+          ;;
+        -*)
+          echo "Unknown option: $1" >&2
+          exit 1
+          ;;
+        *)
+          init_path="$1"
+          shift
+          ;;
+      esac
+    done
+
+    v0_init_config "${init_path}" "${init_develop}" "${init_remote}"
     exit 0
     ;;
   help|--help|-h)
@@ -113,53 +205,50 @@ CMD="${1}"
 shift
 
 case "${CMD}" in
-  plan|tree|decompose|merge|mergeq|status|watch|feature|fix|chore|attach|cancel|shutdown|startup|talk|coffee|prune|monitor|hold)
+  # Watch command - allow --all without project context
+  watch)
+    # Allow --all without project context
+    if [[ "${1:-}" == "--all" ]]; then
+      exec "${V0_DIR}/bin/v0-watch" "$@"
+    fi
+    # Otherwise require project
+    if ! v0_find_project_root >/dev/null 2>&1; then
+        v0_check_standalone_mode "${CMD}"
+    fi
+    exec "${V0_DIR}/bin/v0-watch" "$@"
+    ;;
+  # Project-required commands
+  plan|tree|merge|mergeq|status|build|fix|attach|cancel|stop|start|prune|monitor|hold|roadmap|pull|push|archive|log|wait)
+    # Check if we're in a project - if not, show error
+    if ! v0_find_project_root >/dev/null 2>&1; then
+        v0_check_standalone_mode "${CMD}"
+    fi
+    exec "${V0_DIR}/bin/v0-${CMD}" "$@"
+    ;;
+  # Standalone-capable commands
+  chore)
+    # Check if in standalone mode (sets V0_STANDALONE=1 if needed)
+    if v0_check_standalone_mode "${CMD}"; then
+        export V0_STANDALONE=1
+    fi
+    exec "${V0_DIR}/bin/v0-${CMD}" "$@"
+    ;;
+  # No-config commands
+  talk|coffee|prime|mayor)
     exec "${V0_DIR}/bin/v0-${CMD}" "$@"
     ;;
   self-debug)
     exec "${V0_DIR}/bin/v0-self-debug" "$@"
     ;;
   self)
-    # Handle 'v0 self <subcommand>' dispatch
-    case "${1:-}" in
-      debug)
-        shift
-        exec "${V0_DIR}/bin/v0-self-debug" "$@"
-        ;;
-      --help|-h|"")
-        cat <<'SELF_HELP'
-v0 self - Debug and diagnostics commands
-
-Usage: v0 self <command> [args]
-
-Commands:
-  debug         Generate debug report for failed operations
-
-Run 'v0 self debug --help' for debug command options.
-
-Examples:
-  v0 self debug my-feature     # Debug a specific feature operation
-  v0 self debug fix            # Debug fix worker issues
-  v0 self debug mergeq         # Debug merge queue daemon
-SELF_HELP
-        exit 0
-        ;;
-      *)
-        echo "Unknown self command: ${1}" >&2
-        echo "Run 'v0 self --help' for usage" >&2
-        exit 1
-        ;;
-    esac
+    exec "${V0_DIR}/bin/v0-self" "$@"
     ;;
   # Aliases
-  feat)
-    exec "${V0_DIR}/bin/v0-feature" "$@"
+  feat|feature)
+    exec "${V0_DIR}/bin/v0-build" "$@"
     ;;
   resume)
-    exec "${V0_DIR}/bin/v0-feature" --resume "$@"
-    ;;
-  decomp)
-    exec "${V0_DIR}/bin/v0-decompose" "$@"
+    exec "${V0_DIR}/bin/v0-build" --resume "$@"
     ;;
   bug|bugfix)
     exec "${V0_DIR}/bin/v0-fix" "$@"
@@ -179,8 +268,33 @@ SELF_HELP
       *) exec "${V0_DIR}/bin/v0-status" "$@" ;;
     esac
     ;;
+  # Hidden aliases (old names, not shown in help)
+  startup)
+    exec "${V0_DIR}/bin/v0-start" "$@"
+    ;;
+  shutdown)
+    exec "${V0_DIR}/bin/v0-stop" "$@"
+    ;;
+  list)
+    if ! v0_find_project_root >/dev/null 2>&1; then
+        v0_check_standalone_mode status
+    fi
+    exec "${V0_DIR}/bin/v0-status" "$@"
+    ;;
   *)
-    echo "Unknown command: ${CMD}" >&2
+    # Sanitize command for display
+    safe_cmd=$(sanitize_for_display "${CMD}")
+
+    echo "Unknown command: ${safe_cmd}" >&2
+    echo "" >&2
+
+    # If it looks like a description (contains spaces/long), suggest v0 fix
+    if [[ ${#CMD} -gt 20 ]] || [[ "${CMD}" == *" "* ]] || [[ "${CMD}" == *$'\n'* ]]; then
+      echo "Did you mean to report a bug? Try:" >&2
+      echo "  v0 fix \"${safe_cmd}\"" >&2
+      echo "" >&2
+    fi
+
     echo "Run 'v0 --help' for usage" >&2
     exit 1
     ;;

@@ -1,0 +1,333 @@
+#!/usr/bin/env bash
+# v0 Incremental Lint Runner
+# SPDX-License-Identifier: MIT
+#
+# Usage: scripts/lint [--bust] [TARGET...]
+#
+# Runs shellcheck incrementally with per-package caching.
+
+set -euo pipefail
+
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+PROJECT_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
+PACKAGES_DIR="$PROJECT_ROOT/packages"
+CACHE_DIR="${XDG_CACHE_HOME:-$HOME/.cache}/v0/lint"
+
+#------------------------------------------------------------------------------
+# Logging
+#------------------------------------------------------------------------------
+
+log_info() {
+    printf "  %s\n" "$*"
+}
+
+log_error() {
+    printf "  ✗ %s\n" "$*" >&2
+}
+
+#------------------------------------------------------------------------------
+# Hash Computation
+#------------------------------------------------------------------------------
+
+hash_files() {
+    if [[ $# -eq 0 ]]; then
+        echo "empty"
+        return
+    fi
+    # shellcheck disable=SC2068
+    shasum -a 256 $@ 2>/dev/null | shasum -a 256 | cut -d' ' -f1
+}
+
+#------------------------------------------------------------------------------
+# Lint Functions
+#------------------------------------------------------------------------------
+
+# Lint a package's lib files
+lint_package() {
+    local pkg="$1"
+    local pkg_dir="$PACKAGES_DIR/$pkg"
+    local lib_dir="$pkg_dir/lib"
+
+    if [[ ! -d "$lib_dir" ]]; then
+        return 0
+    fi
+
+    local files
+    files=$(find "$lib_dir" -maxdepth 1 -name "*.sh" -type f 2>/dev/null | sort)
+
+    if [[ -z "$files" ]]; then
+        return 0
+    fi
+
+    local hash cache_file
+    hash=$(hash_files $files)
+    cache_file="$CACHE_DIR/${pkg}.hash"
+
+    if [[ -f "$cache_file" && "$(cat "$cache_file")" == "$hash" ]]; then
+        log_info "✓ $pkg (cached)"
+        return 0
+    fi
+
+    log_info "▸ $pkg"
+
+    # shellcheck disable=SC2086
+    if ! shellcheck -x $files; then
+        return 1
+    fi
+
+    mkdir -p "$CACHE_DIR"
+    echo "$hash" > "$cache_file"
+    log_info "✓ $pkg"
+}
+
+# Lint a package's test files
+lint_package_tests() {
+    local pkg="$1"
+    local pkg_dir="$PACKAGES_DIR/$pkg"
+    local test_dir="$pkg_dir/tests"
+
+    if [[ ! -d "$test_dir" ]]; then
+        return 0
+    fi
+
+    local files
+    files=$(find "$test_dir" -name "*.bats" -type f 2>/dev/null | sort)
+
+    # Also include helpers for test-support
+    if [[ "$pkg" == "test-support" ]]; then
+        files="$files $(find "$pkg_dir/helpers" -name "*.bash" -type f 2>/dev/null | sort)"
+    fi
+
+    if [[ -z "$files" ]]; then
+        return 0
+    fi
+
+    local hash cache_file
+    hash=$(hash_files $files)
+    cache_file="$CACHE_DIR/${pkg}-tests.hash"
+
+    if [[ -f "$cache_file" && "$(cat "$cache_file")" == "$hash" ]]; then
+        log_info "✓ $pkg/tests (cached)"
+        return 0
+    fi
+
+    log_info "▸ $pkg/tests"
+
+    # shellcheck disable=SC2086
+    if ! shellcheck -x -S warning -e SC1090,SC2155,SC2164,SC2178 $files; then
+        return 1
+    fi
+
+    mkdir -p "$CACHE_DIR"
+    echo "$hash" > "$cache_file"
+    log_info "✓ $pkg/tests"
+}
+
+# Lint a single bin/ script
+lint_bin_file() {
+    local file="$1"
+    local name
+    name=$(basename "$file")
+
+    local hash cache_file
+    hash=$(hash_files "$file")
+    cache_file="$CACHE_DIR/bin-${name}.hash"
+
+    if [[ -f "$cache_file" && "$(cat "$cache_file")" == "$hash" ]]; then
+        log_info "✓ bin/$name (cached)"
+        return 0
+    fi
+
+    log_info "▸ bin/$name"
+
+    if ! shellcheck -x "$file"; then
+        return 1
+    fi
+
+    mkdir -p "$CACHE_DIR"
+    echo "$hash" > "$cache_file"
+    log_info "✓ bin/$name"
+}
+
+# Lint all bin/ scripts (per-file caching)
+lint_bin_all() {
+    local files
+    files=$(find "$PROJECT_ROOT/bin" -maxdepth 1 -name "v0-*" -type f 2>/dev/null | sort)
+
+    for file in $files; do
+        lint_bin_file "$file" || return 1
+    done
+}
+
+# Lint integration tests
+lint_integration_tests() {
+    local files
+    files=$(find "$PROJECT_ROOT/tests" -maxdepth 1 -name "*.bats" -type f 2>/dev/null | sort)
+
+    if [[ -z "$files" ]]; then
+        return 0
+    fi
+
+    local hash cache_file
+    hash=$(hash_files $files)
+    cache_file="$CACHE_DIR/integration-tests.hash"
+
+    if [[ -f "$cache_file" && "$(cat "$cache_file")" == "$hash" ]]; then
+        log_info "✓ tests (cached)"
+        return 0
+    fi
+
+    log_info "▸ tests"
+
+    # shellcheck disable=SC2086
+    if ! shellcheck -x -S warning -e SC1090,SC2155,SC2164,SC2178 $files; then
+        return 1
+    fi
+
+    mkdir -p "$CACHE_DIR"
+    echo "$hash" > "$cache_file"
+    log_info "✓ tests"
+}
+
+# List all packages
+list_packages() {
+    for pkg_dir in "$PACKAGES_DIR"/*/; do
+        if [[ -d "$pkg_dir" ]]; then
+            basename "$pkg_dir"
+        fi
+    done
+}
+
+#------------------------------------------------------------------------------
+# Main
+#------------------------------------------------------------------------------
+
+usage() {
+    cat <<EOF
+Usage: scripts/lint [OPTIONS] [TARGET...]
+
+Run shellcheck incrementally with per-package caching.
+
+Options:
+    --bust [NAME]  Clear cache (all, or specific target)
+    -h, --help     Show this help message
+
+Targets:
+    bin              Lint all bin/v0-* scripts
+    bin/<name>       Lint specific bin script (e.g., bin/v0-cancel)
+    <package>        Lint packages/<package>/lib/*.sh
+    <package>/tests  Lint packages/<package>/tests/*.bats
+    tests            Lint tests/*.bats (integration tests)
+
+Examples:
+    scripts/lint                # Lint all (incremental)
+    scripts/lint --bust         # Clear all caches and lint
+    scripts/lint bin/v0-cancel  # Lint specific bin script
+    scripts/lint core cli       # Lint specific packages
+    scripts/lint state/tests    # Lint specific package tests
+EOF
+}
+
+main() {
+    local bust_target=""
+    local targets=""
+
+    while [[ $# -gt 0 ]]; do
+        case "$1" in
+            --bust)
+                if [[ -n "${2:-}" && ! "$2" =~ ^- ]]; then
+                    bust_target="$2"
+                    shift 2
+                else
+                    bust_target="all"
+                    shift
+                fi
+                ;;
+            -h|--help)
+                usage
+                exit 0
+                ;;
+            -*)
+                log_error "Unknown option: $1"
+                usage
+                exit 1
+                ;;
+            *)
+                targets="$targets $1"
+                shift
+                ;;
+        esac
+    done
+
+    # Check shellcheck
+    if ! command -v shellcheck >/dev/null 2>&1; then
+        log_error "shellcheck not found. Install with: brew install shellcheck"
+        exit 1
+    fi
+
+    # Bust cache if requested
+    if [[ -n "$bust_target" ]]; then
+        if [[ "$bust_target" == "all" ]]; then
+            log_info "Clearing all lint caches..."
+            rm -rf "$CACHE_DIR"
+        else
+            log_info "Clearing cache for: $bust_target"
+            rm -f "$CACHE_DIR/${bust_target}.hash"
+            rm -f "$CACHE_DIR/${bust_target}-tests.hash"
+        fi
+    fi
+
+    # Default to all targets
+    if [[ -z "$targets" ]]; then
+        targets="bin $(list_packages | tr '\n' ' ') tests"
+        # Add /tests for each package
+        for pkg in $(list_packages); do
+            targets="$targets $pkg/tests"
+        done
+    fi
+
+    local failed=false
+
+    for target in $targets; do
+        case "$target" in
+            bin)
+                lint_bin_all || failed=true
+                ;;
+            bin/*)
+                local cmd="${target#bin/}"
+                if [[ -f "$PROJECT_ROOT/bin/$cmd" ]]; then
+                    lint_bin_file "$PROJECT_ROOT/bin/$cmd" || failed=true
+                else
+                    log_error "Unknown bin command: $cmd"
+                    exit 1
+                fi
+                ;;
+            tests)
+                lint_integration_tests || failed=true
+                ;;
+            */tests)
+                local pkg="${target%/tests}"
+                lint_package_tests "$pkg" || failed=true
+                ;;
+            *)
+                if [[ -d "$PACKAGES_DIR/$target" ]]; then
+                    lint_package "$target" || failed=true
+                else
+                    log_error "Unknown target: $target"
+                    exit 1
+                fi
+                ;;
+        esac
+
+        [[ "$failed" == true ]] && break
+    done
+
+    if [[ "$failed" == true ]]; then
+        log_error "Lint failed"
+        exit 1
+    fi
+
+    log_info "All lint checks passed!"
+}
+
+main "$@"

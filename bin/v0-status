@@ -4,17 +4,35 @@
 set -e
 
 V0_DIR="$(cd "$(dirname "$0")/.." && pwd)"
-source "${V0_DIR}/lib/v0-common.sh"
+source "${V0_DIR}/packages/cli/lib/v0-common.sh"
 v0_load_config
 
 # Source coffee functions for status display
-source "${V0_DIR}/lib/coffee-common.sh"
+source "${V0_DIR}/packages/worker/lib/coffee-common.sh"
 
 # Source nudge functions for status display
-source "${V0_DIR}/lib/nudge-common.sh"
+source "${V0_DIR}/packages/worker/lib/nudge-common.sh"
+
+# Source timestamp utilities
+source "${V0_DIR}/packages/status/lib/timestamps.sh"
+
+# Source queue display utilities
+source "${V0_DIR}/packages/status/lib/queue-display.sh"
+
+# Source worker status utilities
+source "${V0_DIR}/packages/status/lib/worker-status.sh"
+
+# Source recently completed display utilities
+source "${V0_DIR}/packages/status/lib/recent-display.sh"
+
+# Source branch status utilities
+source "${V0_DIR}/packages/status/lib/branch-status.sh"
+
+# Source blocker display utilities
+source "${V0_DIR}/packages/status/lib/blocker-display.sh"
 
 usage() {
-  cat <<EOF
+  v0_help <<'EOF'
 Usage: v0 status [name] [options]
 
 Check status of build operations.
@@ -28,6 +46,7 @@ Options:
   --recent       Show recently completed bugs/chores
   --watch        Watch for live updates
   --json         Output as JSON
+  --short        Compact output (hides inactive sections, coffee/nudge)
 
 Examples:
   v0 status                # List all operations (default)
@@ -43,301 +62,45 @@ EOF
   exit 1
 }
 
-# Helper function to show bugs with indentation
-show_bugs_indented() {
-  local limit="$1"
-  local in_progress open
-
-  in_progress=$(wk list --type bug --status in_progress 2>/dev/null || true)
-  open=$(wk list --type bug --status todo 2>/dev/null || true)
-
-  if [[ -z "${in_progress}" ]] && [[ -z "${open}" ]]; then
-    echo -e "  Bugs: ${C_DIM}none${C_RESET}"
-    return
-  fi
-
-  if [[ -n "${in_progress}" ]]; then
-    local count
-    count=$(echo "${in_progress}" | wc -l | tr -d ' ')
-    echo "  In progress:"
-    if [[ "${count}" -le "${limit}" ]]; then
-      echo "${in_progress}" | sed 's/^/    /'
-    else
-      echo "${in_progress}" | head -n "${limit}" | sed 's/^/    /'
-      local remaining=$((count - limit))
-      echo -e "    ${C_DIM}... and ${remaining} more${C_RESET}"
+# Phase 3-4 optimization: Get queue entry status using bash string matching
+# Args: $1 = operation name, $2 = queue_cache_data variable
+# Output: status field or empty string
+# Uses pure bash - no subprocess spawns
+get_queue_entry_status() {
+  local op_name="$1"
+  local cache_data="$2"
+  local line rest
+  # Match line starting with operation name followed by tab
+  while IFS= read -r line; do
+    if [[ "${line}" == "${op_name}"$'\t'* ]]; then
+      # Extract second field using bash parameter expansion
+      rest="${line#*$'\t'}"      # Remove first field (operation)
+      echo "${rest%%$'\t'*}"     # Return second field (status), remove rest
+      return
     fi
-  fi
+  done <<< "${cache_data}"
+}
 
-  if [[ -n "${open}" ]]; then
-    local count
-    count=$(echo "${open}" | wc -l | tr -d ' ')
-    echo "  Queued:"
-    if [[ "${count}" -le "${limit}" ]]; then
-      echo "${open}" | sed 's/^/    /'
-    else
-      echo "${open}" | head -n "${limit}" | sed 's/^/    /'
-      local remaining=$((count - limit))
-      echo -e "    ${C_DIM}... and ${remaining} more${C_RESET}"
+# Phase 3-4 optimization: Get queue completed timestamp using bash string matching
+# Args: $1 = operation name, $2 = queue_cache_data variable
+# Output: updated_at field for completed entries, or empty string
+# Uses pure bash - no subprocess spawns
+get_queue_completed_timestamp() {
+  local op_name="$1"
+  local cache_data="$2"
+  local line rest
+  # Match line: operation<tab>completed<tab>timestamp
+  while IFS= read -r line; do
+    if [[ "${line}" == "${op_name}"$'\t'"completed"$'\t'* ]]; then
+      # Extract third field using bash parameter expansion
+      rest="${line#*$'\t'}"      # Remove first field
+      rest="${rest#*$'\t'}"      # Remove second field
+      echo "${rest}"             # Return third field (timestamp)
+      return
     fi
-  fi
+  done <<< "${cache_data}"
 }
 
-# Helper function to show merge queue with indentation
-show_mergeq_indented() {
-  local limit="$1"
-  local queue_file="${BUILD_DIR}/mergeq/queue.json"
-
-  if [[ ! -f "${queue_file}" ]]; then
-    echo -e "  Merges: ${C_DIM}none${C_RESET}"
-    return
-  fi
-
-  local entries total
-  entries=$(jq -r '.entries[] | select(.status == "pending" or .status == "processing") | "\(.status)\t\(.operation)"' "${queue_file}" 2>/dev/null || true)
-
-  if [[ -z "${entries}" ]]; then
-    echo -e "  Merges: ${C_DIM}none${C_RESET}"
-  else
-    total=$(echo "${entries}" | wc -l | tr -d ' ')
-
-    echo "  Merges:"
-    if [[ "${total}" -le "${limit}" ]]; then
-      echo "${entries}" | while IFS=$'\t' read -r status op; do
-        local status_color="${C_CYAN}"
-        [[ "${status}" = "pending" ]] && status_color=""
-        printf "    ${status_color}%-12s${C_RESET} %s\n" "[${status}]" "${op}"
-      done
-    else
-      echo "${entries}" | head -n "${limit}" | while IFS=$'\t' read -r status op; do
-        local status_color="${C_CYAN}"
-        [[ "${status}" = "pending" ]] && status_color=""
-        printf "    ${status_color}%-12s${C_RESET} %s\n" "[${status}]" "${op}"
-      done
-      local remaining=$((total - limit))
-      echo -e "    ${C_DIM}... and ${remaining} more in queue${C_RESET}"
-    fi
-  fi
-}
-
-# Helper function to show chores with indentation
-show_chores_indented() {
-  local limit="$1"
-  local in_progress open
-
-  in_progress=$(wk list --type chore --status in_progress 2>/dev/null || true)
-  open=$(wk list --type chore --status todo 2>/dev/null || true)
-
-  if [[ -z "${in_progress}" ]] && [[ -z "${open}" ]]; then
-    echo -e "  Chores: ${C_DIM}none${C_RESET}"
-    return
-  fi
-
-  if [[ -n "${in_progress}" ]]; then
-    local count
-    count=$(echo "${in_progress}" | wc -l | tr -d ' ')
-    echo "  In progress:"
-    if [[ "${count}" -le "${limit}" ]]; then
-      echo "${in_progress}" | sed 's/^/    /'
-    else
-      echo "${in_progress}" | head -n "${limit}" | sed 's/^/    /'
-      local remaining=$((count - limit))
-      echo -e "    ${C_DIM}... and ${remaining} more${C_RESET}"
-    fi
-  fi
-
-  if [[ -n "${open}" ]]; then
-    local count
-    count=$(echo "${open}" | wc -l | tr -d ' ')
-    echo "  Queued:"
-    if [[ "${count}" -le "${limit}" ]]; then
-      echo "${open}" | sed 's/^/    /'
-    else
-      echo "${open}" | head -n "${limit}" | sed 's/^/    /'
-      local remaining=$((count - limit))
-      echo -e "    ${C_DIM}... and ${remaining} more${C_RESET}"
-    fi
-  fi
-}
-
-# Convert ISO 8601 timestamp to epoch (macOS compatible)
-# Note: Timestamps with Z suffix are UTC, so we parse in UTC timezone
-timestamp_to_epoch() {
-  local ts="$1"
-  local formatted
-  formatted=$(echo "${ts}" | sed 's/T/ /; s/Z$//; s/\.[0-9]*//')
-  TZ=UTC date -j -f "%Y-%m-%d %H:%M:%S" "${formatted}" +%s 2>/dev/null
-}
-
-# Format elapsed time as human-readable string
-format_elapsed() {
-  local seconds="$1"
-  if [[ "${seconds}" -lt 60 ]]; then
-    echo "just now"
-  elif [[ "${seconds}" -lt 3600 ]]; then
-    local mins=$((seconds / 60))
-    echo "${mins} min ago"
-  elif [[ "${seconds}" -lt 86400 ]]; then
-    local hours=$((seconds / 3600))
-    echo "${hours} hr ago"
-  else
-    local days=$((seconds / 86400))
-    echo "${days} day ago"
-  fi
-}
-
-# Get recently merged operations (features/builds)
-# Args: $1 = hours to look back (default: 72)
-# Output: name|merged_at (one per line, sorted most recent first)
-get_merged_operations() {
-  local since_hours="${1:-72}"
-  local cutoff_time
-  cutoff_time=$(date -v-"${since_hours}"H +%s 2>/dev/null || date -d "${since_hours} hours ago" +%s 2>/dev/null || echo 0)
-
-  if [[ ! -d "${BUILD_DIR}/operations" ]]; then
-    return
-  fi
-
-  for state_file in "${BUILD_DIR}/operations"/*/state.json; do
-    [[ -f "${state_file}" ]] || continue
-    # Single jq call extracts all needed fields
-    local name merge_status merged_at
-    read -r name merge_status merged_at < <(
-      jq -r '[.name, (.merge_status // ""), (.merged_at // "")] | @tsv' "${state_file}" 2>/dev/null
-    )
-
-    if [[ "${merge_status}" = "merged" ]] && [[ -n "${merged_at}" ]]; then
-      local merged_epoch
-      merged_epoch=$(timestamp_to_epoch "${merged_at}")
-      if [[ -n "${merged_epoch}" ]] && [[ "${merged_epoch}" -ge "${cutoff_time}" ]]; then
-        echo "${name}|${merged_at}"
-      fi
-    fi
-  done | sort -t'|' -k2 -r
-}
-
-# Get recently completed bugs
-# Args: $1 = hours to look back (default: 72), $2 = max results (optional)
-# Output: id|title|updated_at (one per line, filtered by recency)
-get_completed_bugs() {
-  local since_hours="${1:-72}"
-  local limit="${2:-}"
-
-  local json_output limit_arg=""
-  [[ -n "${limit}" ]] && limit_arg="--limit ${limit}"
-  # Use wk list filter to efficiently get only recently updated bugs
-  json_output=$(wk list --type bug --status "done" --format json -q "updated < ${since_hours}h" ${limit_arg:+"${limit_arg}"} 2>/dev/null) || return
-  [[ -z "${json_output}" ]] && return
-
-  # wk list --format json doesn't include updated_at, so we fetch from wk show for display
-  echo "${json_output}" | jq -r '.issues[] | .id' 2>/dev/null | while read -r id; do
-    [[ -z "${id}" ]] && continue
-    local issue_json title updated_at
-    issue_json=$(wk show "${id}" --format json 2>/dev/null) || continue
-    title=$(echo "${issue_json}" | jq -r '.title // .summary // "Untitled"' 2>/dev/null)
-    updated_at=$(echo "${issue_json}" | jq -r '.updated_at // .closed_at // ""' 2>/dev/null)
-    echo "${id}|${title}|${updated_at}"
-  done
-}
-
-# Get recently completed chores
-# Args: $1 = hours to look back (default: 72), $2 = max results (optional)
-# Output: id|title|updated_at (one per line, filtered by recency)
-get_completed_chores() {
-  local since_hours="${1:-72}"
-  local limit="${2:-}"
-
-  local json_output limit_arg=""
-  [[ -n "${limit}" ]] && limit_arg="--limit ${limit}"
-  # Use wk list filter to efficiently get only recently updated chores
-  json_output=$(wk list --type chore --status "done" --format json -q "updated < ${since_hours}h" ${limit_arg:+"${limit_arg}"} 2>/dev/null) || return
-  [[ -z "${json_output}" ]] && return
-
-  # wk list --format json doesn't include updated_at, so we fetch from wk show for display
-  echo "${json_output}" | jq -r '.issues[] | .id' 2>/dev/null | while read -r id; do
-    [[ -z "${id}" ]] && continue
-    local issue_json title updated_at
-    issue_json=$(wk show "${id}" --format json 2>/dev/null) || continue
-    title=$(echo "${issue_json}" | jq -r '.title // .summary // "Untitled"' 2>/dev/null)
-    updated_at=$(echo "${issue_json}" | jq -r '.updated_at // .closed_at // ""' 2>/dev/null)
-    echo "${id}|${title}|${updated_at}"
-  done
-}
-
-# Show recently completed section in status output
-# Args: $1 = max items per category (default: 5)
-show_recently_completed() {
-  local max_items="${1:-5}"
-  local completed_bugs completed_chores
-
-  # Fetch data first to check if there's anything to show
-  completed_bugs=$(get_completed_bugs 72 $((max_items + 1)))
-  completed_chores=$(get_completed_chores 72 $((max_items + 1)))
-
-  # If nothing to show, omit the entire section
-  if [[ -z "${completed_bugs}" ]] && [[ -z "${completed_chores}" ]]; then
-    return
-  fi
-
-  echo ""
-  echo "Recently Completed:"
-
-  # Show completed bugs
-  if [[ -n "${completed_bugs}" ]]; then
-    echo "  Bugs:"
-    echo "${completed_bugs}" | head -n "${max_items}" | while IFS='|' read -r id title updated_at; do
-      local display_title="${title:0:50}"
-      [[ ${#title} -gt 50 ]] && display_title="${display_title}..."
-      if [[ -n "${updated_at}" ]]; then
-        local now_epoch updated_epoch elapsed_sec elapsed
-        now_epoch=$(date +%s)
-        updated_epoch=$(timestamp_to_epoch "${updated_at}")
-        if [[ -n "${updated_epoch}" ]] && [[ "${updated_epoch}" -gt 0 ]]; then
-          elapsed_sec=$((now_epoch - updated_epoch))
-          elapsed=$(format_elapsed "${elapsed_sec}")
-          echo "    - ${id}: ${display_title} (${elapsed})"
-        else
-          echo "    - ${id}: ${display_title}"
-        fi
-      else
-        echo "    - ${id}: ${display_title}"
-      fi
-    done
-    local total
-    total=$(echo "${completed_bugs}" | wc -l | tr -d ' ')
-    if [[ "${total}" -gt "${max_items}" ]]; then
-      echo "    ... and more"
-    fi
-  fi
-
-  # Show completed chores
-  if [[ -n "${completed_chores}" ]]; then
-    echo "  Chores:"
-    echo "${completed_chores}" | head -n "${max_items}" | while IFS='|' read -r id title updated_at; do
-      local display_title="${title:0:50}"
-      [[ ${#title} -gt 50 ]] && display_title="${display_title}..."
-      if [[ -n "${updated_at}" ]]; then
-        local now_epoch updated_epoch elapsed_sec elapsed
-        now_epoch=$(date +%s)
-        updated_epoch=$(timestamp_to_epoch "${updated_at}")
-        if [[ -n "${updated_epoch}" ]] && [[ "${updated_epoch}" -gt 0 ]]; then
-          elapsed_sec=$((now_epoch - updated_epoch))
-          elapsed=$(format_elapsed "${elapsed_sec}")
-          echo "    - ${id}: ${display_title} (${elapsed})"
-        else
-          echo "    - ${id}: ${display_title}"
-        fi
-      else
-        echo "    - ${id}: ${display_title}"
-      fi
-    done
-    local total
-    total=$(echo "${completed_chores}" | wc -l | tr -d ' ')
-    if [[ "${total}" -gt "${max_items}" ]]; then
-      echo "    ... and more"
-    fi
-  fi
-}
 
 NAME=""
 LIST=""
@@ -348,6 +111,9 @@ CHORE=""
 WATCH=""
 JSON=""
 RECENT=""
+NO_HINTS=""
+MAX_OPS=""
+SHORT=""
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
@@ -360,6 +126,9 @@ while [[ $# -gt 0 ]]; do
     --watch) WATCH=1; shift ;;
     --json) JSON=1; shift ;;
     --recent) RECENT=1; shift ;;
+    --no-hints) NO_HINTS=1; shift ;;
+    --max-ops) MAX_OPS="$2"; shift 2 ;;
+    --short) SHORT=1; shift ;;
     --prune|--prune-all)
       echo "Warning: $1 is deprecated. Use 'v0 prune' instead." >&2
       exec "${V0_DIR}/bin/v0-prune" "$@"
@@ -382,121 +151,13 @@ fi
 
 # Show fix status (condensed view)
 if [[ -n "${FIX}" ]]; then
-  # Use namespaced session names based on PROJECT
-  fix_session="v0-${PROJECT}-worker-fix"
-  fix_polling_log="/tmp/v0-${PROJECT}-fix-polling.log"
-
-  # Check worker and polling daemon status
-  fix_worker_running=false
-  fix_polling_pid=""
-
-  tmux has-session -t "${fix_session}" 2>/dev/null && fix_worker_running=true
-  [[ -f "${fix_polling_log}" ]] && fix_polling_pid=$(pgrep -f "while true.*${fix_session}" 2>/dev/null || true)
-
-  if [[ "${fix_worker_running}" = true ]]; then
-    echo -e "Fix Worker: ${C_CYAN}Active${C_RESET} ${C_DIM}[tmux: ${fix_session}]${C_RESET}"
-    echo -e "Attach with: v0 attach fix"
-  elif [[ -n "${fix_polling_pid}" ]]; then
-    echo -e "Fix Worker: ${C_YELLOW}Polling${C_RESET} ${C_DIM}[pid: ${fix_polling_pid}]${C_RESET}"
-  else
-    echo -e "Fix Worker: ${C_DIM}Stopped${C_RESET}"
-  fi
-
-  in_progress_bugs=$(wk list --type bug --status in_progress 2>/dev/null || true)
-  open_bugs=$(wk list --type bug --status todo 2>/dev/null || true)
-
-  if [[ -z "${in_progress_bugs}" ]] && [[ -z "${open_bugs}" ]]; then
-    echo ""
-    echo "No bugs available"
-  else
-    shown=3
-
-    if [[ -n "${in_progress_bugs}" ]]; then
-      echo ""
-      echo "In Progress:"
-      count=$(echo "${in_progress_bugs}" | wc -l | tr -d ' ')
-      if [[ "${count}" -le "${shown}" ]]; then
-        echo "${in_progress_bugs}" | sed 's/^/  /'
-      else
-        echo "${in_progress_bugs}" | head -n "${shown}" | sed 's/^/  /'
-        remaining=$((count - shown))
-        echo "  ... and ${remaining} more"
-      fi
-    fi
-
-    if [[ -n "${open_bugs}" ]]; then
-      echo ""
-      echo "Queued:"
-      count=$(echo "${open_bugs}" | wc -l | tr -d ' ')
-      if [[ "${count}" -le "${shown}" ]]; then
-        echo "${open_bugs}" | sed 's/^/  /'
-      else
-        echo "${open_bugs}" | head -n "${shown}" | sed 's/^/  /'
-        remaining=$((count - shown))
-        echo "  ... and ${remaining} more"
-      fi
-    fi
-  fi
+  show_standalone_worker_status "fix"
   exit 0
 fi
 
 # Show chore status (condensed view)
 if [[ -n "${CHORE}" ]]; then
-  # Use namespaced session names based on PROJECT
-  chore_session="v0-${PROJECT}-worker-chore"
-  chore_polling_log="/tmp/v0-${PROJECT}-chore-polling.log"
-
-  # Check worker and polling daemon status
-  chore_worker_running=false
-  chore_polling_pid=""
-
-  tmux has-session -t "${chore_session}" 2>/dev/null && chore_worker_running=true
-  [[ -f "${chore_polling_log}" ]] && chore_polling_pid=$(pgrep -f "while true.*${chore_session}" 2>/dev/null || true)
-
-  if [[ "${chore_worker_running}" = true ]]; then
-    echo -e "Chore Worker: ${C_CYAN}Active${C_RESET} ${C_DIM}[tmux: ${chore_session}]${C_RESET}"
-    echo -e "Attach with: v0 attach chore"
-  elif [[ -n "${chore_polling_pid}" ]]; then
-    echo -e "Chore Worker: ${C_YELLOW}Polling${C_RESET} ${C_DIM}[pid: ${chore_polling_pid}]${C_RESET}"
-  else
-    echo -e "Chore Worker: ${C_DIM}Stopped${C_RESET}"
-  fi
-
-  in_progress_chores=$(wk list --type chore --status in_progress 2>/dev/null || true)
-  open_chores=$(wk list --type chore --status todo 2>/dev/null || true)
-
-  if [[ -z "${in_progress_chores}" ]] && [[ -z "${open_chores}" ]]; then
-    echo ""
-    echo "No chores available"
-  else
-    shown=3
-
-    if [[ -n "${in_progress_chores}" ]]; then
-      echo ""
-      echo "In Progress:"
-      count=$(echo "${in_progress_chores}" | wc -l | tr -d ' ')
-      if [[ "${count}" -le "${shown}" ]]; then
-        echo "${in_progress_chores}" | sed 's/^/  /'
-      else
-        echo "${in_progress_chores}" | head -n "${shown}" | sed 's/^/  /'
-        remaining=$((count - shown))
-        echo "  ... and ${remaining} more"
-      fi
-    fi
-
-    if [[ -n "${open_chores}" ]]; then
-      echo ""
-      echo "Queued:"
-      count=$(echo "${open_chores}" | wc -l | tr -d ' ')
-      if [[ "${count}" -le "${shown}" ]]; then
-        echo "${open_chores}" | sed 's/^/  /'
-      else
-        echo "${open_chores}" | head -n "${shown}" | sed 's/^/  /'
-        remaining=$((count - shown))
-        echo "  ... and ${remaining} more"
-      fi
-    fi
-  fi
+  show_standalone_worker_status "chore"
   exit 0
 fi
 
@@ -507,20 +168,54 @@ fi
 
 # List all operations (default behavior)
 if [[ -n "${LIST}" ]] || [[ -n "${BLOCKED}" ]]; then
-  if [[ -n "${BLOCKED}" ]]; then
-    echo "Blocked Operations:"
-  else
-    echo "Operations:"
-  fi
-  echo ""
+  # Show branch ahead/behind status at the top (blank line follows only if status shown)
+  show_branch_status && echo ""
 
   # Batch tmux session check - single call to list all sessions (used by operations loop and workers)
   all_sessions=$(tmux list-sessions -F '#{session_name}' 2>/dev/null || true)
-  local_machine=$(hostname -s)
 
-  if [[ ! -d "${BUILD_DIR}/operations" ]]; then
-    echo -e "  ${C_DIM}(no operations found)${C_RESET}"
+  # Pre-check if operations directory exists and has state files
+  has_operations=false
+  if [[ -d "${BUILD_DIR}/operations" ]]; then
+    for f in "${BUILD_DIR}"/operations/*/state.json; do
+      [[ -f "${f}" ]] && has_operations=true && break
+    done
+  fi
+
+  # Also check for active roadmaps (init/planning phase) - they should appear in Plans
+  has_active_roadmaps=false
+  if [[ -d "${BUILD_DIR}/roadmaps" ]]; then
+    for f in "${BUILD_DIR}"/roadmaps/*/state.json; do
+      [[ -f "${f}" ]] || continue
+      rm_phase=$(jq -r '.phase // ""' "${f}" 2>/dev/null)  # roadmap state check
+      if [[ "${rm_phase}" = "init" ]] || [[ "${rm_phase}" = "planning" ]]; then
+        has_active_roadmaps=true
+        break
+      fi
+    done
+  fi
+
+  # Consider plans exist if we have operations OR active roadmaps
+  has_plans="${has_operations}"
+  [[ "${has_active_roadmaps}" = true ]] && has_plans=true
+
+  # If no plans (operations or active roadmaps), show compact "None" format
+  if [[ "${has_plans}" = false ]]; then
+    if [[ -n "${BLOCKED}" ]]; then
+      echo -e "Blocked Plans: ${C_DIM}None${C_RESET}"
+    else
+      echo -e "Plans: ${C_DIM}None${C_RESET}"
+    fi
   else
+    # Plans exist (operations and/or active roadmaps) - show full format with header and details
+    if [[ -n "${BLOCKED}" ]]; then
+      echo "Blocked Plans:"
+    else
+      echo "Plans:"
+    fi
+    echo ""
+
+  local_machine=$(hostname -s)
 
   # Collect all state files (bash 3.2 compatible)
   state_files=()
@@ -529,13 +224,72 @@ if [[ -n "${LIST}" ]] || [[ -n "${BLOCKED}" ]]; then
   done
 
   found_any=""
+  # max_name_display is the truncation limit for long names
+  max_name_display=40
+  # max_name_len is calculated in jq below (Phase 3 optimization - single pass)
+
+  # Merge queue file path for timestamp lookups (used in display loop)
+  mergeq_file="${BUILD_DIR}/mergeq/queue.json"
+
+  # Pre-fetch queue data for O(1) lookups in loop (Phase 1 optimization)
+  # Format: operation\tstatus\tupdated_at (one per line)
+  queue_cache=$(mktemp)
+  # shellcheck disable=SC2064  # Intentional: capture temp file path at trap time
+  trap "rm -f '${queue_cache}'" EXIT
+  if [[ -f "${mergeq_file}" ]]; then
+    jq -r '.entries[] | [.operation, .status, (.updated_at // "")] | @tsv' "${mergeq_file}" > "${queue_cache}" 2>/dev/null || true
+  fi
+  # Phase 3-4 optimization: Load queue cache into variable for bash string matching
+  # This eliminates grep subprocess spawns per operation in the display loop
+  queue_cache_data=""
+  if [[ -s "${queue_cache}" ]]; then
+    queue_cache_data=$(<"${queue_cache}")
+  fi
+
   # Process all state files in single jq -s invocation (one process instead of many)
+  # Phase 3 optimization: also calculates max_name_len in same pass (META line first)
+  max_name_len=8  # Default minimum
+  # Pruning statistics (set by META line from jq)
+  pruned_open=0
+  pruned_blocked=0
+  pruned_completed=0
+  total_ops=0
+  # Phase 1 optimization: cache current timestamp once for all operations
+  now_epoch=$(date +%s)
+  # Determine effective limit: --max-ops overrides, otherwise show all (use very high number)
+  effective_limit="${MAX_OPS:-99999}"
+
+  # Phase 5 optimization: Pre-fetch all blocker data in 2 wk calls (instead of N+1)
+  # Extract all epic_ids first, then batch fetch from wok
   if [[ ${#state_files[@]} -gt 0 ]]; then
-    while IFS=$'\t' read -r name op_type phase created machine completed merge_queued merge_status merged_at after session worker_pid held held_at; do
+    all_epic_ids=$(jq -rs '[.[].epic_id // empty | select(. != "null" and . != "")] | unique | .[]' "${state_files[@]}" 2>/dev/null)
+    if [[ -n "${all_epic_ids}" ]]; then
+      # shellcheck disable=SC2086
+      _status_init_blocker_cache ${all_epic_ids}
+    fi
+  fi
+
+  if [[ ${#state_files[@]} -gt 0 ]]; then
+    while IFS=$'\t' read -r name op_type phase created machine completed merge_queued merge_status merged_at completed_at epic_id session worker_pid held held_at merge_resumed worktree_missing merge_commit created_epoch completed_epoch merged_epoch held_epoch updated_epoch last_epoch display_date; do
+      # Handle META line for max name length and pruning stats
+      if [[ "${name}" = "META" ]]; then
+        max_name_len="${op_type}"  # op_type field contains max_name_len for META
+        [[ ${max_name_len} -lt 8 ]] && max_name_len=8
+        # Pruning statistics: phase=pruned_open, created=pruned_blocked, machine=pruned_completed, completed=total
+        pruned_open="${phase:-0}"
+        pruned_blocked="${created:-0}"
+        pruned_completed="${machine:-0}"
+        total_ops="${completed:-0}"
+        continue
+      fi
       [[ -z "${name}" ]] && continue
-    # If --blocked filter, skip non-blocked operations
+    # If --blocked filter, skip non-blocked operations (check wok for blockers)
     if [[ -n "${BLOCKED}" ]]; then
-      if [[ -z "${after}" ]] || [[ "${after}" = "null" ]]; then
+      if [[ -z "${epic_id}" ]] || [[ "${epic_id}" = "null" ]]; then
+        continue
+      fi
+      # Check wok for open blockers
+      if ! v0_is_blocked "${epic_id}"; then
         continue
       fi
     fi
@@ -546,229 +300,501 @@ if [[ -n "${LIST}" ]] || [[ -n "${BLOCKED}" ]]; then
     # Note: all_sessions only contains LOCAL tmux sessions, so if we find a match,
     # it's definitely running locally regardless of the machine field in state.json
     status_icon=""
-    if [[ -n "${session}" ]] && [[ "${all_sessions}" == *"${session}"* ]]; then
-      status_icon=" ${C_CYAN}[active]${C_RESET}"
+    if [[ -n "${session}" ]] && [[ "${session}" != "null" ]] && [[ "${all_sessions}" == *"${session}"* ]]; then
+      status_icon=" ${C_CYAN}(active)${C_RESET}"
     fi
     # Check if background worker is running
     if [[ -z "${status_icon}" ]] && [[ -n "${worker_pid}" ]] && [[ "${worker_pid}" != "null" ]]; then
       if [[ "${machine}" = "${local_machine}" ]] && kill -0 "${worker_pid}" 2>/dev/null; then
-        status_icon=" ${C_CYAN}[bg-worker]${C_RESET}"
+        status_icon=" ${C_CYAN}(bg-worker)${C_RESET}"
       fi
     fi
 
-    # Add after indicator (only show if still blocked)
+    # Add blocker indicator (only show for phases where operation is still waiting)
+    # Query wok for blockers using epic_id
     after_icon=""
-    if [[ -n "${after}" ]] && [[ "${after}" != "null" ]] && [[ "${phase}" = "blocked" ]]; then
-      after_icon=" ${C_YELLOW}[after ${after}]${C_RESET}"
+    if [[ -n "${epic_id}" ]] && [[ "${epic_id}" != "null" ]]; then
+      case "${phase}" in
+        executing|completed|pending_merge|merged|cancelled)
+          # Don't show [after] for these phases - operation is already past waiting
+          ;;
+        *)
+          # Get first blocker from wok
+          blocker_display=$(_status_get_blocker_display "${epic_id}")
+          if [[ -n "${blocker_display}" ]]; then
+            after_icon=" ${C_YELLOW}[after ${blocker_display}]${C_RESET}"
+          fi
+          ;;
+      esac
     fi
 
     # Add hold indicator
     hold_icon=""
     if [[ "${held}" = "true" ]]; then
-      hold_icon=" ${C_YELLOW}[HELD]${C_RESET}"
+      hold_icon=" ${C_RED}[HELD]${C_RESET}"
     fi
 
-    # Determine display phase and merge indicator
-    display_phase="${phase}"
-    merge_icon=""
+    # Get queue entry status for merge display (only needed when merge_queued)
+    # Phase 3-4 optimization: uses bash string matching instead of grep subprocess
+    queue_entry_status=""
+    if [[ "${merge_queued}" = "true" ]] && [[ -n "${queue_cache_data}" ]]; then
+      queue_entry_status=$(get_queue_entry_status "${name}" "${queue_cache_data}")
+    fi
 
+    # Verify failed/conflict entries - the merge may have succeeded manually
+    # Only verify if we have a merge_commit recorded (avoids unnecessary git calls)
+    if [[ "${queue_entry_status}" = "failed" ]] || [[ "${queue_entry_status}" = "conflict" ]]; then
+      if [[ -n "${merge_commit}" ]] && [[ "${merge_commit}" != "null" ]]; then
+        if v0_verify_commit_on_branch "${merge_commit}" "main" 2>/dev/null; then
+          queue_entry_status="completed"
+        fi
+      fi
+    fi
+
+    # Use shared helper for phase display formatting
+    IFS='|' read -r raw_display raw_merge_icon <<< \
+      "$(_sm_format_phase_display "${phase}" "${op_type}" "${merge_queued}" "${merge_status}" "${merged_at}" "${queue_entry_status}" "${merge_resumed}" "${worktree_missing}")"
+
+    # Override display to "blocked" when there's an open blocker
+    if [[ -n "${after_icon}" ]]; then
+      raw_display="blocked"
+    fi
+
+    # Get colors for display
+    phase_color=$(_sm_get_phase_color "${raw_display}" "${raw_merge_icon}")
+    merge_color=$(_sm_get_merge_icon_color "${raw_merge_icon}")
+
+    # Apply colors to display_phase
+    if [[ -n "${phase_color}" ]]; then
+      display_phase="$(sm_get_status_color "${phase_color}")${raw_display}${C_RESET}"
+    else
+      display_phase="${raw_display}"
+    fi
+
+    # Apply colors to merge_icon
+    merge_icon=""
+    if [[ -n "${raw_merge_icon}" ]]; then
+      if [[ -n "${merge_color}" ]]; then
+        # Special formatting for certain merge icons
+        case "${raw_merge_icon}" in
+          "[merged]")
+            merge_icon=" $(sm_get_status_color "${merge_color}")${C_DIM}${raw_merge_icon}${C_RESET}"
+            ;;
+          "(== MERGE FAILED =="*|"(== CONFLICT =="*|"(== NEEDS MERGE =="*)
+            merge_icon=" $(sm_get_status_color "${merge_color}")${C_BOLD}${raw_merge_icon}${C_RESET}"
+            ;;
+          *)
+            merge_icon=" $(sm_get_status_color "${merge_color}")${raw_merge_icon}${C_RESET}"
+            ;;
+        esac
+      else
+        merge_icon=" ${raw_merge_icon}"
+      fi
+    fi
+
+    # Update status_icon for specific phase/activity combinations
+    # Use () for active status indicators, [] for conditions like [HELD] or [after ...]
     case "${phase}" in
-      merged)
-        display_phase="${C_GREEN}completed${C_RESET}"
-        merge_icon=" ${C_GREEN}${C_DIM}(merged)${C_RESET}"
-        ;;
-      completed|pending_merge)
-        # Plan-type operations don't merge, so show "plan completed" without merge indicators
-        if [[ "${op_type}" = "plan" ]]; then
-          display_phase="${C_GREEN}plan completed${C_RESET}"
-          merge_icon=""
-        elif [[ "${merge_queued}" = "true" ]]; then
-          display_phase="${C_GREEN}completed${C_RESET}"
-          # Always check queue status first - it's more authoritative than state.json
-          # The queue reflects actual merge attempts, while state.json may be stale
-          queue_file="${BUILD_DIR}/mergeq/queue.json"
-          queue_entry_status=""
-          if [[ -f "${queue_file}" ]]; then
-            queue_entry_status=$(jq -r ".entries[] | select(.operation == \"${name}\") | .status" "${queue_file}" 2>/dev/null || true)
-          fi
-          case "${queue_entry_status}" in
-            pending|processing)
-              merge_icon=" ${C_CYAN}(merging...)${C_RESET}"
-              ;;
-            completed)
-              merge_icon=" ${C_GREEN}${C_DIM}(merged)${C_RESET}"
-              ;;
-            failed)
-              merge_icon=" ${C_RED}${C_BOLD}(== MERGE FAILED ==)${C_RESET}"
-              ;;
-            conflict)
-              merge_icon=" ${C_RED}${C_BOLD}(== CONFLICT ==)${C_RESET}"
-              ;;
-            resumed)
-              merge_icon=" ${C_CYAN}(resumed)${C_RESET}"
-              ;;
-            *)
-              # No queue entry - fall back to state.json indicators
-              if [[ "${merge_status}" = "merged" ]]; then
-                merge_icon=" ${C_GREEN}${C_DIM}(merged)${C_RESET}"
-              elif [[ "${merge_status}" = "conflict" ]]; then
-                merge_icon=" ${C_RED}${C_BOLD}(== CONFLICT ==)${C_RESET}"
-              elif [[ -n "${merged_at}" ]] && [[ "${merged_at}" != "null" ]]; then
-                merge_icon=" ${C_GREEN}${C_DIM}(merged)${C_RESET}"
-              else
-                merge_icon=" ${C_YELLOW}(merge pending)${C_RESET}"
-              fi
-              ;;
-          esac
-        else
-          display_phase="${C_GREEN}completed${C_RESET}"
-          merge_icon=" ${C_YELLOW}(== NEEDS MERGE ==)${C_RESET}"
-        fi
-        ;;
       init)
-        if [[ -n "${status_icon}" ]]; then
-          display_phase="new"
-          status_icon=" ${C_YELLOW}[planning]${C_RESET}"
-        else
-          display_phase="new"
-        fi
+        [[ -n "${status_icon}" ]] && status_icon=" ${C_YELLOW}(planning...)${C_RESET}"
         ;;
       planned)
-        display_phase="${C_YELLOW}planned${C_RESET}"
-        if [[ -n "${status_icon}" ]]; then
-          status_icon=" ${C_YELLOW}[decomposing]${C_RESET}"
-        fi
+        [[ -n "${status_icon}" ]] && status_icon=" ${C_YELLOW}(decomposing...)${C_RESET}"
         ;;
       queued|executing)
-        display_phase="${C_CYAN}assigned${C_RESET}"
-        if [[ -n "${status_icon}" ]]; then
-          status_icon=" ${C_CYAN}[building]${C_RESET}"
-        fi
+        [[ -n "${status_icon}" ]] && status_icon=" ${C_CYAN}(building...)${C_RESET}"
+        ;;
+      blocked)
+        [[ -n "${status_icon}" ]] && status_icon=" ${C_YELLOW}(waiting...)${C_RESET}"
         ;;
       failed)
-        display_phase="${C_RED}failed${C_RESET}"
         status_icon=" ${C_RED}${C_BOLD}(== ERROR ==)${C_RESET}"
         ;;
       interrupted)
-        display_phase="${C_RED}interrupted${C_RESET}"
         status_icon=" ${C_RED}${C_BOLD}(== INTERRUPTED ==)${C_RESET}"
         ;;
     esac
 
-    printf "  %-20s %b%b%b%b%b ${C_DIM}(created: %s)${C_RESET}\n" "${name}:" "${display_phase}" "${status_icon}" "${after_icon}" "${hold_icon}" "${merge_icon}" "${created}"
-    done < <(jq -rs '.[] | [
-      .name,
-      (.type // "build"),
-      .phase,
-      .created_at,
-      (.machine // "unknown"),
-      (.completed | length),
-      (.merge_queued // false),
-      (.merge_status // ""),
-      (.merged_at // ""),
-      (.after // ""),
-      (.tmux_session // ""),
-      (.worker_pid // ""),
-      (.held // false),
-      (.held_at // "")
-    ] | @tsv' "${state_files[@]}")
-  fi
-
-  if [[ -z "${found_any}" ]]; then
-    if [[ -n "${BLOCKED}" ]]; then
-      echo -e "  ${C_DIM}(no waiting operations)${C_RESET}"
+    # Truncate long names with "..." (max_name_display - 1 for ":" suffix, - 3 for "...")
+    display_name="${name}:"
+    if [[ ${#display_name} -gt ${max_name_display} ]]; then
+      display_name="${name:0:$((max_name_display - 4))}...:"
+    fi
+    # Phase 2 optimization: Use pre-computed epochs instead of calling timestamp_to_epoch
+    # Check for merge queue override first (rare case - only for merged ops)
+    # Phase 3-4 optimization: uses bash string matching instead of grep subprocess
+    mq_updated=""
+    if [[ "${phase}" == "merged" ]] && [[ -n "${queue_cache_data}" ]]; then
+      mq_updated=$(get_queue_completed_timestamp "${name}" "${queue_cache_data}")
+    fi
+    if [[ -n "${mq_updated}" ]]; then
+      # Fallback to timestamp path for queue override (rare)
+      display_time=$(format_operation_time "${mq_updated}" "${now_epoch}")
     else
-      echo -e "  ${C_DIM}(no operations found)${C_RESET}"
+      # Phase 6: Use pre-computed last_epoch and display_date (eliminates bash function calls + date -r)
+      if [[ -z "${last_epoch}" ]] || [[ "${last_epoch}" -eq 0 ]]; then
+        display_time="unknown"
+      else
+        elapsed=$((now_epoch - last_epoch))
+        if [[ "${elapsed}" -lt 43200 ]]; then
+          # < 12 hours: use relative time (pure bash)
+          display_time=$(format_elapsed "${elapsed}")
+        else
+          # >= 12 hours: use pre-computed date string
+          display_time="${display_date:-unknown}"
+        fi
+      fi
+    fi
+    printf "  %-${max_name_len}s %b%b%b%b%b ${C_DIM}(%s)${C_RESET}\n" "${display_name}" "${display_phase}" "${status_icon}" "${after_icon}" "${hold_icon}" "${merge_icon}" "${display_time}"
+    done < <(jq -rs --argjson limit "${effective_limit}" --argjson now_epoch "${now_epoch}" '
+      # Phase 2: Helper function to convert ISO 8601 timestamp to epoch
+      # Handles timestamps like "2026-01-22T10:30:45.123Z"
+      def to_epoch:
+        if . == null or . == "" or . == "null" then 0
+        else (sub("\\.[0-9]+"; "") | strptime("%Y-%m-%dT%H:%M:%SZ") | mktime) // 0
+        end;
+
+      # Phase 6: Get the last-updated epoch based on phase (mirrors get_last_updated_epoch)
+      def get_last_epoch:
+        . as $op |
+        ($op.created_at | to_epoch) as $created |
+        (($op.completed_at // "") | to_epoch) as $completed |
+        (($op.merged_at // "") | to_epoch) as $merged |
+        (($op.held_at // "") | to_epoch) as $held |
+        (($op.updated_at // "") | to_epoch) as $updated |
+        if $op.phase == "merged" then
+          if $merged > 0 then $merged elif $completed > 0 then $completed elif $updated > 0 then $updated else $created end
+        elif $op.phase == "completed" or $op.phase == "pending_merge" then
+          if $completed > 0 then $completed elif $updated > 0 then $updated else $created end
+        elif $op.phase == "held" then
+          if $held > 0 then $held elif $updated > 0 then $updated else $created end
+        else
+          if $updated > 0 then $updated else $created end
+        end;
+
+      # Phase 6: Format epoch as date string (YYYY-MM-DD) - eliminates N date -r calls
+      def to_date_str:
+        if . == 0 then ""
+        else (. | strflocaltime("%Y-%m-%d"))
+        end;
+
+      # Priority classification for limit pruning
+      # 0 = open (highest priority: needs attention, including merge issues)
+      # 1 = reserved (blocking now checked via wok at display time)
+      # 2 = truly completed (merged successfully or cancelled)
+      def priority_class:
+        if .phase == "cancelled"
+        then 2  # cancelled
+        elif .phase == "merged" or .phase == "completed" or .phase == "pending_merge"
+        then
+          # Plan-type operations do not need merge, so completed is truly done
+          if .type == "plan" then 2
+          # Successfully merged - truly done
+          elif .merge_status == "merged" then 2
+          # All other completed states (pending merge, failed, conflict, not queued) need attention
+          else 0
+          end
+        # NOTE: blocked phase removed in v2, blocking tracked via wok
+        else 0  # open (needs attention: init, planned, queued, executing, failed, conflict, interrupted)
+        end;
+
+      # Limit and pruning logic
+      . as $all |
+      ($all | length) as $total |
+      # $limit is passed via --argjson from V0_STATUS_LIMIT
+
+      # Add priority to each operation
+      [$all[] | . + {_priority: priority_class}] |
+
+      # Separate by priority
+      (map(select(._priority == 0)) | sort_by(.created_at)) as $open |
+      (map(select(._priority == 1)) | sort_by(.created_at)) as $blocked |
+      (map(select(._priority == 2)) | sort_by(.created_at)) as $completed |
+
+      # Build selection: open first, then blocked, then completed (up to limit)
+      ([$open[], $blocked[], $completed[]] | .[:$limit]) as $selected |
+
+      # Calculate pruning counts
+      (($open | length) - ([$selected[] | select(._priority == 0)] | length)) as $pruned_open |
+      (($blocked | length) - ([$selected[] | select(._priority == 1)] | length)) as $pruned_blocked |
+      (($completed | length) - ([$selected[] | select(._priority == 2)] | length)) as $pruned_completed |
+
+      # Calculate max name length for selected operations only
+      (reduce $selected[] as $op (0; [., ([($op.name | length) + 1, 40] | min)] | max)) as $max_len |
+
+      # Output META line with pruning statistics
+      (["META", $max_len, $pruned_open, $pruned_blocked, $pruned_completed, $total] | @tsv),
+
+      # Output selected operations in created_at order (with epoch timestamps)
+      ($selected | sort_by(.created_at) | .[] | [
+        .name,
+        (.type // "build"),
+        .phase,
+        .created_at,
+        (.machine // "unknown"),
+        (.completed | length),
+        (.merge_queued // false),
+        (.merge_status // "null"),
+        (.merged_at // "null"),
+        (.completed_at // "null"),
+        (.epic_id // "null"),
+        (.tmux_session // "null"),
+        (.worker_pid // "null"),
+        (.held // false),
+        (.held_at // "null"),
+        (.merge_resumed // false),
+        (.worktree_missing // false),
+        (.merge_commit // "null"),
+        # Phase 2: Pre-computed epoch values (eliminates N date -j calls)
+        (.created_at | to_epoch),
+        ((.completed_at // "") | to_epoch),
+        ((.merged_at // "") | to_epoch),
+        ((.held_at // "") | to_epoch),
+        ((.updated_at // "") | to_epoch),
+        # Phase 6: Pre-computed last-updated epoch and date string (eliminates N date -r calls)
+        (. | get_last_epoch),
+        (. | get_last_epoch | to_date_str)
+      ] | @tsv)
+    ' "${state_files[@]}")
+
+    # Show summary line for pruned operations
+    if [[ ${total_ops} -gt ${effective_limit} ]]; then
+      pruned=$((total_ops - effective_limit))
+      summary_parts=()
+      [[ ${pruned_blocked} -gt 0 ]] && summary_parts+=("${pruned_blocked} blocked")
+      [[ ${pruned_completed} -gt 0 ]] && summary_parts+=("${pruned_completed} completed")
+
+      if [[ ${#summary_parts[@]} -eq 0 ]]; then
+        # Only open operations pruned (rare)
+        echo -e "  ${C_DIM}... and ${pruned} more${C_RESET}"
+      elif [[ ${#summary_parts[@]} -eq 1 ]] && [[ ${pruned_open} -eq 0 ]]; then
+        # Only one category pruned and no open pruned - simpler message
+        # Extract category name (second word from "N blocked" or "N completed")
+        category="${summary_parts[0]#* }"
+        echo -e "  ${C_DIM}... and ${pruned} more ${category}${C_RESET}"
+      else
+        summary=$(IFS=', '; echo "${summary_parts[*]}")
+        echo -e "  ${C_DIM}... and ${pruned} more (${summary})${C_RESET}"
+      fi
     fi
   fi
+
+  # Show active roadmaps inline with operations (not in blocked view)
+  if [[ -z "${BLOCKED}" ]] && [[ "${has_active_roadmaps}" = true ]]; then
+    roadmap_dir="${BUILD_DIR}/roadmaps"
+    for state_file in "${roadmap_dir}"/*/state.json; do
+      [[ ! -f "${state_file}" ]] && continue
+
+      # Read all roadmap fields in single jq call
+      _rm_fields=$(jq -r '[.phase, .name, .roadmap_description, .idea_id, .worker_pid, .machine, .planning_session, .created_at] | map(. // "") | join("|")' "${state_file}")
+      IFS='|' read -r rm_phase rm_name rm_desc rm_idea_id rm_worker_pid rm_machine rm_session rm_created_at <<< "${_rm_fields}"
+
+      # Only show during active phases (init/planning)
+      if [[ "${rm_phase}" != "planning" ]] && [[ "${rm_phase}" != "init" ]]; then
+        continue
+      fi
+
+      found_any=1
+
+      # Truncate description for display
+      rm_desc_short="${rm_desc:0:40}"
+      [[ ${#rm_desc} -gt 40 ]] && rm_desc_short="${rm_desc_short}..."
+
+      # Check if session is running
+      rm_status_icon=""
+      if [[ -n "${rm_session}" ]] && [[ "${rm_session}" != "null" ]] && [[ "${all_sessions}" == *"${rm_session}"* ]]; then
+        rm_status_icon=" ${C_CYAN}(active)${C_RESET}"
+      elif [[ -n "${rm_worker_pid}" ]] && [[ "${rm_worker_pid}" != "null" ]]; then
+        if [[ "${rm_machine}" = "${local_machine}" ]] && kill -0 "${rm_worker_pid}" 2>/dev/null; then
+          rm_status_icon=" ${C_CYAN}(bg-worker)${C_RESET}"
+        fi
+      fi
+
+      # Update status icon for specific phases
+      if [[ -n "${rm_status_icon}" ]]; then
+        case "${rm_phase}" in
+          init|planning)
+            rm_status_icon=" ${C_YELLOW}(orchestrating...)${C_RESET}"
+            ;;
+        esac
+      fi
+
+      # Format phase display
+      case "${rm_phase}" in
+        init) rm_display_phase="new" ;;
+        planning) rm_display_phase="orchestrating" ;;
+        *) rm_display_phase="${rm_phase}" ;;
+      esac
+
+      # Get phase color
+      rm_phase_color="${C_YELLOW}"
+
+      # Calculate display time
+      rm_display_time=""
+      if [[ -n "${rm_created_at}" ]] && [[ "${rm_created_at}" != "null" ]]; then
+        rm_display_time=$(format_operation_time "${rm_created_at}" "${now_epoch}")
+      fi
+
+      # Display roadmap entry (using same format as operations)
+      rm_display_name="${rm_name}:"
+      if [[ ${#rm_display_name} -gt ${max_name_display} ]]; then
+        rm_display_name="${rm_name:0:$((max_name_display - 4))}...:"
+      fi
+      # Ensure minimum column width for roadmap names (max_name_len may be 8 if no operations)
+      rm_name_width=${max_name_len}
+      [[ ${rm_name_width} -lt 20 ]] && rm_name_width=20
+      printf "  %-${rm_name_width}s ${rm_phase_color}%-15s${C_RESET}%b ${C_DIM}(%s)${C_RESET}\n" "${rm_display_name}" "${rm_display_phase}" "${rm_status_icon}" "${rm_display_time}"
+      [[ -n "${rm_idea_id}" ]] && [[ "${rm_idea_id}" != "null" ]] && printf "  %-${rm_name_width}s ${C_DIM}[%s]${C_RESET}\n" "" "${rm_idea_id}"
+    done
   fi
+
+  # For --blocked filter: show message if operations exist but none are blocked
+  if [[ -z "${found_any}" ]] && [[ -n "${BLOCKED}" ]]; then
+    echo -e "  ${C_DIM}(no waiting operations)${C_RESET}"
+  fi
+  fi  # end: has_plans = true
+
+  # Roadmaps are now shown inline with Plans above, so no separate section needed
+  showed_roadmaps="${has_active_roadmaps}"
 
   # Show fix, chore, and merge worker status in default list (not blocked view)
   if [[ -z "${BLOCKED}" ]]; then
-    # Use namespaced session names based on PROJECT
-    fix_session="v0-${PROJECT}-worker-fix"
-    fix_polling_log="/tmp/v0-${PROJECT}-fix-polling.log"
-    chore_session="v0-${PROJECT}-worker-chore"
-    chore_polling_log="/tmp/v0-${PROJECT}-chore-polling.log"
-
     # Batch pgrep for all polling daemons - single call
     all_polling=$(pgrep -af "while true.*v0-${PROJECT}" 2>/dev/null || true)
 
-    echo ""
-    echo "Bugfix Worker:"
-    fix_worker_running=false
-    fix_polling_pid=""
-    # Check via string matching (no process spawning)
-    [[ "${all_sessions}" == *"${fix_session}"* ]] && fix_worker_running=true
-    [[ -f "${fix_polling_log}" ]] && fix_polling_pid=$(echo "${all_polling}" | grep "worker-fix" | awk '{print $1}')
-    if [[ "${fix_worker_running}" = true ]]; then
-      echo -e "  Status: ${C_CYAN}Active${C_RESET} ${C_DIM}[tmux: ${fix_session}]${C_RESET}"
-    elif [[ -n "${fix_polling_pid}" ]]; then
-      echo -e "  Status: ${C_YELLOW}Polling${C_RESET} ${C_DIM}[pid: ${fix_polling_pid}]${C_RESET}"
-    else
-      echo -e "  Status: ${C_DIM}Stopped${C_RESET}"
-    fi
-    show_bugs_indented 3
-
-    echo ""
-    echo "Chore Worker:"
-    chore_worker_running=false
-    chore_polling_pid=""
-    # Check via string matching (no process spawning)
-    [[ "${all_sessions}" == *"${chore_session}"* ]] && chore_worker_running=true
-    [[ -f "${chore_polling_log}" ]] && chore_polling_pid=$(echo "${all_polling}" | grep "worker-chore" | awk '{print $1}')
-    if [[ "${chore_worker_running}" = true ]]; then
-      echo -e "  Status: ${C_CYAN}Active${C_RESET} ${C_DIM}[tmux: ${chore_session}]${C_RESET}"
-    elif [[ -n "${chore_polling_pid}" ]]; then
-      echo -e "  Status: ${C_YELLOW}Polling${C_RESET} ${C_DIM}[pid: ${chore_polling_pid}]${C_RESET}"
-    else
-      echo -e "  Status: ${C_DIM}Stopped${C_RESET}"
-    fi
-    show_chores_indented 3
-
-    echo ""
-    echo "Merge Worker:"
-    mergeq_pid_file="${BUILD_DIR}/mergeq/.daemon.pid"
+    # Pre-check if all work queues are empty
+    bugs_in_progress=$(wk list --type bug --status in_progress 2>/dev/null || true)
+    bugs_open=$(wk list --type bug --status todo 2>/dev/null || true)
+    chores_in_progress=$(wk list --type chore --status in_progress 2>/dev/null || true)
+    chores_open=$(wk list --type chore --status todo 2>/dev/null || true)
     mergeq_queue_file="${BUILD_DIR}/mergeq/queue.json"
-    if [[ -f "${mergeq_pid_file}" ]] && kill -0 "$(cat "${mergeq_pid_file}" 2>/dev/null)" 2>/dev/null; then
-      mergeq_pid=$(cat "${mergeq_pid_file}")
-      # Single jq call extracts both processing and pending counts
-      read -r processing pending < <(
-        jq -r '[
-          ([.entries[] | select(.status == "processing")] | length),
-          ([.entries[] | select(.status == "pending")] | length)
-        ] | @tsv' "${mergeq_queue_file}" 2>/dev/null || echo "0	0"
-      )
-      if [[ "${processing}" -gt 0 ]]; then
-        echo -e "  Status: ${C_CYAN}Active${C_RESET} ${C_DIM}(merging) [pid: ${mergeq_pid}]${C_RESET}"
-      elif [[ "${pending}" -gt 0 ]]; then
-        echo -e "  Status: ${C_CYAN}Active${C_RESET} ${C_DIM}(pending) [pid: ${mergeq_pid}]${C_RESET}"
-      else
-        echo -e "  Status: ${C_YELLOW}Polling${C_RESET} ${C_DIM}[pid: ${mergeq_pid}]${C_RESET}"
+    # Single read for all merge queue data (Phase 2 optimization)
+    # Format: status\toperation - used for display and counts
+    mergeq_entries=""
+    merges_pending=""
+    if [[ -f "${mergeq_queue_file}" ]]; then
+      mergeq_entries=$(jq -r '.entries[] | select(.status == "pending" or .status == "processing") | "\(.status)\t\(.operation)"' "${mergeq_queue_file}" 2>/dev/null || true)
+      # Derive operation list for backwards compatibility with merges_empty check
+      merges_pending=$(echo "${mergeq_entries}" | cut -f2 | v0_grep_invert '^$' || true)
+    fi
+
+    bugs_empty=false
+    chores_empty=false
+    merges_empty=false
+    [[ -z "${bugs_in_progress}" ]] && [[ -z "${bugs_open}" ]] && bugs_empty=true
+    [[ -z "${chores_in_progress}" ]] && [[ -z "${chores_open}" ]] && chores_empty=true
+    [[ -z "${merges_pending}" ]] && merges_empty=true
+
+    # If all queues are empty, show each on its own line (skip in --short mode)
+    if [[ "${bugs_empty}" = true ]] && [[ "${chores_empty}" = true ]] && [[ "${merges_empty}" = true ]]; then
+      if [[ -z "${SHORT}" ]]; then
+        # Only add blank line separator if there was content above (operations or roadmaps)
+        [[ "${has_operations}" = true ]] || [[ "${showed_roadmaps}" = true ]] && echo ""
+        echo -e "Bugs: ${C_DIM}None${C_RESET}"
+        echo -e "Chores: ${C_DIM}None${C_RESET}"
+        echo -e "Merges: ${C_DIM}None${C_RESET}"
       fi
     else
-      echo -e "  Status: ${C_DIM}Stopped${C_RESET}"
-    fi
-    show_mergeq_indented 3
+      # Show full sections for non-empty queues
+      # Only add blank line separator if there was content above (operations or roadmaps)
+      [[ "${has_operations}" = true ]] || [[ "${showed_roadmaps}" = true ]] && echo ""
 
-    # Show coffee (wake lock) status
-    echo ""
-    echo "Coffee (Wake Lock):"
-    if coffee_is_running; then
-      coffee_pid_val=$(coffee_pid)
-      echo -e "  Status: ${C_GREEN}Running${C_RESET} ${C_DIM}[pid: ${coffee_pid_val}]${C_RESET}"
-    else
-      echo -e "  Status: ${C_DIM}Stopped${C_RESET}"
-    fi
+      # Bugs section
+      fix_status=$(get_worker_status "fix" "${all_sessions}" "${all_polling}")
+      # In short mode, skip only if queue is empty (show "Stopped" if queue has items)
+      if [[ -z "${SHORT}" ]] || [[ "${bugs_empty}" != true ]]; then
+        show_worker_header_compact "Bugs" "${fix_status}" "${bugs_empty}"
+        [[ "${bugs_empty}" != true ]] && show_worker_items_inline "${bugs_in_progress}" "${bugs_open}" 3
+        [[ "${bugs_empty}" != true ]] && echo ""
+      fi
 
-    # Show nudge worker status
-    echo ""
-    echo "Nudge Worker:"
-    if nudge_running; then
-      nudge_pid_val=$(cat "$(nudge_pid_file)" 2>/dev/null)
-      echo -e "  Status: ${C_GREEN}Running${C_RESET} ${C_DIM}[pid: ${nudge_pid_val}]${C_RESET}"
-    else
-      echo -e "  Status: ${C_DIM}Stopped${C_RESET}"
+      # Chores section
+      chore_status=$(get_worker_status "chore" "${all_sessions}" "${all_polling}")
+      # In short mode, skip only if queue is empty (show "Stopped" if queue has items)
+      if [[ -z "${SHORT}" ]] || [[ "${chores_empty}" != true ]]; then
+        show_worker_header_compact "Chores" "${chore_status}" "${chores_empty}"
+        [[ "${chores_empty}" != true ]] && show_worker_items_inline "${chores_in_progress}" "${chores_open}" 3
+        [[ "${chores_empty}" != true ]] && echo ""
+      fi
+
+      # Merges section
+      mergeq_pid_file="${BUILD_DIR}/mergeq/.daemon.pid"
+      # Check if a merge-resolve session is running (manual conflict resolution)
+      merge_resolve_running=false
+      if [[ -n "${all_sessions}" ]] && echo "${all_sessions}" | v0_grep_quiet "merge-resolve"; then
+        merge_resolve_running=true
+      fi
+
+      # Determine merge status
+      merge_status_text=""
+      if [[ -f "${mergeq_pid_file}" ]] && kill -0 "$(cat "${mergeq_pid_file}" 2>/dev/null)" 2>/dev/null; then
+        processing=$(echo "${mergeq_entries}" | v0_grep_count "^processing" 2>/dev/null)
+        pending=$(echo "${mergeq_entries}" | v0_grep_count "^pending" 2>/dev/null)
+        if [[ "${processing}" -gt 0 ]] || [[ "${pending}" -gt 0 ]]; then
+          merge_status_text="active"
+        else
+          merge_status_text="polling"
+        fi
+      elif [[ "${merge_resolve_running}" = true ]]; then
+        merge_status_text="active"
+      elif [[ "${merges_empty}" = true ]]; then
+        merge_status_text="none"
+      else
+        merge_status_text="stopped"
+      fi
+
+      # In short mode, skip unless actively processing (hide polling, stopped, none)
+      if [[ -z "${SHORT}" ]] || [[ "${merge_status_text}" == "active" ]]; then
+        # Display merge header based on status
+        case "${merge_status_text}" in
+          active)  echo -e "Merges: ${C_CYAN}Active${C_RESET}" ;;
+          polling) echo -e "Merges: ${C_YELLOW}Polling${C_RESET}" ;;
+          none)    echo -e "Merges: ${C_DIM}None${C_RESET}" ;;
+          stopped) echo -e "Merges: ${C_DIM}Stopped${C_RESET}" ;;
+        esac
+        # Display queue items if not empty
+        if [[ "${merges_empty}" != true ]]; then
+          total=$(echo "${mergeq_entries}" | v0_grep_count '.' 2>/dev/null)
+          if [[ "${total}" -le 3 ]]; then
+            echo "${mergeq_entries}" | while IFS=$'\t' read -r status op; do
+              [[ -z "${status}" ]] && continue
+              status_color="${C_CYAN}"
+              [[ "${status}" = "pending" ]] && status_color=""
+              printf "  ${status_color}%-12s${C_RESET} %s\n" "[${status}]" "${op}"
+            done
+          else
+            echo "${mergeq_entries}" | head -n 3 | while IFS=$'\t' read -r status op; do
+              [[ -z "${status}" ]] && continue
+              status_color="${C_CYAN}"
+              [[ "${status}" = "pending" ]] && status_color=""
+              printf "  ${status_color}%-12s${C_RESET} %s\n" "[${status}]" "${op}"
+            done
+            remaining=$((total - 3))
+            echo -e "  ${C_DIM}... and ${remaining} more in queue${C_RESET}"
+          fi
+        fi
+      fi
+    fi
+    [[ "${merges_empty}" != true ]] && [[ -z "${SHORT}" || "${merge_status_text}" == "active" ]] && echo ""
+
+    # Show coffee and nudge status on one line (unless --short mode)
+    if [[ -z "${SHORT}" ]]; then
+      coffee_status=""
+      nudge_status=""
+      if coffee_is_running; then
+        coffee_pid_val=$(coffee_pid)
+        coffee_status="${C_GREEN}Running${C_RESET} ${C_DIM}[pid: ${coffee_pid_val}]${C_RESET}"
+      else
+        coffee_status="${C_DIM}Stopped${C_RESET}"
+      fi
+      if nudge_running; then
+        nudge_pid_val=$(nudge_pid)
+        nudge_status="${C_GREEN}Running${C_RESET} ${C_DIM}[pid: ${nudge_pid_val}]${C_RESET}"
+      else
+        nudge_status="${C_DIM}Stopped${C_RESET}"
+      fi
+      echo -e "Coffee: ${coffee_status}"
+      echo -e "Nudge: ${nudge_status}"
     fi
 
     # Show recently completed items (opt-in to avoid N+1 queries)
@@ -777,63 +803,49 @@ if [[ -n "${LIST}" ]] || [[ -n "${BLOCKED}" ]]; then
     fi
   fi
 
-  echo ""
-  echo "Run with --help for more options"
+  if [[ -z "${NO_HINTS}" ]]; then
+    echo ""
+    echo "Run with --help for more options"
+  fi
   exit 0
 fi
 
-STATE_FILE="${BUILD_DIR}/operations/${NAME}/state.json"
-if [[ ! -f "${STATE_FILE}" ]]; then
+# Check operation exists using state machine
+if ! sm_state_exists "${NAME}"; then
   echo "Error: No operation found for '${NAME}'"
   exit 1
 fi
 
 show_status() {
-  local state
-  state=$(cat "${STATE_FILE}")
-  local op_type
-  op_type=$(echo "${state}" | jq -r '.type // "build"')
-  local phase
-  phase=$(echo "${state}" | jq -r '.phase')
-  local feature_id
-  feature_id=$(echo "${state}" | jq -r '.epic_id // empty')
-  local machine
-  machine=$(echo "${state}" | jq -r '.machine // empty')
-  local session
-  session=$(echo "${state}" | jq -r '.tmux_session // empty')
-  local current_issue
-  current_issue=$(echo "${state}" | jq -r '.current_issue // empty')
+  # Batch read all state fields in single jq invocation (instead of 20+ separate calls)
+  # Phase 5 optimization: added merge_commit and merge_error to batch read
+  # Note: after/eager fields removed in schema v2 - blocking now tracked via wok
+  local phase op_type feature_id machine session current_issue last_activity \
+        merge_queued merge_status merged_at worker_pid worker_log \
+        worker_started_at error_msg held held_at worktree merge_commit merge_error
+  IFS=$'\t' read -r phase op_type feature_id machine session current_issue \
+    last_activity merge_queued merge_status merged_at worker_pid \
+    worker_log worker_started_at error_msg held held_at worktree merge_commit merge_error <<< \
+    "$(sm_read_state_fields "${NAME}" phase type epic_id machine tmux_session \
+       current_issue last_activity merge_queued merge_status merged_at \
+       worker_pid worker_log worker_started_at error held held_at worktree \
+       merge_commit merge_error)"
+
+  # Handle defaults for fields that need them
+  [[ -z "${op_type}" ]] && op_type="build"
+  [[ -z "${merge_queued}" ]] && merge_queued="false"
+  [[ -z "${held}" ]] && held="false"
+
+  # Get completed count separately (requires array length calculation)
   local completed
-  completed=$(echo "${state}" | jq -r '.completed | length')
-  local last_activity
-  last_activity=$(echo "${state}" | jq -r '.last_activity // empty')
-  local merge_queued
-  merge_queued=$(echo "${state}" | jq -r '.merge_queued // false')
-  local merge_status
-  merge_status=$(echo "${state}" | jq -r '.merge_status // empty')
-  local merged_at
-  merged_at=$(echo "${state}" | jq -r '.merged_at // empty')
-  local after
-  after=$(echo "${state}" | jq -r '.after // empty')
-  local eager
-  eager=$(echo "${state}" | jq -r '.eager // false')
-  local worker_pid
-  worker_pid=$(echo "${state}" | jq -r '.worker_pid // empty')
-  local worker_log
-  worker_log=$(echo "${state}" | jq -r '.worker_log // empty')
-  local worker_started_at
-  worker_started_at=$(echo "${state}" | jq -r '.worker_started_at // empty')
-  local error_msg
-  error_msg=$(echo "${state}" | jq -r '.error // empty')
-  local held
-  held=$(echo "${state}" | jq -r '.held // false')
-  local held_at
-  held_at=$(echo "${state}" | jq -r '.held_at // empty')
+  completed=$(sm_read_state "${NAME}" "completed | length")
+  [[ -z "${completed}" ]] && completed=0
+
   local local_machine
   local_machine=$(hostname -s)
 
   if [[ -n "${JSON}" ]]; then
-    echo "${state}"
+    cat "$(sm_get_state_file "${NAME}")"
     return
   fi
 
@@ -841,9 +853,24 @@ show_status() {
   echo "Type: ${op_type}"
 
   # Show user-friendly status
+  # Helper to verify merged status using recorded merge_commit (read in batch above)
+  local merge_verified=""
+  if [[ -n "${merge_commit}" ]] && [[ "${merge_commit}" != "null" ]]; then
+    if v0_verify_merge_by_op "${NAME}"; then
+      merge_verified="yes"
+    else
+      merge_verified="no"
+    fi
+  fi
+
   case "${phase}" in
     merged)
-      echo "Status: completed (merged)"
+      # Verify merged claims if merge_commit is recorded
+      if [[ "${merge_verified}" = "no" ]]; then
+        echo "Status: completed (== VERIFY FAILED ==)"
+      else
+        echo "Status: completed (merged)"
+      fi
       ;;
     completed|pending_merge)
       # Plan-type operations don't merge, so show "plan completed" without merge indicators
@@ -862,7 +889,12 @@ show_status() {
             echo "Status: completed (merging...)"
             ;;
           completed)
-            echo "Status: completed (merged)"
+            # Verify the merge if merge_commit is recorded
+            if [[ "${merge_verified}" = "no" ]]; then
+              echo "Status: completed (== VERIFY FAILED ==)"
+            else
+              echo "Status: completed (merged)"
+            fi
             ;;
           failed)
             echo "Status: completed (== MERGE FAILED ==)"
@@ -871,16 +903,26 @@ show_status() {
             echo "Status: completed (== CONFLICT ==)"
             ;;
           resumed)
-            echo "Status: completed (resumed)"
+            echo "Status: completed (== NEEDS MERGE ==)"
             ;;
           *)
             # No queue entry - fall back to state.json indicators
             if [[ "${merge_status}" = "merged" ]]; then
-              echo "Status: completed (merged)"
+              # Verify the merge if merge_commit is recorded
+              if [[ "${merge_verified}" = "no" ]]; then
+                echo "Status: completed (== VERIFY FAILED ==)"
+              else
+                echo "Status: completed (merged)"
+              fi
             elif [[ "${merge_status}" = "conflict" ]]; then
               echo "Status: completed (== CONFLICT ==)"
             elif [[ -n "${merged_at}" ]] && [[ "${merged_at}" != "null" ]]; then
-              echo "Status: completed (merged)"
+              # Verify the merge if merge_commit is recorded
+              if [[ "${merge_verified}" = "no" ]]; then
+                echo "Status: completed (== VERIFY FAILED ==)"
+              else
+                echo "Status: completed (merged)"
+              fi
             else
               echo "Status: completed (merge pending)"
             fi
@@ -888,9 +930,8 @@ show_status() {
         esac
       else
         echo "Status: completed (== NEEDS MERGE ==)"
-        local worktree branch
-        worktree=$(echo "${state}" | jq -r '.worktree // empty')
-        branch=$(echo "${state}" | jq -r '.tmux_session // empty')
+        # worktree already read in batch, branch is session (tmux_session)
+        local branch="${session}"
         if [[ -n "${worktree}" ]] && [[ -d "${worktree}" ]]; then
           echo "  Merge: v0 merge ${worktree}"
         elif [[ -n "${branch}" ]] && git rev-parse --verify "${branch}" >/dev/null 2>&1; then
@@ -912,23 +953,22 @@ show_status() {
   if [[ "${held}" = "true" ]]; then
     echo ""
     echo "Hold:"
-    echo "  Status: HELD (since ${held_at})"
+    echo -e "  Status: ${C_RED}HELD${C_RESET} (since ${held_at})"
     echo "  Release: v0 resume ${NAME}"
   fi
 
-  # Show after info if applicable
-  if [[ -n "${after}" ]] && [[ "${after}" != "null" ]]; then
-    echo ""
-    echo "After: ${after}"
-    [[ "${eager}" = "true" ]] && echo "Mode: eager (plan first)" || echo "Mode: wait first"
+  # Show blocker info from wok if applicable
+  if [[ -n "${feature_id}" ]] && [[ "${feature_id}" != "null" ]]; then
+    local blocker_display
+    blocker_display=$(_status_get_blocker_display "${feature_id}")
+    if [[ -n "${blocker_display}" ]]; then
+      echo ""
+      echo "Blocked by: ${blocker_display}"
 
-    local after_state_file="${BUILD_DIR}/operations/${after}/state.json"
-    if [[ -f "${after_state_file}" ]]; then
-      local after_phase
-      after_phase=$(jq -r '.phase' "${after_state_file}")
-      echo "Status: ${after_phase}"
-    else
-      echo "Status: unknown (operation not found)"
+      # Try to get blocker status
+      local blocker_status
+      blocker_status=$(sm_get_blocker_status "${blocker_display}")
+      echo "Status: ${blocker_status}"
     fi
   fi
 
@@ -978,13 +1018,13 @@ show_status() {
     if [[ "${machine}" = "${local_machine}" ]]; then
       if tmux has-session -t "${session}" 2>/dev/null; then
         echo "Session: Running (${session})"
-        echo "Attach:  v0 attach feature ${NAME}"
+        echo "Attach:  v0 attach ${NAME}"
       else
         echo "Session: Stopped (was ${session})"
       fi
     else
       echo "Session: ${session} (on ${machine})"
-      echo "Attach:  ssh ${machine} -t 'v0 attach feature ${NAME}'"
+      echo "Attach:  ssh ${machine} -t 'v0 attach ${NAME}'"
     fi
   fi
 
@@ -1010,14 +1050,12 @@ show_status() {
           echo "  Status: Merge in progress..."
           ;;
         conflict)
-          local worktree
-          worktree=$(echo "${state}" | jq -r '.worktree // empty')
+          # worktree already read in batch
           echo "  Status: CONFLICTS - needs resolution"
           echo "  Resolve: v0 merge ${worktree} --resolve"
           ;;
         failed)
-          local merge_error
-          merge_error=$(echo "${state}" | jq -r '.merge_error // empty')
+          # merge_error already read in batch above (Phase 5 optimization)
           echo "  Status: FAILED - ${merge_error}"
           ;;
         *)

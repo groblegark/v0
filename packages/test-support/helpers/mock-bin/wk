@@ -1,0 +1,107 @@
+#!/usr/bin/env bash
+# Mock wk command for testing
+# Behavior controlled by environment variables:
+#   MOCK_WK_LIST_OUTPUT - output for wk list
+#   MOCK_WK_NEW_ID - issue ID to return for wk new (default: mock-abc1)
+#   MOCK_WK_NEW_FAIL - set to 1 to make wk new fail
+#   MOCK_WK_START_FAIL - set to 1 to make wk start fail
+#   MOCK_WK_DONE_FAIL - set to 1 to make wk done fail
+#   MOCK_WK_CALLS_FILE - file to log wk calls for verification
+
+# Log the call if MOCK_WK_CALLS_FILE is set
+if [[ -n "${MOCK_WK_CALLS_FILE:-}" ]]; then
+    echo "wk $*" >> "${MOCK_WK_CALLS_FILE}"
+fi
+
+case "$1" in
+    "list")
+        if [ -n "$MOCK_WK_LIST_OUTPUT" ]; then
+            echo "$MOCK_WK_LIST_OUTPUT"
+        fi
+        exit 0
+        ;;
+    "init")
+        exit 0
+        ;;
+    "new")
+        if [ -n "$MOCK_WK_NEW_FAIL" ]; then
+            echo "Error: mock wk new failure" >&2
+            exit 1
+        fi
+        # Extract title from args ($2 is type, $3 is title)
+        type="$2"
+        title="$3"
+        issue_id="${MOCK_WK_NEW_ID:-mock-abc1}"
+        # Check for -o id flag
+        output_id_only=false
+        for arg in "$@"; do
+            if [[ "$arg" == "id" ]] && [[ "${prev_arg:-}" == "-o" ]]; then
+                output_id_only=true
+            fi
+            prev_arg="$arg"
+        done
+        if $output_id_only; then
+            echo "${issue_id}"
+        else
+            echo "Created [${type}] (todo) ${issue_id}: ${title}"
+        fi
+        exit 0
+        ;;
+    "edit")
+        # Log edit description to file for test verification
+        if [[ -n "${MOCK_WK_EDIT_DESC_FILE:-}" ]] && [[ "$3" == "description" ]]; then
+            printf '%s' "$4" > "${MOCK_WK_EDIT_DESC_FILE}"
+        fi
+        exit 0
+        ;;
+    "start")
+        if [[ -n "${MOCK_WK_START_FAIL:-}" ]]; then
+            echo "Error: mock wk start failure" >&2
+            exit 1
+        fi
+        exit 0
+        ;;
+    "done")
+        if [[ -n "${MOCK_WK_DONE_FAIL:-}" ]]; then
+            echo "Error: mock wk done failure" >&2
+            exit 1
+        fi
+        exit 0
+        ;;
+    "label")
+        # Output to stdout if MOCK_WK_LABEL_OUTPUT is set (for testing redirection)
+        if [ -n "$MOCK_WK_LABEL_OUTPUT" ]; then
+            echo "$MOCK_WK_LABEL_OUTPUT"
+        fi
+        exit 0
+        ;;
+    "show")
+        # Support MOCK_DATA_DIR for per-issue mock data
+        # Handle multiple IDs (skip -o json flags)
+        shift  # Remove "show"
+        found_any=false
+        for arg in "$@"; do
+            # Skip -o and json flags
+            [[ "$arg" == "-o" ]] || [[ "$arg" == "json" ]] && continue
+            issue_id="$arg"
+            if [[ -n "${MOCK_DATA_DIR:-}" ]]; then
+                mock_file="${MOCK_DATA_DIR}/wk/${issue_id}.json"
+                if [[ -f "${mock_file}" ]]; then
+                    cat "${mock_file}"
+                    found_any=true
+                    continue
+                fi
+            fi
+            # Default: return basic JSON with ID
+            echo "{\"id\": \"${issue_id}\", \"status\": \"open\"}"
+            found_any=true
+        done
+        $found_any && exit 0
+        # No IDs provided - old behavior
+        echo '{"status": "open"}'
+        exit 0
+        ;;
+    *)
+        exit 0
+        ;;
+esac
