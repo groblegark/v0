@@ -78,7 +78,7 @@ nudge_pid() {
 # Returns: 0 on success or if already running
 ensure_nudge_running() {
   if ! nudge_running; then
-    "${V0_DIR}/bin/v0-nudge" start &
+    "${V0_DIR}/bin/v0-nudge" start
   fi
 }
 
